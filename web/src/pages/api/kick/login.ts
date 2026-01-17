@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 const KICK_AUTHORIZE_URL = "https://id.kick.com/oauth/authorize";
 
 function requiredEnv(name: string) {
-	const value = import.meta.env[name];
+	const value = process.env[name];
 	if (!value) {
 		throw new Error(`Missing ${name}`);
 	}
@@ -23,7 +23,7 @@ export const GET: APIRoute = async ({ cookies, redirect }) => {
 	try {
 		const clientId = requiredEnv("KICK_CLIENT_ID");
 		const redirectUri = requiredEnv("KICK_REDIRECT_URI");
-		const scope = import.meta.env.KICK_SCOPES ?? "";
+		const scope = requiredEnv("KICK_SCOPES") ?? "";
 
 		const state = crypto.randomUUID();
 		const verifier = base64Url(crypto.randomBytes(32));
@@ -46,6 +46,7 @@ export const GET: APIRoute = async ({ cookies, redirect }) => {
 
 		return redirect(url.toString(), 302);
 	} catch (err) {
+		console.error("Kick OAuth misconfiguration:", err);
 		return new Response(`Kick OAuth misconfigured: ${(err as Error).message}`, { status: 500 });
 	}
 };

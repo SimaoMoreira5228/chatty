@@ -4,7 +4,7 @@ const TWITCH_TOKEN_URL = "https://id.twitch.tv/oauth2/token";
 const TWITCH_USERS_URL = "https://api.twitch.tv/helix/users";
 
 function requiredEnv(name: string) {
-	const value = import.meta.env[name];
+	const value = process.env[name];
 	if (!value) {
 		throw new Error(`Missing ${name}`);
 	}
@@ -17,6 +17,7 @@ export const GET: APIRoute = async ({ cookies, redirect, url }) => {
 		const state = url.searchParams.get("state") ?? "";
 		const storedState = cookies.get("chatty_twitch_state")?.value ?? "";
 		if (!code || !state || state !== storedState) {
+			console.error("Twitch OAuth state mismatch or missing code");
 			return new Response("Invalid OAuth state", { status: 400 });
 		}
 
@@ -38,12 +39,14 @@ export const GET: APIRoute = async ({ cookies, redirect, url }) => {
 
 		if (!tokenResp.ok) {
 			const text = await tokenResp.text();
+			console.error("Twitch OAuth token exchange failed:", text);
 			return new Response(`Twitch token exchange failed: ${text}`, { status: 502 });
 		}
 
 		const tokenJson = (await tokenResp.json()) as { access_token?: string };
 		const accessToken = tokenJson.access_token ?? "";
 		if (!accessToken) {
+			console.error("Twitch OAuth token missing in response");
 			return new Response("Twitch token missing", { status: 502 });
 		}
 
@@ -53,6 +56,7 @@ export const GET: APIRoute = async ({ cookies, redirect, url }) => {
 
 		if (!userResp.ok) {
 			const text = await userResp.text();
+			console.error("Twitch user lookup failed:", text);
 			return new Response(`Twitch user lookup failed: ${text}`, { status: 502 });
 		}
 
@@ -68,6 +72,7 @@ export const GET: APIRoute = async ({ cookies, redirect, url }) => {
 		cookies.delete("chatty_twitch_state", { path: "/" });
 		return redirect(`/twitch#${params.toString()}`, 302);
 	} catch (err) {
+		console.error("Twitch OAuth error:", err);
 		return new Response(`Twitch OAuth error: ${(err as Error).message}`, { status: 500 });
 	}
 };

@@ -17,62 +17,265 @@ import "../styles/globals.css";
 			</header>
 
 			<div class="flex flex-wrap gap-3">
-				<a class="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground" href="/api/kick/login">
+				<a
+					class="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+					href="/api/kick/login"
+				>
 					Login with Kick
 				</a>
-				<a class="rounded-md border border-border px-4 py-2 text-sm text-muted-foreground" href="/">
+				<a
+					class="rounded-md border border-border px-4 py-2 text-sm text-muted-foreground hover:bg-accent transition-colors"
+					href="/"
+				>
 					Back to home
 				</a>
 			</div>
 
-			<div class="flex flex-col gap-2">
-				<label class="text-xs uppercase tracking-[0.2em] text-muted-foreground" for="kick_bundle">Bundle</label>
-				<textarea
-					class="min-h-[90px] rounded-md border border-border bg-background px-3 py-2 text-sm"
-					id="kick_bundle"
-					readonly
-				></textarea>
+			<div id="loginStatus" class="hidden rounded-xl border border-border bg-card p-6">
+				<div class="flex items-center gap-4">
+					<div class="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
+						<svg
+							xmlns="http://www.w3.org/2000/svg"
+							class="h-6 w-6 text-primary"
+							fill="none"
+							viewBox="0 0 24 24"
+							stroke="currentColor"
+						>
+							<path
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								stroke-width="2"
+								d="M5.121 17.804A7 7 0 0112 15c3.037 0 5.653 1.717 6.879 4.804M15 10a3 3 0 11-6 0 3 3 0 016 0zm6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+							/>
+						</svg>
+					</div>
+					<div class="flex-1">
+						<h2 class="text-lg font-semibold" id="usernameDisplay">Loading...</h2>
+						<p class="text-sm text-muted-foreground" id="kickConnectedText">Kick account connected</p>
+						<p id="kickWarning" class="hidden mt-2 text-sm text-yellow-600">
+							User details were not retrieved. You are connected with token only; some features may not work. <span
+								class="font-medium"
+							>Try logging in again</span>
+						</p>
+					</div>
+					<div id="kickStatusBadge" class="rounded-full bg-green-500/20 px-3 py-1">
+						<span id="kickStatusText" class="text-xs font-medium text-green-500">Connected</span>
+					</div>
+					<input type="hidden" id="hiddenBundle" />
+					<div class="mt-3">
+						<button
+							id="kick_retry"
+							class="rounded-md border border-border px-3 py-1 text-xs text-muted-foreground hover:bg-accent transition-colors"
+						>
+							Retry user lookup
+						</button>
+					</div>
+				</div>
 			</div>
 
-			<div class="flex flex-wrap gap-3">
-				<button class="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground" id="kick_copy">
-					Copy bundle
+			<div id="copySection" class="hidden">
+				<button
+					class="w-full rounded-md bg-primary px-4 py-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors flex items-center justify-center gap-2"
+					id="kick_copy"
+				>
+					<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+						<path
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							stroke-width="2"
+							d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"
+						/>
+					</svg>
+					Copy Bundle to Clipboard
 				</button>
-				<button class="rounded-md border border-border px-4 py-2 text-sm text-muted-foreground" id="kick_clear">
-					Clear
-				</button>
+				<p class="mt-2 text-center text-xs text-muted-foreground">
+					Bundle copied to clipboard. You can now use it in Chatty.
+				</p>
+			</div>
+
+			<div class="rounded-lg border border-border bg-card/50 p-4">
+				<h3 class="mb-2 text-sm font-medium">How to use:</h3>
+				<ol class="list-inside list-decimal space-y-1 text-sm text-muted-foreground">
+					<li>Click "Login with Kick"</li>
+					<li>Authorize the application on Kick</li>
+					<li>Click "Copy Bundle" button</li>
+					<li>Paste into Chatty's Kick login dialog</li>
+				</ol>
+			</div>
+
+			<div class="rounded-lg border border-blue-500/20 bg-blue-500/5 p-4">
+				<div class="flex items-start gap-3">
+					<svg
+						xmlns="http://www.w3.org/2000/svg"
+						class="h-5 w-5 text-blue-500 mt-0.5 flex-shrink-0"
+						fill="none"
+						viewBox="0 0 24 24"
+						stroke="currentColor"
+					>
+						<path
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							stroke-width="2"
+							d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+						/>
+					</svg>
+					<div>
+						<h4 class="text-sm font-medium text-blue-500">Kick Login Note</h4>
+						<p class="mt-1 text-xs text-muted-foreground">
+							This bundle contains your Kick authentication details in JSON format, which is required for Chatty to connect
+							to your Kick account.
+						</p>
+					</div>
+				</div>
 			</div>
 		</main>
 
 		<script>
-		const bundle = document.getElementById("kick_bundle") as HTMLTextAreaElement | null;
+		const loginStatus = document.getElementById("loginStatus");
+		const usernameDisplay = document.getElementById("usernameDisplay");
+		const copySection = document.getElementById("copySection");
+		const copyButton = document.getElementById("kick_copy");
+		const hiddenBundle = document.getElementById("hiddenBundle");
+		const kickWarning = document.getElementById("kickWarning");
+		const kickStatusBadge = document.getElementById("kickStatusBadge");
+		const kickStatusText = document.getElementById("kickStatusText");
+		const retryButton = document.getElementById("kick_retry");
 
-		function updateBundleFromUrl() {
-			if (!bundle) return;
+		let kickBundle = "";
+		let lastPayload: any | null = null;
+
+		function updateFromUrl() {
 			const raw = window.location.hash.slice(1) || window.location.search.slice(1);
 			const params = new URLSearchParams(raw);
+
 			const payload = {
 				oauth_token: params.get("oauth_token") ?? "",
 				user_id: params.get("user_id") ?? "",
 				username: params.get("username") ?? "",
 			};
-			bundle.value = JSON.stringify(payload, null, 2);
+
+			kickBundle = JSON.stringify(payload, null, 2);
+			if (hiddenBundle) {
+				(hiddenBundle as HTMLInputElement).value = kickBundle;
+			}
+
+			if (payload.oauth_token) {
+				lastPayload = payload;
+				if (!loginStatus || !usernameDisplay || !copySection) return;
+
+				loginStatus.classList.remove("hidden");
+				copySection.classList.remove("hidden");
+
+				if (payload.username) {
+					usernameDisplay.textContent = `Logged in as ${payload.username}`;
+					kickWarning?.classList.add("hidden");
+					if (kickStatusBadge) {
+						kickStatusBadge.className = "rounded-full bg-green-500/20 px-3 py-1";
+					}
+					if (kickStatusText) {
+						kickStatusText.className = "text-xs font-medium text-green-500";
+						kickStatusText.textContent = "Connected";
+					}
+				} else {
+					usernameDisplay.textContent = `Connected (no user info)`;
+					kickWarning?.classList.remove("hidden");
+					if (kickStatusBadge) {
+						kickStatusBadge.className = "rounded-full bg-yellow-500/20 px-3 py-1";
+					}
+					if (kickStatusText) {
+						kickStatusText.className = "text-xs font-medium text-yellow-500";
+						kickStatusText.textContent = "Partial";
+					}
+				}
+			} else {
+				if (!loginStatus || !copySection) return;
+
+				loginStatus.classList.add("hidden");
+				copySection.classList.add("hidden");
+			}
 		}
 
-		document.getElementById("kick_copy")?.addEventListener("click", async () => {
-			if (!bundle || !bundle.value) return;
+		retryButton?.addEventListener("click", async () => {
+			if (!lastPayload?.oauth_token) return;
+
+			const originalText = (retryButton as HTMLElement).textContent;
+			(retryButton as HTMLElement).textContent = "Retrying...";
 			try {
-				await navigator.clipboard.writeText(bundle.value);
-			} catch {
-				alert("Clipboard copy failed. Please copy manually.");
+				const resp = await fetch("/api/kick/lookup", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ oauth_token: lastPayload.oauth_token }),
+				});
+
+				if (!resp.ok) {
+					const text = await resp.text();
+					kickWarning!.textContent = `User lookup failed: ${text}`;
+					kickWarning?.classList.remove("hidden");
+				} else {
+					const j = await resp.json();
+					lastPayload.user_id = j.user_id ?? "";
+					lastPayload.username = j.username ?? "";
+					kickBundle = JSON.stringify(lastPayload, null, 2);
+					if (hiddenBundle) (hiddenBundle as HTMLInputElement).value = kickBundle;
+
+					if (j.username) {
+						usernameDisplay!.textContent = `Logged in as ${j.username}`;
+						kickWarning?.classList.add("hidden");
+						if (kickStatusBadge) kickStatusBadge.className = "rounded-full bg-green-500/20 px-3 py-1";
+						if (kickStatusText) {
+							kickStatusText.className = "text-xs font-medium text-green-500";
+							kickStatusText.textContent = "Connected";
+						}
+					} else {
+						kickWarning!.textContent =
+							"User details were not retrieved. You are connected with token only; some features may not work.";
+						kickWarning?.classList.remove("hidden");
+						if (kickStatusBadge) kickStatusBadge.className = "rounded-full bg-yellow-500/20 px-3 py-1";
+						if (kickStatusText) {
+							kickStatusText.className = "text-xs font-medium text-yellow-500";
+							kickStatusText.textContent = "Partial";
+						}
+					}
+				}
+			} catch (e) {
+				console.error("Retry lookup error:", e);
+				kickWarning!.textContent = "User lookup failed";
+				kickWarning?.classList.remove("hidden");
+			} finally {
+				(retryButton as HTMLElement).textContent = originalText;
 			}
 		});
 
-		document.getElementById("kick_clear")?.addEventListener("click", () => {
-			if (bundle) bundle.value = "";
+		copyButton?.addEventListener("click", async () => {
+			if (!kickBundle) return;
+
+			try {
+				await navigator.clipboard.writeText(kickBundle);
+
+				const originalText = copyButton.innerHTML;
+				copyButton.innerHTML = `
+					<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+					</svg>
+					Copied!
+				`;
+				copyButton.classList.remove("bg-primary");
+				copyButton.classList.add("bg-green-600");
+
+				setTimeout(() => {
+					copyButton.innerHTML = originalText;
+					copyButton.classList.remove("bg-green-600");
+					copyButton.classList.add("bg-primary");
+				}, 2000);
+			} catch (err) {
+				console.error("Failed to copy:", err);
+				alert("Clipboard copy failed. Please copy manually from the developer console.");
+			}
 		});
 
-		updateBundleFromUrl();
+		updateFromUrl();
+
+		window.addEventListener("hashchange", updateFromUrl);
 		</script>
 	</body>
 </html>

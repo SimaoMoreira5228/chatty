@@ -15,6 +15,7 @@ import "../styles/globals.css";
 			<header class="rounded-xl border border-border bg-card p-6">
 				<h1 class="text-2xl font-semibold">Chatty Twitch Login</h1>
 			</header>
+
 			<div class="flex flex-wrap gap-3">
 				<a class="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground" href="/api/twitch/login">
 					Login with Twitch
@@ -24,55 +25,136 @@ import "../styles/globals.css";
 				</a>
 			</div>
 
-			<div class="flex flex-col gap-2">
-				<label class="text-xs uppercase tracking-[0.2em] text-muted-foreground" for="blob">Login Blob</label>
-				<textarea
-					class="min-h-[90px] rounded-md border border-border bg-background px-3 py-2 text-sm"
-					id="blob"
-					readonly
-				></textarea>
+			<div id="loginStatus" class="hidden rounded-xl border border-border bg-card p-6">
+				<div class="flex items-center gap-4">
+					<div class="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
+						<svg
+							xmlns="http://www.w3.org/2000/svg"
+							class="h-6 w-6 text-primary"
+							fill="none"
+							viewBox="0 0 24 24"
+							stroke="currentColor"
+						>
+							<path
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								stroke-width="2"
+								d="M5.121 17.804A7 7 0 0112 15c3.037 0 5.653 1.717 6.879 4.804M15 10a3 3 0 11-6 0 3 3 0 016 0zm6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+							/>
+						</svg>
+					</div>
+					<div class="flex-1">
+						<h2 class="text-lg font-semibold" id="usernameDisplay">Loading...</h2>
+						<p class="text-sm text-muted-foreground">Twitch account connected</p>
+					</div>
+					<div class="rounded-full bg-green-500/20 px-3 py-1">
+						<span class="text-xs font-medium text-green-500">Connected</span>
+					</div>
+				</div>
+				<input type="hidden" id="hiddenBlob" />
 			</div>
 
-			<div class="flex flex-wrap gap-3">
-				<button class="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground" id="copy">
-					Copy Login Blob
+			<div id="copySection" class="hidden">
+				<button
+					class="w-full rounded-md bg-primary px-4 py-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors flex items-center justify-center gap-2"
+					id="copy"
+				>
+					<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+						<path
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							stroke-width="2"
+							d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"
+						/>
+					</svg>
+					Copy Login Blob to Clipboard
 				</button>
-				<button class="rounded-md border border-border px-4 py-2 text-sm text-muted-foreground" id="clear">
-					Clear
-				</button>
+				<p class="mt-2 text-center text-xs text-muted-foreground">
+					Login blob copied to clipboard. You can now use it in Chatty.
+				</p>
+			</div>
+
+			<div class="rounded-lg border border-border bg-card/50 p-4">
+				<h3 class="mb-2 text-sm font-medium">How to use:</h3>
+				<ol class="list-inside list-decimal space-y-1 text-sm text-muted-foreground">
+					<li>Click "Login with Twitch"</li>
+					<li>Authorize the application on Twitch</li>
+					<li>Click "Copy Login Blob" button</li>
+					<li>Paste into Chatty's login dialog</li>
+				</ol>
 			</div>
 		</main>
 
 		<script>
-		const blob = document.getElementById("blob") as HTMLTextAreaElement | null;
+		const loginStatus = document.getElementById("loginStatus");
+		const usernameDisplay = document.getElementById("usernameDisplay");
+		const copySection = document.getElementById("copySection");
+		const copyButton = document.getElementById("copy");
+		const hiddenBlob = document.getElementById("hiddenBlob");
 
-		function updateBlobFromUrl() {
-			if (!blob) return;
+		let loginBlob = "";
+
+		function updateFromUrl() {
 			const raw = window.location.hash.slice(1) || window.location.search.slice(1);
 			const params = new URLSearchParams(raw);
 			const username = params.get("username") ?? "";
 			const userId = params.get("user_id") ?? "";
 			const clientId = params.get("client_id") ?? "";
 			const token = params.get("oauth_token") ?? "";
-			const parts = [`username=${username}`, `user_id=${userId}`, `client_id=${clientId}`, `oauth_token=${token}`]
-				.filter((part) => !part.endsWith("="));
-			blob.value = parts.join(";");
+
+			const parts = [`username=${username}`, `user_id=${userId}`, `client_id=${clientId}`, `oauth_token=${token}`].filter(
+				part => !part.endsWith("="),
+			);
+
+			loginBlob = parts.join(";");
+			if (hiddenBlob) {
+				(hiddenBlob as HTMLInputElement).value = loginBlob;
+			}
+
+			if (username && token) {
+				if (!loginStatus || !usernameDisplay || !copySection) return;
+				loginStatus.classList.remove("hidden");
+				usernameDisplay.textContent = `Logged in as ${username}`;
+
+				copySection.classList.remove("hidden");
+			} else {
+				if (!loginStatus || !copySection) return;
+
+				loginStatus.classList.add("hidden");
+				copySection.classList.add("hidden");
+			}
 		}
 
-		document.getElementById("copy")?.addEventListener("click", async () => {
-			if (!blob || !blob.value) return;
+		copyButton?.addEventListener("click", async () => {
+			if (!loginBlob) return;
+
 			try {
-				await navigator.clipboard.writeText(blob.value);
-			} catch {
-				alert("Clipboard copy failed. Please copy manually.");
+				await navigator.clipboard.writeText(loginBlob);
+
+				const originalText = copyButton.innerHTML;
+				copyButton.innerHTML = `
+					<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+					</svg>
+					Copied!
+				`;
+				copyButton.classList.remove("bg-primary");
+				copyButton.classList.add("bg-green-600");
+
+				setTimeout(() => {
+					copyButton.innerHTML = originalText;
+					copyButton.classList.remove("bg-green-600");
+					copyButton.classList.add("bg-primary");
+				}, 2000);
+			} catch (err) {
+				console.error("Failed to copy:", err);
+				alert("Clipboard copy failed. Please copy manually from the developer console.");
 			}
 		});
 
-		document.getElementById("clear")?.addEventListener("click", () => {
-			if (blob) blob.value = "";
-		});
+		updateFromUrl();
 
-		updateBlobFromUrl();
+		window.addEventListener("hashchange", updateFromUrl);
 		</script>
 	</body>
 </html>

@@ -4,7 +4,7 @@ const KICK_TOKEN_URL = "https://id.kick.com/oauth/token";
 const KICK_USERS_URL = "https://api.kick.com/public/v1/users";
 
 function requiredEnv(name: string) {
-	const value = import.meta.env[name];
+	const value = process.env[name];
 	if (!value) {
 		throw new Error(`Missing ${name}`);
 	}
@@ -18,6 +18,7 @@ export const GET: APIRoute = async ({ cookies, redirect, url }) => {
 		const storedState = cookies.get("chatty_kick_state")?.value ?? "";
 		const verifier = cookies.get("chatty_kick_verifier")?.value ?? "";
 		if (!code || !state || state !== storedState || !verifier) {
+			console.error("Kick OAuth state mismatch or missing code/verifier");
 			return new Response("Invalid OAuth state", { status: 400 });
 		}
 
@@ -40,37 +41,44 @@ export const GET: APIRoute = async ({ cookies, redirect, url }) => {
 
 		if (!tokenResp.ok) {
 			const text = await tokenResp.text();
+			console.error("Kick OAuth token exchange failed:", text);
 			return new Response(`Kick token exchange failed: ${text}`, { status: 502 });
 		}
 
 		const tokenJson = (await tokenResp.json()) as { access_token?: string };
 		const accessToken = tokenJson.access_token ?? "";
 		if (!accessToken) {
+			console.error("Kick OAuth token missing in response");
 			return new Response("Kick token missing", { status: 502 });
 		}
 
 		const userResp = await fetch(KICK_USERS_URL, { headers: { Authorization: `Bearer ${accessToken}` } });
 
-		if (!userResp.ok) {
-			const text = await userResp.text();
-			return new Response(`Kick user lookup failed: ${text}`, { status: 502 });
+		let userId = "";
+		let username = "";
+		try {
+			if (userResp.ok) {
+				const userJson = (await userResp.json()) as {
+					data?: Array<{ user_id?: number | string; name?: string }>;
+				};
+				const user = userJson.data?.[0];
+				userId = user?.user_id?.toString() ?? "";
+				username = user?.name ?? "";
+			} else {
+				const text = await userResp.text();
+				console.warn("Kick user lookup failed:", text);
+			}
+		} catch (e) {
+			console.warn("Kick user parse failed:", e);
 		}
 
-		const userJson = (await userResp.json()) as {
-			data?: Array<{ id?: number | string; username?: string }>;
-		};
-		const user = userJson.data?.[0];
-
-		const params = new URLSearchParams({
-			oauth_token: accessToken,
-			user_id: user?.id?.toString() ?? "",
-			username: user?.username ?? "",
-		});
+		const params = new URLSearchParams({ oauth_token: accessToken, user_id: userId, username: username });
 
 		cookies.delete("chatty_kick_state", { path: "/" });
 		cookies.delete("chatty_kick_verifier", { path: "/" });
 		return redirect(`/kick#${params.toString()}`, 302);
 	} catch (err) {
+		console.error("Kick OAuth error:", err);
 		return new Response(`Kick OAuth error: ${(err as Error).message}`, { status: 500 });
 	}
 };

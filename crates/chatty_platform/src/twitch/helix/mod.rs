@@ -66,13 +66,22 @@ async fn send_with_retry(req: reqwest::RequestBuilder, label: &'static str) -> a
 	Ok(resp)
 }
 
+fn null_to_vec<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+	D: serde::Deserializer<'de>,
+	T: serde::Deserialize<'de>,
+{
+	let opt = Option::<Vec<T>>::deserialize(deserializer)?;
+	Ok(opt.unwrap_or_default())
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct TwitchTokenValidation {
 	pub client_id: String,
 	pub login: String,
 	pub user_id: String,
 	pub expires_in: u64,
-	#[serde(default)]
+	#[serde(default, deserialize_with = "null_to_vec")]
 	pub scopes: Vec<String>,
 }
 
