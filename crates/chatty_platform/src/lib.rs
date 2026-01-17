@@ -252,7 +252,7 @@ pub enum IngestPayload {
 	UserNotice(UserNotice),
 
 	/// Moderation/system events.
-	Moderation(ModerationEvent),
+	Moderation(Box<ModerationEvent>),
 
 	/// Room state changes.
 	RoomState(RoomState),
@@ -605,10 +605,10 @@ pub fn validate_ingest_event(ev: &IngestEvent) -> anyhow::Result<()> {
 		}
 	}
 
-	if let IngestPayload::AssetBundle(bundle) = &ev.payload {
-		if bundle.cache_key.trim().is_empty() {
-			return Err(anyhow!("asset bundle cache_key must be non-empty"));
-		}
+	if let IngestPayload::AssetBundle(bundle) = &ev.payload
+		&& bundle.cache_key.trim().is_empty()
+	{
+		return Err(anyhow!("asset bundle cache_key must be non-empty"));
 	}
 
 	Ok(())

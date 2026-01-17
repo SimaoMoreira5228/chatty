@@ -16,22 +16,20 @@ const TOKEN_VALIDATE_URL: &str = "https://id.twitch.tv/oauth2/validate";
 const TOKEN_REFRESH_URL: &str = "https://id.twitch.tv/oauth2/token";
 
 fn retry_delay_from_headers(headers: &HeaderMap) -> Option<Duration> {
-	if let Some(v) = headers.get(RETRY_AFTER) {
-		if let Ok(s) = v.to_str() {
-			if let Ok(secs) = s.trim().parse::<u64>() {
-				return Some(Duration::from_secs(secs));
-			}
-		}
+	if let Some(v) = headers.get(RETRY_AFTER)
+		&& let Ok(s) = v.to_str()
+		&& let Ok(secs) = s.trim().parse::<u64>()
+	{
+		return Some(Duration::from_secs(secs));
 	}
 
-	if let Some(v) = headers.get("Ratelimit-Reset") {
-		if let Ok(s) = v.to_str() {
-			if let Ok(reset_unix) = s.trim().parse::<u64>() {
-				let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
-				if reset_unix > now {
-					return Some(Duration::from_secs(reset_unix - now));
-				}
-			}
+	if let Some(v) = headers.get("Ratelimit-Reset")
+		&& let Ok(s) = v.to_str()
+		&& let Ok(reset_unix) = s.trim().parse::<u64>()
+	{
+		let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
+		if reset_unix > now {
+			return Some(Duration::from_secs(reset_unix - now));
 		}
 	}
 
@@ -48,22 +46,21 @@ async fn send_with_retry(req: reqwest::RequestBuilder, label: &'static str) -> a
 		anyhow::bail!("helix auth failed (status={status}) body={body}");
 	}
 
-	if status == StatusCode::TOO_MANY_REQUESTS {
-		if let Some(delay) = retry_delay_from_headers(resp.headers()) {
-			if let Some(retry) = retry_builder {
-				tokio::time::sleep(delay).await;
-				let retry_resp = retry.send().await.with_context(|| format!("helix {label} retry send"))?;
-				return Ok(retry_resp);
-			}
-		}
+	if status == StatusCode::TOO_MANY_REQUESTS
+		&& let Some(delay) = retry_delay_from_headers(resp.headers())
+		&& let Some(retry) = retry_builder
+	{
+		tokio::time::sleep(delay).await;
+		let retry_resp = retry.send().await.with_context(|| format!("helix {label} retry send"))?;
+		return Ok(retry_resp);
 	}
 
-	if status.is_server_error() {
-		if let Some(retry) = retry_builder {
-			tokio::time::sleep(Duration::from_millis(250)).await;
-			let retry_resp = retry.send().await.with_context(|| format!("helix {label} retry send"))?;
-			return Ok(retry_resp);
-		}
+	if status.is_server_error()
+		&& let Some(retry) = retry_builder
+	{
+		tokio::time::sleep(Duration::from_millis(250)).await;
+		let retry_resp = retry.send().await.with_context(|| format!("helix {label} retry send"))?;
+		return Ok(retry_resp);
 	}
 
 	Ok(resp)
@@ -387,6 +384,7 @@ impl HelixClient {
 		.await
 	}
 
+	#[allow(dead_code)]
 	pub(crate) async fn create_channel_unban_subscription(
 		&self,
 		session_id: &str,

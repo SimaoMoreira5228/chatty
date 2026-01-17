@@ -77,6 +77,7 @@ pub struct KickEventAdapter {
 	moderator_rooms: Arc<RwLock<HashSet<RoomKey>>>,
 	auth_user_id: Arc<RwLock<Option<u64>>>,
 	broadcaster_id_by_room: HashMap<RoomKey, (u64, std::time::Instant)>,
+	#[allow(dead_code)]
 	emote_ids_by_room: Arc<RwLock<HashMap<RoomKey, HashSet<String>>>>,
 	last_auth_error_notice: Option<String>,
 }
@@ -134,10 +135,10 @@ impl KickEventAdapter {
 			return override_id.parse::<u64>().map_err(|_| CommandError::InvalidTopic(None));
 		}
 
-		if let Some((cached, ts)) = self.broadcaster_id_by_room.get(room) {
-			if ts.elapsed() < self.cfg.resolve_cache_ttl {
-				return Ok(cached.clone());
-			}
+		if let Some((cached, ts)) = self.broadcaster_id_by_room.get(room)
+			&& ts.elapsed() < self.cfg.resolve_cache_ttl
+		{
+			return Ok(*cached);
 		}
 
 		let slug = room.room_id.as_str();
@@ -206,7 +207,7 @@ impl KickEventAdapter {
 				.client
 				.send_chat_message(broadcaster_id, &text, reply_to_platform_message_id.as_deref())
 				.await
-				.map_err(|e| map_kick_error(e))?,
+				.map_err(map_kick_error)?,
 			CommandRequest::DeleteMessage { platform_message_id, .. } => {
 				if !can_moderate {
 					return Err(CommandError::NotAuthorized(None));
@@ -214,7 +215,7 @@ impl KickEventAdapter {
 				self.client
 					.delete_chat_message(&platform_message_id)
 					.await
-					.map_err(|e| map_kick_error(e))?
+					.map_err(map_kick_error)?
 			}
 			CommandRequest::TimeoutUser {
 				user_id,
@@ -229,7 +230,7 @@ impl KickEventAdapter {
 				self.client
 					.ban_user(broadcaster_id, parsed_user_id, Some(duration_seconds), reason.as_deref())
 					.await
-					.map_err(|e| map_kick_error(e))?
+					.map_err(map_kick_error)?
 			}
 			CommandRequest::BanUser { user_id, reason, .. } => {
 				if !can_moderate {
@@ -239,7 +240,7 @@ impl KickEventAdapter {
 				self.client
 					.ban_user(broadcaster_id, parsed_user_id, None, reason.as_deref())
 					.await
-					.map_err(|e| map_kick_error(e))?
+					.map_err(map_kick_error)?
 			}
 		};
 
@@ -376,12 +377,14 @@ struct KickWebhookBadge {
 	badge_type: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, serde::Deserialize)]
 struct KickWebhookEmote {
 	emote_id: String,
 	positions: Vec<KickWebhookEmotePosition>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, serde::Deserialize)]
 struct KickWebhookEmotePosition {
 	s: u32,
@@ -497,17 +500,16 @@ async fn handle_kick_webhook(
 					.unwrap());
 			}
 		};
-		if let Some(public_key) = state.public_key.as_ref() {
-			if public_key
+		if let Some(public_key) = state.public_key.as_ref()
+			&& public_key
 				.verify(rsa::pkcs1v15::Pkcs1v15Sign::new::<Sha256>(), &hash, &signature_bytes)
 				.is_err()
-			{
-				metrics::counter!("chatty_kick_webhook_signature_invalid_total").increment(1);
-				return Ok(Response::builder()
-					.status(StatusCode::UNAUTHORIZED)
-					.body(Full::new(Bytes::new()))
-					.unwrap());
-			}
+		{
+			metrics::counter!("chatty_kick_webhook_signature_invalid_total").increment(1);
+			return Ok(Response::builder()
+				.status(StatusCode::UNAUTHORIZED)
+				.body(Full::new(Bytes::new()))
+				.unwrap());
 		}
 	}
 
@@ -559,25 +561,25 @@ async fn handle_kick_webhook(
 			.unwrap());
 	}
 
-	if let Some(auth_user_id) = *state.auth_user_id.read().await {
-		if auth_user_id == payload.sender.user_id {
-			let has_mod_badge = payload
-				.sender
-				.identity
-				.as_ref()
-				.map(|identity| {
-					identity
-						.badges
-						.iter()
-						.any(|badge| badge.badge_type.as_deref() == Some("moderator"))
-				})
-				.unwrap_or(false);
-			let mut guard = state.moderator_rooms.write().await;
-			if has_mod_badge {
-				guard.insert(room.clone());
-			} else {
-				guard.remove(&room);
-			}
+	if let Some(auth_user_id) = *state.auth_user_id.read().await
+		&& auth_user_id == payload.sender.user_id
+	{
+		let has_mod_badge = payload
+			.sender
+			.identity
+			.as_ref()
+			.map(|identity| {
+				identity
+					.badges
+					.iter()
+					.any(|badge| badge.badge_type.as_deref() == Some("moderator"))
+			})
+			.unwrap_or(false);
+		let mut guard = state.moderator_rooms.write().await;
+		if has_mod_badge {
+			guard.insert(room.clone());
+		} else {
+			guard.remove(&room);
 		}
 	}
 
@@ -602,12 +604,12 @@ async fn handle_kick_webhook(
 	chat_message.ids.platform_id = Some(payload.message_id.clone());
 
 	let mut ingest = IngestEvent::new(Platform::Kick, room.room_id.clone(), IngestPayload::ChatMessage(chat_message));
-	if let Some(ts) = payload.created_at.as_deref() {
-		if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(ts) {
-			let utc = parsed.with_timezone(&chrono::Utc);
-			let st = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(utc.timestamp_millis() as u64);
-			ingest.platform_time = Some(st);
-		}
+	if let Some(ts) = payload.created_at.as_deref()
+		&& let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(ts)
+	{
+		let utc = parsed.with_timezone(&chrono::Utc);
+		let st = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(utc.timestamp_millis() as u64);
+		ingest.platform_time = Some(st);
 	}
 
 	let emote_ids: Vec<String> = payload.emotes.iter().map(|e| e.emote_id.clone()).collect();

@@ -60,10 +60,10 @@ pub fn reduce(state: &mut AppState, _window_id: WindowId, action: UiAction) -> V
 				badge_ids,
 				..
 			} => {
-				if let Some(room) = RoomTopic::parse(&topic).ok() {
+				if let Ok(room) = RoomTopic::parse(&topic) {
 					let msg = ChatMessageUi {
 						time: SystemTime::now(),
-						platform: room.platform.clone(),
+						platform: room.platform,
 						room: room.clone(),
 						server_message_id,
 						author_id,
@@ -83,7 +83,7 @@ pub fn reduce(state: &mut AppState, _window_id: WindowId, action: UiAction) -> V
 			UiEvent::TopicLagged {
 				topic, dropped, detail, ..
 			} => {
-				if let Some(room) = RoomTopic::parse(&topic).ok() {
+				if let Ok(room) = RoomTopic::parse(&topic) {
 					state.push_lagged(&room, dropped, Some(detail.clone()));
 				} else {
 					commands.push(UiCommand::AppendSystemLine {
@@ -134,7 +134,7 @@ pub fn reduce(state: &mut AppState, _window_id: WindowId, action: UiAction) -> V
 				is_moderator,
 				is_broadcaster,
 			} => {
-				if let Some(room) = RoomTopic::parse(&topic).ok() {
+				if let Ok(room) = RoomTopic::parse(&topic) {
 					state.set_room_permissions(
 						room,
 						RoomPermissions {
@@ -197,13 +197,13 @@ pub fn apply_commands(state: &mut AppState, window_id: WindowId, commands: Vec<U
 				state.push_notification(kind, message);
 			}
 			UiCommand::AppendSystemLine { text } => {
-				if let Some(tab_id) = state.windows.get(&window_id).and_then(|w| w.active_tab) {
-					if let Some(tab) = state.tabs.get_mut(&tab_id) {
-						tab.log.push(ChatItem::SystemNotice(SystemNoticeUi {
-							time: SystemTime::now(),
-							text,
-						}));
-					}
+				if let Some(tab_id) = state.windows.get(&window_id).and_then(|w| w.active_tab)
+					&& let Some(tab) = state.tabs.get_mut(&tab_id)
+				{
+					tab.log.push(ChatItem::SystemNotice(SystemNoticeUi {
+						time: SystemTime::now(),
+						text,
+					}));
 				}
 			}
 		}

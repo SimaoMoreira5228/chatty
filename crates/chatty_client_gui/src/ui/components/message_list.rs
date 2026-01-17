@@ -52,6 +52,7 @@ where
 	base + line_height * line_count
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn build_message_rows_range<T>(
 	app_state: Entity<AppState>,
 	active_tab: Option<TabId>,
@@ -71,347 +72,329 @@ where
 	let mut badge_lookup_cache: HashMap<RoomKey, HashMap<String, AssetRefUi>> = HashMap::new();
 
 	let app = app_state.read(cx);
-	if let Some(tab_id) = active_tab {
-		if let Some(tab) = app.tabs.get(&tab_id) {
-			let total = tab.log.items.len();
-			let start = range.start.min(total);
-			let end = range.end.min(total);
-			for (offset, item) in tab.log.items.iter().skip(start).take(end - start).enumerate() {
-				let idx = start + offset;
-				match item {
-					ChatItem::ChatMessage(msg) => {
-						let context = MessageContextInfo {
-							tab_id,
-							message_index: idx,
-							room: msg.room.clone(),
-							author_login: msg.user_login.clone(),
-							author_id: msg.author_id.clone(),
-							server_message_id: msg.server_message_id.clone(),
-							platform_message_id: msg.platform_message_id.clone(),
-						};
-						let perms = permissions_for_room(&app, &context.room);
-						let emote_lookup = if let Some(lookup) = emote_lookup_cache.get(&context.room) {
-							lookup
-						} else {
-							let lookup = build_emote_lookup(&app, &context.room);
-							emote_lookup_cache.insert(context.room.clone(), lookup);
-							emote_lookup_cache.get(&context.room).expect("emote lookup inserted")
-						};
-						let badge_lookup = if let Some(lookup) = badge_lookup_cache.get(&context.room) {
-							lookup
-						} else {
-							let lookup = build_badge_lookup(&app, &context.room);
-							badge_lookup_cache.insert(context.room.clone(), lookup);
-							badge_lookup_cache.get(&context.room).expect("badge lookup inserted")
-						};
-						let has_reply_id = context.platform_message_id.is_some();
-						let has_delete_id = context.platform_message_id.is_some();
-						let has_author_id = context.author_id.is_some();
-						let on_message_context = on_message_context.clone();
+	if let Some(tab_id) = active_tab
+		&& let Some(tab) = app.tabs.get(&tab_id)
+	{
+		let total = tab.log.items.len();
+		let start = range.start.min(total);
+		let end = range.end.min(total);
+		for (offset, item) in tab.log.items.iter().skip(start).take(end - start).enumerate() {
+			let idx = start + offset;
+			match item {
+				ChatItem::ChatMessage(msg) => {
+					let context = MessageContextInfo {
+						tab_id,
+						message_index: idx,
+						room: msg.room.clone(),
+						author_login: msg.user_login.clone(),
+						author_id: msg.author_id.clone(),
+						server_message_id: msg.server_message_id.clone(),
+						platform_message_id: msg.platform_message_id.clone(),
+					};
+					let perms = permissions_for_room(app, &context.room);
+					let emote_lookup = if let Some(lookup) = emote_lookup_cache.get(&context.room) {
+						lookup
+					} else {
+						let lookup = build_emote_lookup(app, &context.room);
+						emote_lookup_cache.insert(context.room.clone(), lookup);
+						emote_lookup_cache.get(&context.room).expect("emote lookup inserted")
+					};
+					let badge_lookup = if let Some(lookup) = badge_lookup_cache.get(&context.room) {
+						lookup
+					} else {
+						let lookup = build_badge_lookup(app, &context.room);
+						badge_lookup_cache.insert(context.room.clone(), lookup);
+						badge_lookup_cache.get(&context.room).expect("badge lookup inserted")
+					};
+					let has_reply_id = context.platform_message_id.is_some();
+					let has_delete_id = context.platform_message_id.is_some();
+					let has_author_id = context.author_id.is_some();
+					let on_message_context = on_message_context.clone();
+					let on_clear_menu = on_clear_menu.clone();
+					let on_clear_menu_for_row = on_clear_menu.clone();
+					let mut row = div()
+						.id(("msg", idx as u64))
+						.flex()
+						.items_start()
+						.gap_2()
+						.px_3()
+						.py_1()
+						.bg(t.chat_row_bg)
+						.hover({
+							let t = t.clone();
+							move |d| d.bg(t.chat_row_hover_bg)
+						})
+						.on_mouse_down(MouseButton::Right, {
+							let context = context.clone();
+							cx.listener(move |this, _ev, window, cx| {
+								(on_message_context)(this, context.clone(), window, cx);
+							})
+						})
+						.on_mouse_down(MouseButton::Left, {
+							let on_clear_menu_for_row = on_clear_menu_for_row.clone();
+							cx.listener(move |this, _ev, window, cx| {
+								(on_clear_menu_for_row)(this, window, cx);
+							})
+						})
+						.child(
+							div()
+								.text_sm()
+								.text_color(t.text_muted)
+								.flex_none()
+								.child(format_time(msg.time)),
+						)
+						.child(render_badge_strip(&msg.badge_ids, badge_lookup))
+						.child(
+							div()
+								.text_sm()
+								.text_color(t.chat_nick)
+								.flex_none()
+								.child(msg.user_display.clone().unwrap_or_else(|| msg.user_login.clone())),
+						)
+						.child(render_message_body(&msg.text, emote_lookup, t));
+
+					if perms.can_reply && has_reply_id || perms.can_delete && has_delete_id {
+						let mut actions = div().flex().items_center().gap_1().flex_none();
+						if perms.can_reply && has_reply_id {
+							actions = actions.child(
+								Button::new(("reply-inline", idx as u64))
+									.px_2()
+									.py_1()
+									.rounded_sm()
+									.bg(t.button_bg)
+									.text_color(t.button_text)
+									.text_sm()
+									.label("Reply")
+									.on_click(cx.listener({
+										let context = context.clone();
+										let on_message_action = on_message_action.clone();
+										move |this, _ev, window, cx| {
+											(on_message_action)(this, MessageMenuAction::Reply, context.clone(), window, cx);
+										}
+									})),
+							);
+						}
+						if perms.can_delete && has_delete_id {
+							actions = actions.child(
+								Button::new(("delete-inline", idx as u64))
+									.px_2()
+									.py_1()
+									.rounded_sm()
+									.bg(t.button_bg)
+									.text_color(t.button_text)
+									.text_sm()
+									.label("Delete")
+									.on_click(cx.listener({
+										let context = context.clone();
+										let on_message_action = on_message_action.clone();
+										move |this, _ev, window, cx| {
+											(on_message_action)(
+												this,
+												MessageMenuAction::Delete,
+												context.clone(),
+												window,
+												cx,
+											);
+										}
+									})),
+							);
+						}
+						row = row.child(actions);
+					}
+
+					rows.push(row.into_any_element());
+
+					if let Some(menu) = menu_state.as_ref()
+						&& menu.tab_id == tab_id
+						&& menu.message_index == idx
+					{
+						let on_message_action = on_message_action.clone();
 						let on_clear_menu = on_clear_menu.clone();
-						let on_clear_menu_for_row = on_clear_menu.clone();
-						let mut row = div()
-							.id(("msg", idx as u64))
+
+						let mut menu_row = div()
+							.id(("msg-menu", idx as u64))
+							.flex()
+							.items_center()
+							.gap_2()
+							.px_3()
+							.py_1()
+							.bg(t.panel_bg_2)
+							.border_1()
+							.border_color(t.border)
+							.rounded_sm();
+
+						if perms.can_reply && has_reply_id {
+							menu_row = menu_row.child(
+								Button::new(("reply", idx as u64))
+									.px_2()
+									.py_1()
+									.rounded_sm()
+									.bg(t.button_bg)
+									.text_color(t.button_text)
+									.text_sm()
+									.label("Reply")
+									.on_click(cx.listener({
+										let context = context.clone();
+										let on_message_action = on_message_action.clone();
+										move |this, _ev, window, cx| {
+											(on_message_action)(this, MessageMenuAction::Reply, context.clone(), window, cx);
+										}
+									})),
+							);
+						}
+
+						if perms.can_delete && has_delete_id {
+							menu_row = menu_row.child(
+								Button::new(("delete", idx as u64))
+									.px_2()
+									.py_1()
+									.rounded_sm()
+									.bg(t.button_bg)
+									.text_color(t.button_text)
+									.text_sm()
+									.label("Delete")
+									.on_click(cx.listener({
+										let context = context.clone();
+										let on_message_action = on_message_action.clone();
+										move |this, _ev, window, cx| {
+											(on_message_action)(
+												this,
+												MessageMenuAction::Delete,
+												context.clone(),
+												window,
+												cx,
+											);
+										}
+									})),
+							);
+						}
+
+						if perms.can_timeout && has_author_id {
+							menu_row = menu_row.child(
+								Button::new(("timeout", idx as u64))
+									.px_2()
+									.py_1()
+									.rounded_sm()
+									.bg(t.button_bg)
+									.text_color(t.button_text)
+									.text_sm()
+									.label("Timeout")
+									.on_click(cx.listener({
+										let context = context.clone();
+										let on_message_action = on_message_action.clone();
+										move |this, _ev, window, cx| {
+											(on_message_action)(
+												this,
+												MessageMenuAction::Timeout,
+												context.clone(),
+												window,
+												cx,
+											);
+										}
+									})),
+							);
+						}
+
+						if perms.can_ban && has_author_id {
+							menu_row = menu_row.child(
+								Button::new(("ban", idx as u64))
+									.px_2()
+									.py_1()
+									.rounded_sm()
+									.bg(t.button_bg)
+									.text_color(t.button_text)
+									.text_sm()
+									.label("Ban")
+									.on_click(cx.listener({
+										let context = context.clone();
+										let on_message_action = on_message_action.clone();
+										move |this, _ev, window, cx| {
+											(on_message_action)(this, MessageMenuAction::Ban, context.clone(), window, cx);
+										}
+									})),
+							);
+						}
+
+						let mut id_parts = Vec::new();
+						if let Some(id) = context.platform_message_id.as_deref() {
+							id_parts.push(format!("msg:{id}"));
+						}
+						if let Some(id) = context.author_id.as_deref() {
+							id_parts.push(format!("user:{id}"));
+						}
+						if let Some(id) = context.server_message_id.as_deref() {
+							id_parts.push(format!("srv:{id}"));
+						}
+						if !id_parts.is_empty() {
+							menu_row = menu_row.child(div().text_sm().text_color(t.text_muted).child(id_parts.join(" ")));
+						}
+
+						menu_row = menu_row.child(
+							Button::new(("close", idx as u64))
+								.px_2()
+								.py_1()
+								.rounded_sm()
+								.bg(t.button_bg)
+								.text_color(t.button_text)
+								.text_sm()
+								.label("Close")
+								.on_click(cx.listener({
+									let on_clear_menu = on_clear_menu.clone();
+									move |this, _ev, window, cx| {
+										(on_clear_menu)(this, window, cx);
+									}
+								})),
+						);
+
+						rows.push(menu_row.into_any_element());
+					}
+				}
+				ChatItem::SystemNotice(SystemNoticeUi { time, text }) => {
+					rows.push(
+						div()
+							.id(("sys", idx as u64))
 							.flex()
 							.items_start()
 							.gap_2()
 							.px_3()
 							.py_1()
 							.bg(t.chat_row_bg)
-							.hover({
-								let t = t.clone();
-								move |d| d.bg(t.chat_row_hover_bg)
-							})
-							.on_mouse_down(MouseButton::Right, {
-								let context = context.clone();
-								cx.listener(move |this, _ev, window, cx| {
-									(on_message_context)(this, context.clone(), window, cx);
-								})
-							})
-							.on_mouse_down(MouseButton::Left, {
-								let on_clear_menu_for_row = on_clear_menu_for_row.clone();
-								cx.listener(move |this, _ev, window, cx| {
-									(on_clear_menu_for_row)(this, window, cx);
-								})
-							})
+							.child(div().text_sm().text_color(t.text_muted).flex_none().child(format_time(*time)))
+							.child(
+								div()
+									.text_sm()
+									.text_color(t.text_dim)
+									.flex_1()
+									.min_w(px(0.0))
+									.child(text.clone()),
+							)
+							.into_any_element(),
+					);
+				}
+				ChatItem::Lagged(lagged) => {
+					rows.push(
+						div()
+							.id(("lagged", idx as u64))
+							.flex()
+							.items_start()
+							.gap_2()
+							.px_3()
+							.py_1()
+							.bg(t.chat_row_bg)
 							.child(
 								div()
 									.text_sm()
 									.text_color(t.text_muted)
 									.flex_none()
-									.child(format_time(msg.time)),
+									.child(format_time(lagged.time)),
 							)
-							.child(render_badge_strip(&msg.badge_ids, &badge_lookup))
-							.child(
-								div()
-									.text_sm()
-									.text_color(t.chat_nick)
-									.flex_none()
-									.child(msg.user_display.clone().unwrap_or_else(|| msg.user_login.clone())),
-							)
-							.child(render_message_body(&msg.text, &emote_lookup, t));
-
-						if perms.can_reply && has_reply_id || perms.can_delete && has_delete_id {
-							let mut actions = div().flex().items_center().gap_1().flex_none();
-							if perms.can_reply && has_reply_id {
-								actions = actions.child(
-									Button::new(("reply-inline", idx as u64))
-										.px_2()
-										.py_1()
-										.rounded_sm()
-										.bg(t.button_bg)
-										.text_color(t.button_text)
-										.text_sm()
-										.label("Reply")
-										.on_click(cx.listener({
-											let context = context.clone();
-											let on_message_action = on_message_action.clone();
-											move |this, _ev, window, cx| {
-												(on_message_action)(
-													this,
-													MessageMenuAction::Reply,
-													context.clone(),
-													window,
-													cx,
-												);
-											}
-										})),
-								);
-							}
-							if perms.can_delete && has_delete_id {
-								actions = actions.child(
-									Button::new(("delete-inline", idx as u64))
-										.px_2()
-										.py_1()
-										.rounded_sm()
-										.bg(t.button_bg)
-										.text_color(t.button_text)
-										.text_sm()
-										.label("Delete")
-										.on_click(cx.listener({
-											let context = context.clone();
-											let on_message_action = on_message_action.clone();
-											move |this, _ev, window, cx| {
-												(on_message_action)(
-													this,
-													MessageMenuAction::Delete,
-													context.clone(),
-													window,
-													cx,
-												);
-											}
-										})),
-								);
-							}
-							row = row.child(actions);
-						}
-
-						rows.push(row.into_any_element());
-
-						if let Some(menu) = menu_state.as_ref() {
-							if menu.tab_id == tab_id && menu.message_index == idx {
-								let on_message_action = on_message_action.clone();
-								let on_clear_menu = on_clear_menu.clone();
-
-								let mut menu_row = div()
-									.id(("msg-menu", idx as u64))
-									.flex()
-									.items_center()
-									.gap_2()
-									.px_3()
-									.py_1()
-									.bg(t.panel_bg_2)
-									.border_1()
-									.border_color(t.border)
-									.rounded_sm();
-
-								if perms.can_reply && has_reply_id {
-									menu_row = menu_row.child(
-										Button::new(("reply", idx as u64))
-											.px_2()
-											.py_1()
-											.rounded_sm()
-											.bg(t.button_bg)
-											.text_color(t.button_text)
-											.text_sm()
-											.label("Reply")
-											.on_click(cx.listener({
-												let context = context.clone();
-												let on_message_action = on_message_action.clone();
-												move |this, _ev, window, cx| {
-													(on_message_action)(
-														this,
-														MessageMenuAction::Reply,
-														context.clone(),
-														window,
-														cx,
-													);
-												}
-											})),
-									);
-								}
-
-								if perms.can_delete && has_delete_id {
-									menu_row = menu_row.child(
-										Button::new(("delete", idx as u64))
-											.px_2()
-											.py_1()
-											.rounded_sm()
-											.bg(t.button_bg)
-											.text_color(t.button_text)
-											.text_sm()
-											.label("Delete")
-											.on_click(cx.listener({
-												let context = context.clone();
-												let on_message_action = on_message_action.clone();
-												move |this, _ev, window, cx| {
-													(on_message_action)(
-														this,
-														MessageMenuAction::Delete,
-														context.clone(),
-														window,
-														cx,
-													);
-												}
-											})),
-									);
-								}
-
-								if perms.can_timeout && has_author_id {
-									menu_row = menu_row.child(
-										Button::new(("timeout", idx as u64))
-											.px_2()
-											.py_1()
-											.rounded_sm()
-											.bg(t.button_bg)
-											.text_color(t.button_text)
-											.text_sm()
-											.label("Timeout")
-											.on_click(cx.listener({
-												let context = context.clone();
-												let on_message_action = on_message_action.clone();
-												move |this, _ev, window, cx| {
-													(on_message_action)(
-														this,
-														MessageMenuAction::Timeout,
-														context.clone(),
-														window,
-														cx,
-													);
-												}
-											})),
-									);
-								}
-
-								if perms.can_ban && has_author_id {
-									menu_row = menu_row.child(
-										Button::new(("ban", idx as u64))
-											.px_2()
-											.py_1()
-											.rounded_sm()
-											.bg(t.button_bg)
-											.text_color(t.button_text)
-											.text_sm()
-											.label("Ban")
-											.on_click(cx.listener({
-												let context = context.clone();
-												let on_message_action = on_message_action.clone();
-												move |this, _ev, window, cx| {
-													(on_message_action)(
-														this,
-														MessageMenuAction::Ban,
-														context.clone(),
-														window,
-														cx,
-													);
-												}
-											})),
-									);
-								}
-
-								let mut id_parts = Vec::new();
-								if let Some(id) = context.platform_message_id.as_deref() {
-									id_parts.push(format!("msg:{id}"));
-								}
-								if let Some(id) = context.author_id.as_deref() {
-									id_parts.push(format!("user:{id}"));
-								}
-								if let Some(id) = context.server_message_id.as_deref() {
-									id_parts.push(format!("srv:{id}"));
-								}
-								if !id_parts.is_empty() {
-									menu_row =
-										menu_row.child(div().text_sm().text_color(t.text_muted).child(id_parts.join(" ")));
-								}
-
-								menu_row = menu_row.child(
-									Button::new(("close", idx as u64))
-										.px_2()
-										.py_1()
-										.rounded_sm()
-										.bg(t.button_bg)
-										.text_color(t.button_text)
-										.text_sm()
-										.label("Close")
-										.on_click(cx.listener({
-											let on_clear_menu = on_clear_menu.clone();
-											move |this, _ev, window, cx| {
-												(on_clear_menu)(this, window, cx);
-											}
-										})),
-								);
-
-								rows.push(menu_row.into_any_element());
-							}
-						}
-					}
-					ChatItem::SystemNotice(SystemNoticeUi { time, text }) => {
-						rows.push(
-							div()
-								.id(("sys", idx as u64))
-								.flex()
-								.items_start()
-								.gap_2()
-								.px_3()
-								.py_1()
-								.bg(t.chat_row_bg)
-								.child(div().text_sm().text_color(t.text_muted).flex_none().child(format_time(*time)))
-								.child(
-									div()
-										.text_sm()
-										.text_color(t.text_dim)
-										.flex_1()
-										.min_w(px(0.0))
-										.child(text.clone()),
-								)
-								.into_any_element(),
-						);
-					}
-					ChatItem::Lagged(lagged) => {
-						rows.push(
-							div()
-								.id(("lagged", idx as u64))
-								.flex()
-								.items_start()
-								.gap_2()
-								.px_3()
-								.py_1()
-								.bg(t.chat_row_bg)
-								.child(
-									div()
-										.text_sm()
-										.text_color(t.text_muted)
-										.flex_none()
-										.child(format_time(lagged.time)),
-								)
-								.child(div().text_sm().text_color(t.text_dim).flex_1().min_w(px(0.0)).child(format!(
-									"Messages skipped ({}): {}",
-									lagged.dropped,
-									lagged.detail.clone().unwrap_or_default()
-								)))
-								.into_any_element(),
-						);
-					}
+							.child(div().text_sm().text_color(t.text_dim).flex_1().min_w(px(0.0)).child(format!(
+								"Messages skipped ({}): {}",
+								lagged.dropped,
+								lagged.detail.clone().unwrap_or_default()
+							)))
+							.into_any_element(),
+					);
 				}
 			}
 		}
@@ -470,17 +453,17 @@ fn split_message_fragments(text: &str, emotes: &HashMap<String, AssetRefUi>) -> 
 			continue;
 		}
 
-		if let Some((prefix, core, suffix)) = split_emote_token(&token) {
-			if let Some(emote) = emotes.get(&core) {
-				if !prefix.is_empty() {
-					out.push(div().child(prefix).into_any_element());
-				}
-				out.push(img(emote.image_url.clone()).size_20().into_any_element());
-				if !suffix.is_empty() {
-					out.push(div().child(suffix).into_any_element());
-				}
-				continue;
+		if let Some((prefix, core, suffix)) = split_emote_token(&token)
+			&& let Some(emote) = emotes.get(&core)
+		{
+			if !prefix.is_empty() {
+				out.push(div().child(prefix).into_any_element());
 			}
+			out.push(img(emote.image_url.clone()).size_20().into_any_element());
+			if !suffix.is_empty() {
+				out.push(div().child(suffix).into_any_element());
+			}
+			continue;
 		}
 
 		out.push(div().child(token).into_any_element());
@@ -495,12 +478,11 @@ fn split_with_whitespace(text: &str) -> Vec<String> {
 
 	for ch in text.chars() {
 		let ws = ch.is_whitespace();
-		if let Some(prev) = last_ws {
-			if prev != ws {
-				if !buf.is_empty() {
-					out.push(std::mem::take(&mut buf));
-				}
-			}
+		if let Some(prev) = last_ws
+			&& prev != ws
+			&& !buf.is_empty()
+		{
+			out.push(std::mem::take(&mut buf));
 		}
 
 		buf.push(ch);

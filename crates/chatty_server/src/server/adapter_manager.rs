@@ -184,9 +184,7 @@ impl AdapterManager {
 
 	/// Query permission snapshot for a room.
 	pub async fn query_permissions(&self, room: &RoomKey) -> Option<PermissionsInfo> {
-		let Some(ctrl) = self.control_by_platform.get(&room.platform) else {
-			return None;
-		};
+		let ctrl = self.control_by_platform.get(&room.platform)?;
 		let (tx, rx) = oneshot::channel();
 		if ctrl
 			.send(AdapterControl::QueryPermissions {

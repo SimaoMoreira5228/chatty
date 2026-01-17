@@ -108,13 +108,13 @@ impl SettingsPage {
 		};
 		let message = text.into();
 		app.update(cx, |state, _cx| {
-			if let Some(tab_id) = state.windows.get(&window_id).and_then(|w| w.active_tab) {
-				if let Some(tab) = state.tabs.get_mut(&tab_id) {
-					tab.log.push(ChatItem::SystemNotice(SystemNoticeUi {
-						time: SystemTime::now(),
-						text: message.clone(),
-					}));
-				}
+			if let Some(tab_id) = state.windows.get(&window_id).and_then(|w| w.active_tab)
+				&& let Some(tab) = state.tabs.get_mut(&tab_id)
+			{
+				tab.log.push(ChatItem::SystemNotice(SystemNoticeUi {
+					time: SystemTime::now(),
+					text: message.clone(),
+				}));
 			}
 		});
 	}
@@ -213,17 +213,17 @@ impl SettingsPage {
 	}
 
 	fn active_identity_label(&self) -> String {
-		if let Some(id) = self.settings.active_identity.as_ref() {
-			if let Some(identity) = self.settings.identities.iter().find(|i| &i.id == id) {
-				return format!("{} ({})", identity.display_name, identity.platform);
-			}
+		if let Some(id) = self.settings.active_identity.as_ref()
+			&& let Some(identity) = self.settings.identities.iter().find(|i| &i.id == id)
+		{
+			return format!("{} ({})", identity.display_name, identity.platform);
 		}
 		"None".to_string()
 	}
 
 	fn parse_rooms_list(&self, raw: &str) -> Vec<chatty_domain::RoomKey> {
 		let mut rooms = Vec::new();
-		for entry in raw.split(|c| c == ',' || c == '\n') {
+		for entry in raw.split([',', '\n']) {
 			let item = entry.trim();
 			if item.is_empty() {
 				continue;
@@ -282,12 +282,12 @@ impl SettingsPage {
 					return;
 				}
 			};
-			if let Err(err) = net.connect(cfg).await {
-				if let Some(app) = app_state {
-					app.update(cx, |state, _cx| {
-						state.push_notification(crate::ui::app_state::UiNotificationKind::Error, err);
-					});
-				}
+			if let Err(err) = net.connect(cfg).await
+				&& let Some(app) = app_state
+			{
+				app.update(cx, |state, _cx| {
+					state.push_notification(crate::ui::app_state::UiNotificationKind::Error, err);
+				});
 			}
 		})
 		.detach();
@@ -300,12 +300,12 @@ impl SettingsPage {
 		};
 		let app_state = self.app_state.clone();
 		cx.spawn(async move |_, cx| {
-			if let Err(err) = net.disconnect("user disconnect").await {
-				if let Some(app) = app_state {
-					app.update(cx, |state, _cx| {
-						state.push_notification(crate::ui::app_state::UiNotificationKind::Error, err);
-					});
-				}
+			if let Err(err) = net.disconnect("user disconnect").await
+				&& let Some(app) = app_state
+			{
+				app.update(cx, |state, _cx| {
+					state.push_notification(crate::ui::app_state::UiNotificationKind::Error, err);
+				});
 			}
 		})
 		.detach();

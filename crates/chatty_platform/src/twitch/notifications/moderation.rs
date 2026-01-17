@@ -22,6 +22,7 @@ pub(crate) fn decode_channel_moderate_to_ingest(
 	let ws_id = Some(m.ws_message_id.clone());
 	let sub_id = Some(m.subscription_id.clone());
 
+	#[allow(clippy::too_many_arguments)]
 	fn mk_mod(
 		room: RoomKey,
 		platform_time: SystemTime,
@@ -39,14 +40,14 @@ pub(crate) fn decode_channel_moderate_to_ingest(
 		let mut ingest = IngestEvent::new(
 			chatty_domain::Platform::Twitch,
 			room.room_id.clone(),
-			IngestPayload::Moderation(ModerationEvent {
+			IngestPayload::Moderation(Box::new(ModerationEvent {
 				kind: kind.to_string(),
 				actor,
 				target,
 				target_message_platform_id,
 				notes,
 				action,
-			}),
+			})),
 		);
 
 		ingest.room = room;
@@ -319,8 +320,10 @@ pub(crate) fn decode_channel_moderate_to_ingest(
 		}
 
 		"slow" => {
-			let mut settings = RoomChatSettings::default();
-			settings.slow_mode = Some(true);
+			let mut settings = RoomChatSettings {
+				slow_mode: Some(true),
+				..Default::default()
+			};
 			if let Some(ad) = ad {
 				settings.slow_mode_wait_time_seconds = ad.get("wait_time_seconds").and_then(|v| v.as_u64());
 			}
@@ -338,8 +341,10 @@ pub(crate) fn decode_channel_moderate_to_ingest(
 			(None, Some(ev))
 		}
 		"slowoff" => {
-			let mut settings = RoomChatSettings::default();
-			settings.slow_mode = Some(false);
+			let settings = RoomChatSettings {
+				slow_mode: Some(false),
+				..Default::default()
+			};
 			let ev = super::mk_room_state_ingest(
 				m.room.clone(),
 				ingest_now,
@@ -355,12 +360,14 @@ pub(crate) fn decode_channel_moderate_to_ingest(
 		}
 
 		"followers" => {
-			let mut settings = RoomChatSettings::default();
-			settings.followers_only = Some(true);
-			if let Some(ad) = ad {
-				if let Some(f) = ad.get("follow_duration_minutes").and_then(|v| v.as_u64()) {
-					settings.followers_only_duration_minutes = Some(f);
-				}
+			let mut settings = RoomChatSettings {
+				followers_only: Some(true),
+				..Default::default()
+			};
+			if let Some(ad) = ad
+				&& let Some(f) = ad.get("follow_duration_minutes").and_then(|v| v.as_u64())
+			{
+				settings.followers_only_duration_minutes = Some(f);
 			}
 			let ev = super::mk_room_state_ingest(
 				m.room.clone(),
@@ -377,8 +384,10 @@ pub(crate) fn decode_channel_moderate_to_ingest(
 		}
 
 		"followersoff" => {
-			let mut settings = RoomChatSettings::default();
-			settings.followers_only = Some(false);
+			let settings = RoomChatSettings {
+				followers_only: Some(false),
+				..Default::default()
+			};
 			let ev = super::mk_room_state_ingest(
 				m.room.clone(),
 				ingest_now,
@@ -394,8 +403,10 @@ pub(crate) fn decode_channel_moderate_to_ingest(
 		}
 
 		"emoteonly" => {
-			let mut settings = RoomChatSettings::default();
-			settings.emote_only = Some(true);
+			let settings = RoomChatSettings {
+				emote_only: Some(true),
+				..Default::default()
+			};
 			let ev = super::mk_room_state_ingest(
 				m.room.clone(),
 				ingest_now,
@@ -411,8 +422,10 @@ pub(crate) fn decode_channel_moderate_to_ingest(
 		}
 
 		"emoteonlyoff" => {
-			let mut settings = RoomChatSettings::default();
-			settings.emote_only = Some(false);
+			let settings = RoomChatSettings {
+				emote_only: Some(false),
+				..Default::default()
+			};
 			let ev = super::mk_room_state_ingest(
 				m.room.clone(),
 				ingest_now,
@@ -428,8 +441,10 @@ pub(crate) fn decode_channel_moderate_to_ingest(
 		}
 
 		"subscribers" => {
-			let mut settings = RoomChatSettings::default();
-			settings.subscribers_only = Some(true);
+			let settings = RoomChatSettings {
+				subscribers_only: Some(true),
+				..Default::default()
+			};
 			let ev = super::mk_room_state_ingest(
 				m.room.clone(),
 				ingest_now,
@@ -445,8 +460,10 @@ pub(crate) fn decode_channel_moderate_to_ingest(
 		}
 
 		"subscribersoff" => {
-			let mut settings = RoomChatSettings::default();
-			settings.subscribers_only = Some(false);
+			let settings = RoomChatSettings {
+				subscribers_only: Some(false),
+				..Default::default()
+			};
 			let ev = super::mk_room_state_ingest(
 				m.room.clone(),
 				ingest_now,
@@ -462,8 +479,10 @@ pub(crate) fn decode_channel_moderate_to_ingest(
 		}
 
 		"uniquechat" => {
-			let mut settings = RoomChatSettings::default();
-			settings.unique_chat = Some(true);
+			let settings = RoomChatSettings {
+				unique_chat: Some(true),
+				..Default::default()
+			};
 			let ev = super::mk_room_state_ingest(
 				m.room.clone(),
 				ingest_now,
@@ -479,8 +498,10 @@ pub(crate) fn decode_channel_moderate_to_ingest(
 		}
 
 		"uniquechatoff" => {
-			let mut settings = RoomChatSettings::default();
-			settings.unique_chat = Some(false);
+			let settings = RoomChatSettings {
+				unique_chat: Some(false),
+				..Default::default()
+			};
 			let ev = super::mk_room_state_ingest(
 				m.room.clone(),
 				ingest_now,

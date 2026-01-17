@@ -318,10 +318,7 @@ impl AppState {
 	pub fn upsert_asset_bundle(&mut self, room: Option<RoomKey>, bundle: AssetBundleUi) {
 		let cache_key = bundle.cache_key.clone();
 		let should_update = match self.asset_bundles.get(&cache_key) {
-			Some(existing) => match (&existing.etag, &bundle.etag) {
-				(Some(prev), Some(next)) if prev == next => false,
-				_ => true,
-			},
+			Some(existing) => matches!((&existing.etag, &bundle.etag), (Some(prev), Some(next)) if prev == next),
 			None => true,
 		};
 
@@ -572,9 +569,8 @@ impl AppState {
 			.filter_map(|(id, tab)| match &tab.target {
 				TabTarget::Room(rk) if rk == room => Some(*id),
 				TabTarget::Group(gid) => {
-					let Some(g) = self.groups.get(gid) else {
-						return None;
-					};
+					let g = self.groups.get(gid)?;
+
 					if g.rooms.iter().any(|r| r == room) { Some(*id) } else { None }
 				}
 				_ => None,

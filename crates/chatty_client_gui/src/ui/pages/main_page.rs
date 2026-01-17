@@ -92,6 +92,7 @@ impl SplitPanel {
 }
 
 impl MainPage {
+	#[allow(clippy::too_many_arguments)]
 	pub fn new(
 		app_state: Entity<AppState>,
 		bound_window: WindowId,
@@ -257,21 +258,21 @@ impl MainPage {
 								.tabs
 								.iter()
 								.filter_map(|tab_id| {
-									app.tabs.get(tab_id).and_then(|tab| match &tab.target {
-										TabTarget::Room(room) => Some(settings::UiTab {
+									app.tabs.get(tab_id).map(|tab| match &tab.target {
+										TabTarget::Room(room) => settings::UiTab {
 											id: tab_id.0.to_string(),
 											title: tab.title.clone(),
 											room: Some(room.clone()),
 											group_id: None,
 											pinned: tab.pinned,
-										}),
-										TabTarget::Group(group_id) => Some(settings::UiTab {
+										},
+										TabTarget::Group(group_id) => settings::UiTab {
 											id: tab_id.0.to_string(),
 											title: tab.title.clone(),
 											room: None,
 											group_id: Some(group_id.0),
 											pinned: tab.pinned,
-										}),
+										},
 									})
 								})
 								.collect(),
@@ -317,21 +318,21 @@ impl MainPage {
 								.tabs
 								.iter()
 								.filter_map(|tab_id| {
-									app.tabs.get(tab_id).and_then(|tab| match &tab.target {
-										TabTarget::Room(room) => Some(settings::UiTab {
+									app.tabs.get(tab_id).map(|tab| match &tab.target {
+										TabTarget::Room(room) => settings::UiTab {
 											id: tab_id.0.to_string(),
 											title: tab.title.clone(),
 											room: Some(room.clone()),
 											group_id: None,
 											pinned: tab.pinned,
-										}),
-										TabTarget::Group(group_id) => Some(settings::UiTab {
+										},
+										TabTarget::Group(group_id) => settings::UiTab {
 											id: tab_id.0.to_string(),
 											title: tab.title.clone(),
 											room: None,
 											group_id: Some(group_id.0),
 											pinned: tab.pinned,
-										}),
+										},
 									})
 								})
 								.collect(),
@@ -356,15 +357,14 @@ impl MainPage {
 
 	fn select_layout_tab(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
 		self.active_layout_id = Some(id);
-		if let Some(layout) = self.active_layout() {
-			if let Some(split) = layout.splits.get(layout.active_split_index) {
-				if let Some(tab_id) = split.active_tab_id {
-					let win = self.bound_window;
-					self.app_state.update(cx, |state, _cx| {
-						state.set_active_tab(win, tab_id);
-					});
-				}
-			}
+		if let Some(layout) = self.active_layout()
+			&& let Some(split) = layout.splits.get(layout.active_split_index)
+			&& let Some(tab_id) = split.active_tab_id
+		{
+			let win = self.bound_window;
+			self.app_state.update(cx, |state, _cx| {
+				state.set_active_tab(win, tab_id);
+			});
 		}
 		self.persist_layout(window, cx);
 		cx.notify();
@@ -861,27 +861,27 @@ impl MainPage {
 	}
 
 	fn apply_join_raw(&mut self, raw: &str, cx: &mut Context<Self>) -> bool {
-		if let Some(rest) = raw.strip_prefix("group:") {
-			if let Ok(gid) = rest.parse::<u64>() {
-				let group_id = crate::ui::app_state::GroupId(gid);
-				let win = self.bound_window;
-				let tab_id = self.app_state.update(cx, |state, _cx| {
-					let title = state
-						.group(group_id)
-						.map(|g| g.name.clone())
-						.unwrap_or_else(|| "group".to_string());
-					let tab_id = state.create_tab_for_group(title, group_id);
-					state.add_tab_to_window(win, tab_id);
-					tab_id
-				});
+		if let Some(rest) = raw.strip_prefix("group:")
+			&& let Ok(gid) = rest.parse::<u64>()
+		{
+			let group_id = crate::ui::app_state::GroupId(gid);
+			let win = self.bound_window;
+			let tab_id = self.app_state.update(cx, |state, _cx| {
+				let title = state
+					.group(group_id)
+					.map(|g| g.name.clone())
+					.unwrap_or_else(|| "group".to_string());
+				let tab_id = state.create_tab_for_group(title, group_id);
+				state.add_tab_to_window(win, tab_id);
+				tab_id
+			});
 
-				let idx = self.active_layout().unwrap().active_split_index;
-				self.update_split_tab(idx, tab_id, cx);
-				self.subscribe_rooms_for_tab(tab_id, cx);
-				self.persist_ui_state(cx);
-				cx.notify();
-				return true;
-			}
+			let idx = self.active_layout().unwrap().active_split_index;
+			self.update_split_tab(idx, tab_id, cx);
+			self.subscribe_rooms_for_tab(tab_id, cx);
+			self.persist_ui_state(cx);
+			cx.notify();
+			return true;
 		}
 
 		let default_platform = self.app_state.read(cx).default_platform;
@@ -959,9 +959,8 @@ impl MainPage {
 		};
 
 		layout.splits.retain(|s| {
-			s.active_tab_id.map_or(true, |id| {
-				id.0 == 0 || (valid_tabs.contains(&id) && window_tabs.contains(&id))
-			})
+			s.active_tab_id
+				.is_none_or(|id| id.0 == 0 || (valid_tabs.contains(&id) && window_tabs.contains(&id)))
 		});
 
 		if layout.splits.is_empty() {
@@ -999,7 +998,7 @@ impl MainPage {
 				.map(|_| {
 					app.rooms_for_tab(tab_id)
 						.first()
-						.map(|room| collect_badges_for_room(&app, room))
+						.map(|room| collect_badges_for_room(app, room))
 						.unwrap_or_default()
 				})
 				.unwrap_or_default();
@@ -1121,47 +1120,47 @@ impl MainPage {
 	}
 
 	fn ensure_split_input(&mut self, split_index: usize, window: &mut Window, cx: &mut Context<Self>) -> Entity<InputState> {
-		if let Some(layout) = self.active_layout_mut() {
-			if let Some(split) = layout.splits.get_mut(split_index) {
-				if let Some(existing) = split.input.clone() {
-					return existing;
-				}
-
-				let input = cx.new(|cx| InputState::new(window, cx).clean_on_escape().placeholder("Send message..."));
-				split.input = Some(input.clone());
-
-				let ent = input.clone();
-				cx.subscribe_in(&ent, window, move |this, state: &Entity<InputState>, event, window, cx| {
-					match event {
-						InputEvent::Change => {
-							if let Some(l) = this.active_layout_mut() {
-								if let Some(split) = l.splits.get_mut(split_index) {
-									split.draft = state.read(cx).value().to_string();
-								}
-							}
-						}
-						InputEvent::PressEnter { .. } => {
-							let text = state.read(cx).value().to_string();
-							let tab_id = this
-								.active_layout()
-								.and_then(|l| l.splits.get(split_index))
-								.and_then(|s| s.active_tab_id);
-							if let Some(tab_id) = tab_id {
-								this.send_message_to_tab(tab_id, text, cx);
-							}
-
-							state.update(cx, |s, cx| {
-								s.set_value("", window, cx);
-							});
-						}
-						_ => {}
-					}
-					// Use win_id if needed for persistence instead of captured window
-				})
-				.detach();
-
-				return input;
+		if let Some(layout) = self.active_layout_mut()
+			&& let Some(split) = layout.splits.get_mut(split_index)
+		{
+			if let Some(existing) = split.input.clone() {
+				return existing;
 			}
+
+			let input = cx.new(|cx| InputState::new(window, cx).clean_on_escape().placeholder("Send message..."));
+			split.input = Some(input.clone());
+
+			let ent = input.clone();
+			cx.subscribe_in(&ent, window, move |this, state: &Entity<InputState>, event, window, cx| {
+				match event {
+					InputEvent::Change => {
+						if let Some(l) = this.active_layout_mut()
+							&& let Some(split) = l.splits.get_mut(split_index)
+						{
+							split.draft = state.read(cx).value().to_string();
+						}
+					}
+					InputEvent::PressEnter { .. } => {
+						let text = state.read(cx).value().to_string();
+						let tab_id = this
+							.active_layout()
+							.and_then(|l| l.splits.get(split_index))
+							.and_then(|s| s.active_tab_id);
+						if let Some(tab_id) = tab_id {
+							this.send_message_to_tab(tab_id, text, cx);
+						}
+
+						state.update(cx, |s, cx| {
+							s.set_value("", window, cx);
+						});
+					}
+					_ => {}
+				}
+				// Use win_id if needed for persistence instead of captured window
+			})
+			.detach();
+
+			return input;
 		}
 
 		cx.new(|cx| InputState::new(window, cx).clean_on_escape().placeholder("Send message..."))
@@ -1178,10 +1177,10 @@ impl MainPage {
 			state.set_active_tab(win, tab_id);
 		});
 
-		if let Some(layout) = self.active_layout_mut() {
-			if let Some(split) = layout.splits.get_mut(layout.active_split_index) {
-				split.active_tab_id = Some(tab_id);
-			}
+		if let Some(layout) = self.active_layout_mut()
+			&& let Some(split) = layout.splits.get_mut(layout.active_split_index)
+		{
+			split.active_tab_id = Some(tab_id);
 		}
 
 		self.persist_ui_state(cx);
@@ -1262,7 +1261,7 @@ impl MainPage {
 
 		let msg = ChatMessageUi {
 			time: SystemTime::now(),
-			platform: room.platform.clone(),
+			platform: room.platform,
 			room: room.clone(),
 			server_message_id: None,
 			author_id: None,
@@ -1280,15 +1279,11 @@ impl MainPage {
 	fn parse_command_input(topic: &str, text: &str) -> Option<pb::Command> {
 		let trimmed = text.trim();
 		let mut parts = trimmed.split_whitespace();
-		let Some(cmd) = parts.next() else {
-			return None;
-		};
+		let cmd = parts.next()?;
 
 		match cmd {
 			"/delete" => {
-				let Some(message_id) = parts.next() else {
-					return None;
-				};
+				let message_id = parts.next()?;
 				Some(pb::Command {
 					command: Some(pb::command::Command::DeleteMessage(pb::DeleteMessageCommand {
 						topic: topic.to_string(),
@@ -1298,12 +1293,8 @@ impl MainPage {
 				})
 			}
 			"/timeout" => {
-				let Some(user_id) = parts.next() else {
-					return None;
-				};
-				let Some(duration) = parts.next() else {
-					return None;
-				};
+				let user_id = parts.next()?;
+				let duration = parts.next()?;
 				let duration_seconds = duration.parse::<u32>().ok()?;
 				let reason = parts.collect::<Vec<_>>().join(" ");
 				Some(pb::Command {
@@ -1316,9 +1307,7 @@ impl MainPage {
 				})
 			}
 			"/ban" => {
-				let Some(user_id) = parts.next() else {
-					return None;
-				};
+				let user_id = parts.next()?;
 				let reason = parts.collect::<Vec<_>>().join(" ");
 				Some(pb::Command {
 					command: Some(pb::command::Command::BanUser(pb::BanUserCommand {
@@ -1413,10 +1402,10 @@ impl MainPage {
 			state.set_value(text_clone, window, cx);
 		});
 
-		if let Some(layout) = self.active_layout_mut() {
-			if let Some(split) = layout.splits.get_mut(index) {
-				split.draft = text;
-			}
+		if let Some(layout) = self.active_layout_mut()
+			&& let Some(split) = layout.splits.get_mut(index)
+		{
+			split.draft = text;
 		}
 		cx.notify();
 	}
@@ -1542,7 +1531,7 @@ impl MainPage {
 
 	fn on_resize_move(&mut self, ev: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<Self>) {
 		let drag = match self.resize_drag.as_ref() {
-			Some(d) => d.clone(),
+			Some(d) => *d,
 			None => return,
 		};
 		let layout = match self.active_layout_mut() {
@@ -1749,12 +1738,13 @@ impl MainPage {
 				});
 				self.update_split_tab(split_index, tab_id, cx);
 
-				if let Some(old_id) = old_tab_id {
-					if old_id != tab_id && old_id.0 != 0 {
-						self.app_state.update(cx, |state, _cx| {
-							state.close_tab(old_id);
-						});
-					}
+				if let Some(old_id) = old_tab_id
+					&& old_id != tab_id
+					&& old_id.0 != 0
+				{
+					self.app_state.update(cx, |state, _cx| {
+						state.close_tab(old_id);
+					});
 				}
 
 				return true;
@@ -1777,12 +1767,13 @@ impl MainPage {
 			.update(cx, |state, _cx| state.create_tab_for_room(room.room_id.to_string(), room));
 		self.update_split_tab(split_index, tab_id, cx);
 
-		if let Some(old_id) = old_tab_id {
-			if old_id != tab_id && old_id.0 != 0 {
-				self.app_state.update(cx, |state, _cx| {
-					state.close_tab(old_id);
-				});
-			}
+		if let Some(old_id) = old_tab_id
+			&& old_id != tab_id
+			&& old_id.0 != 0
+		{
+			self.app_state.update(cx, |state, _cx| {
+				state.close_tab(old_id);
+			});
 		}
 
 		true
@@ -1792,7 +1783,7 @@ impl MainPage {
 		let mut rooms = Vec::new();
 		let default_platform = self.app_state.read(cx).default_platform;
 
-		for entry in raw.split(|c| c == ',' || c == '\n') {
+		for entry in raw.split([',', '\n']) {
 			let item = entry.trim();
 			if item.is_empty() {
 				continue;
@@ -1821,23 +1812,24 @@ impl MainPage {
 		});
 		self.update_split_tab(split_index, tab_id, cx);
 
-		if let Some(old_id) = old_tab_id {
-			if old_id != tab_id && old_id.0 != 0 {
-				self.app_state.update(cx, |state, _cx| {
-					state.close_tab(old_id);
-				});
-			}
+		if let Some(old_id) = old_tab_id
+			&& old_id != tab_id
+			&& old_id.0 != 0
+		{
+			self.app_state.update(cx, |state, _cx| {
+				state.close_tab(old_id);
+			});
 		}
 		true
 	}
 
 	fn update_split_tab(&mut self, split_index: usize, tab_id: TabId, cx: &mut Context<Self>) {
-		if let Some(layout) = self.active_layout_mut() {
-			if let Some(split) = layout.splits.get_mut(split_index) {
-				split.active_tab_id = Some(tab_id);
-				if !split.tabs.contains(&tab_id) {
-					split.tabs.push(tab_id);
-				}
+		if let Some(layout) = self.active_layout_mut()
+			&& let Some(split) = layout.splits.get_mut(split_index)
+		{
+			split.active_tab_id = Some(tab_id);
+			if !split.tabs.contains(&tab_id) {
+				split.tabs.push(tab_id);
 			}
 		}
 		self.subscribe_rooms_for_tab(tab_id, cx);

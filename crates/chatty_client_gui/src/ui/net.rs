@@ -174,7 +174,7 @@ impl SessionEventsApi for SessionEvents {
 		&'a mut self,
 		mut on_event: Box<dyn FnMut(pb::EventEnvelope) + Send + 'a>,
 	) -> Pin<Box<dyn Future<Output = Result<(), ClientCoreError>> + Send + 'a>> {
-		Box::pin(async move { SessionEvents::run_events_loop(self, |ev| (on_event)(ev)).await })
+		Box::pin(async move { SessionEvents::run_events_loop(self, &mut (on_event)).await })
 	}
 }
 
@@ -182,7 +182,7 @@ impl SessionEventsApi for SessionEvents {
 #[derive(Debug)]
 pub enum NetCommand {
 	Connect {
-		cfg: ClientConfigV1,
+		cfg: Box<ClientConfigV1>,
 	},
 	Disconnect {
 		reason: String,
@@ -210,7 +210,7 @@ pub struct NetController {
 impl NetController {
 	pub async fn connect(&self, cfg: ClientConfigV1) -> Result<(), String> {
 		self.cmd_tx
-			.send(NetCommand::Connect { cfg })
+			.send(NetCommand::Connect { cfg: Box::new(cfg) })
 			.await
 			.map_err(|_| "network task is not running".to_string())
 	}
@@ -336,8 +336,10 @@ async fn run_network_task(
 	ui_tx: mpsc::Sender<UiEvent>,
 	shutdown_rx: oneshot::Receiver<()>,
 ) {
-	run_network_task_with_session_factory(cmd_rx, ui_tx, shutdown_rx, |cfg, ui_tx| Box::pin(connect_session(cfg, ui_tx)))
-		.await;
+	run_network_task_with_session_factory(cmd_rx, ui_tx, shutdown_rx, |cfg, ui_tx| {
+		Box::pin(connect_session(*cfg, ui_tx))
+	})
+	.await;
 }
 
 async fn run_network_task_with_session_factory<F>(
@@ -346,7 +348,10 @@ async fn run_network_task_with_session_factory<F>(
 	mut shutdown_rx: oneshot::Receiver<()>,
 	mut connect_fn: F,
 ) where
-	F: FnMut(ClientConfigV1, mpsc::Sender<UiEvent>) -> Pin<Box<dyn Future<Output = Option<BoxedSessionControl>> + Send>>,
+	F: FnMut(
+		Box<ClientConfigV1>,
+		mpsc::Sender<UiEvent>,
+	) -> Pin<Box<dyn Future<Output = Option<BoxedSessionControl>> + Send>>,
 {
 	let mut session: Option<BoxedSessionControl> = None;
 
@@ -426,13 +431,13 @@ async fn run_network_task_with_session_factory<F>(
 
 				match cmd {
 					NetCommand::Connect { cfg } => {
-						last_connect_cfg = Some(cfg.clone());
+						last_connect_cfg = Some(*cfg.clone());
 						reconnect_attempt = 0;
 						reconnect_deadline = None;
 						let _ = ui_tx.send(UiEvent::Connecting).await;
 						if let Some(t) = events_task.take() { t.abort(); }
 						if let Some(s) = session.as_ref() { s.close(0, "reconnect"); }
-						session = connect_fn(cfg, ui_tx.clone()).await;
+						session = connect_fn(cfg.clone(), ui_tx.clone()).await;
 
 						if let Some(s) = session.as_mut() {
 							if cfg!(debug_assertions) {
@@ -491,13 +496,11 @@ async fn run_network_task_with_session_factory<F>(
 						let was_zero = *count == 0;
 						*count += 1;
 
-						if was_zero {
-							if let Some(s) = session.as_mut() {
-								if let Err(e) = subscribe_topics(s, vec![topic], &cursor_by_topic, &ui_tx, &mut events_task).await {
+						if was_zero
+							&& let Some(s) = session.as_mut()
+								&& let Err(e) = subscribe_topics(s, vec![topic], &cursor_by_topic, &ui_tx, &mut events_task).await {
 									let _ = ui_tx.send(UiEvent::Error { message: e }).await;
 								}
-							}
-						}
 					}
 
 					NetCommand::UnsubscribeRoomKey { room } => {
@@ -513,13 +516,11 @@ async fn run_network_task_with_session_factory<F>(
 							}
 						}
 
-						if became_zero {
-							if let Some(s) = session.as_mut() {
-								if let Err(e) = unsubscribe_topics(s, vec![topic], &ui_tx).await {
+						if became_zero
+							&& let Some(s) = session.as_mut()
+								&& let Err(e) = unsubscribe_topics(s, vec![topic], &ui_tx).await {
 									let _ = ui_tx.send(UiEvent::Error { message: e }).await;
 								}
-							}
-						}
 					}
 
 					NetCommand::SendCommand { command } => {
@@ -549,7 +550,7 @@ async fn run_network_task_with_session_factory<F>(
 				let _ = ui_tx.send(UiEvent::Connecting).await;
 				if let Some(t) = events_task.take() { t.abort(); }
 				if let Some(s) = session.as_ref() { s.close(0, "dev auto-connect"); }
-				session = connect_fn(ClientConfigV1::default(), ui_tx.clone()).await;
+				session = connect_fn(Box::default(), ui_tx.clone()).await;
 
 				if let Some(s) = session.as_mut() {
 					if cfg!(debug_assertions) {
@@ -577,7 +578,7 @@ async fn run_network_task_with_session_factory<F>(
 					let _ = ui_tx.send(UiEvent::Connecting).await;
 					if let Some(t) = events_task.take() { t.abort(); }
 					if let Some(s) = session.as_ref() { s.close(0, "reconnect"); }
-					session = connect_fn(cfg, ui_tx.clone()).await;
+					session = connect_fn(Box::new(cfg), ui_tx.clone()).await;
 					if let Some(s) = session.as_mut() {
 						if let Err(e) =
 							reconcile_subscriptions_on_connect(s, &topics_refcounts, &cursor_by_topic, &ui_tx, &mut events_task)

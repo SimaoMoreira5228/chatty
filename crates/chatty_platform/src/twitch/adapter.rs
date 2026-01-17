@@ -363,10 +363,10 @@ impl TwitchEventSubAdapter {
 			return false;
 		};
 
-		if let Some(last) = self.last_refresh_attempt {
-			if last.elapsed() < Duration::from_secs(30) {
-				return false;
-			}
+		if let Some(last) = self.last_refresh_attempt
+			&& last.elapsed() < Duration::from_secs(30)
+		{
+			return false;
 		}
 		self.last_refresh_attempt = Some(Instant::now());
 
@@ -763,12 +763,12 @@ impl TwitchEventSubAdapter {
 								);
 							};
 
-							if let Some(existing_session_id) = transport_session_id(&existing.transport) {
-								if existing_session_id == session_id {
-									self.helix_circuit_breaker.record_success();
-									self.subscription_id_by_room_and_type.insert(key, existing.id);
-									return Ok(());
-								}
+							if let Some(existing_session_id) = transport_session_id(&existing.transport)
+								&& existing_session_id == session_id
+							{
+								self.helix_circuit_breaker.record_success();
+								self.subscription_id_by_room_and_type.insert(key, existing.id);
+								return Ok(());
 							}
 
 							let mut to_delete = vec![existing];
@@ -1437,7 +1437,6 @@ impl TwitchEventSubAdapter {
 										}
 										buffered_secondary.push_back(t.to_string());
 									} else if ty == "session_keepalive" {
-									} else {
 									}
 								}
 								Message::Ping(p) => {

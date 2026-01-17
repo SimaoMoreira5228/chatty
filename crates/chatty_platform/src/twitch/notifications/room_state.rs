@@ -7,6 +7,7 @@ use chatty_domain::Platform;
 use crate::{AdapterEvent, IngestEvent, IngestPayload, RoomChatSettings, RoomState, UserNotice};
 
 /// Create a RoomState ingest event.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn mk_room_state_ingest(
 	room: chatty_domain::RoomKey,
 	ingest_now: SystemTime,
@@ -51,6 +52,7 @@ pub(crate) fn mk_room_state_ingest(
 }
 
 /// Create a UserNotice ingest event.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn mk_user_notice_ingest(
 	room: chatty_domain::RoomKey,
 	ingest_now: SystemTime,

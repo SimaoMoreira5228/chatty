@@ -61,6 +61,7 @@ impl Default for Identity {
 /// Persisted group configuration (client-side only).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct GroupSettings {
 	/// Stable id for the group.
 	pub id: u64,
@@ -68,16 +69,6 @@ pub struct GroupSettings {
 	pub name: String,
 	/// Rooms included in the group.
 	pub rooms: Vec<RoomKey>,
-}
-
-impl Default for GroupSettings {
-	fn default() -> Self {
-		Self {
-			id: 0,
-			name: String::new(),
-			rooms: Vec::new(),
-		}
-	}
 }
 
 /// GUI settings persisted on disk (v1).
@@ -397,20 +388,12 @@ impl Default for GuiSettings {
 
 /// Path for GUI settings (`~/.chatty/gui_settings.toml`).
 fn settings_path() -> Option<PathBuf> {
-	if let Some(home) = dirs::home_dir() {
-		Some(home.join(".chatty").join("gui_settings.toml"))
-	} else {
-		None
-	}
+	dirs::home_dir().map(|home| home.join(".chatty").join("gui_settings.toml"))
 }
 
 /// Path for UI layout (`~/.chatty/ui_layout.json`).
 fn ui_layout_path() -> Option<PathBuf> {
-	if let Some(home) = dirs::home_dir() {
-		Some(home.join(".chatty").join("ui_layout.json"))
-	} else {
-		None
-	}
+	dirs::home_dir().map(|home| home.join(".chatty").join("ui_layout.json"))
 }
 
 /// Best-effort load from disk.
@@ -500,7 +483,7 @@ static SETTINGS: OnceLock<SettingsStore> = OnceLock::new();
 
 /// Initialize the global settings store.
 pub fn init() -> &'static SettingsStore {
-	SETTINGS.get_or_init(|| SettingsStore::new())
+	SETTINGS.get_or_init(SettingsStore::new)
 }
 
 /// Get a cloned copy of the current GUI settings.

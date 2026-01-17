@@ -17,10 +17,9 @@ where
 {
 	let on_submit = Arc::new(on_submit);
 	let input = cx.new(|cx| {
-		let input = InputState::new(window, cx)
+		InputState::new(window, cx)
 			.placeholder("Layout name")
-			.validate(|s, _| !s.trim().is_empty());
-		input
+			.validate(|s, _| !s.trim().is_empty())
 	});
 	input.update(cx, |state, cx| {
 		state.set_value(current, window, cx);

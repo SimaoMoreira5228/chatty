@@ -17,6 +17,7 @@ pub struct StatusChip {
 pub struct TopbarButton<T> {
 	pub id: &'static str,
 	pub label: SharedString,
+	#[allow(clippy::type_complexity)]
 	pub on_click: Arc<dyn Fn(&mut T, &mut Window, &mut Context<T>) + Send + Sync + 'static>,
 }
 

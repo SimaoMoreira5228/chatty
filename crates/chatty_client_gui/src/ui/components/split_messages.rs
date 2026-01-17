@@ -13,6 +13,7 @@ use crate::ui::components::message_list::{
 };
 use crate::ui::theme;
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_split_messages<T>(
 	view: Entity<T>,
 	app_state: Entity<AppState>,

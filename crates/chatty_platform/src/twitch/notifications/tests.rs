@@ -69,7 +69,7 @@ fn mod_gating_allows_non_moderation_payloads_even_when_not_mod() {
 
 #[test]
 fn mod_gating_blocks_non_delete_moderation_when_not_mod() {
-	let ban = IngestPayload::Moderation(crate::ModerationEvent {
+	let ban = IngestPayload::Moderation(Box::new(crate::ModerationEvent {
 		kind: "ban".to_string(),
 		actor: None,
 		target: Some(crate::UserRef {
@@ -83,14 +83,14 @@ fn mod_gating_blocks_non_delete_moderation_when_not_mod() {
 			is_permanent: Some(true),
 			reason: None,
 		}),
-	});
+	}));
 
 	assert!(!should_emit_payload(false, &ban));
 }
 
 #[test]
 fn mod_gating_allows_delete_moderation_when_not_mod() {
-	let delete = IngestPayload::Moderation(crate::ModerationEvent {
+	let delete = IngestPayload::Moderation(Box::new(crate::ModerationEvent {
 		kind: "delete".to_string(),
 		actor: None,
 		target: Some(crate::UserRef {
@@ -103,14 +103,14 @@ fn mod_gating_allows_delete_moderation_when_not_mod() {
 		action: Some(ModerationAction::DeleteMessage {
 			message_id: "msg-1".to_string(),
 		}),
-	});
+	}));
 
 	assert!(should_emit_payload(false, &delete));
 }
 
 #[test]
 fn mod_gating_allows_all_moderation_when_mod() {
-	let timeout = IngestPayload::Moderation(crate::ModerationEvent {
+	let timeout = IngestPayload::Moderation(Box::new(crate::ModerationEvent {
 		kind: "timeout".to_string(),
 		actor: None,
 		target: Some(crate::UserRef {
@@ -125,7 +125,7 @@ fn mod_gating_allows_all_moderation_when_mod() {
 			expires_at: None,
 			reason: Some("reason".to_string()),
 		}),
-	});
+	}));
 
 	assert!(should_emit_payload(true, &timeout));
 }

@@ -109,13 +109,13 @@ impl MainWindow {
 		let main_window_id: WindowId = app_state.update(cx, |state, _cx| state.create_window(&win_state.id));
 
 		app_state.update(cx, |state, _cx| {
-			if let Some(tab_id) = state.windows.get(&main_window_id).and_then(|w| w.active_tab) {
-				if let Some(tab) = state.tabs.get_mut(&tab_id) {
-					tab.log.push(ChatItem::SystemNotice(SystemNoticeUi {
-						time: SystemTime::now(),
-						text: "Chatty UI ready.".to_string(),
-					}));
-				}
+			if let Some(tab_id) = state.windows.get(&main_window_id).and_then(|w| w.active_tab)
+				&& let Some(tab) = state.tabs.get_mut(&tab_id)
+			{
+				tab.log.push(ChatItem::SystemNotice(SystemNoticeUi {
+					time: SystemTime::now(),
+					text: "Chatty UI ready.".to_string(),
+				}));
 			}
 		});
 

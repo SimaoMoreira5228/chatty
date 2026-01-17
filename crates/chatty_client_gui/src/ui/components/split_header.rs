@@ -11,6 +11,7 @@ use gpui_component::Icon;
 use crate::ui::app_state::AssetRefUi;
 use crate::ui::theme;
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_split_header<T, F, G, H, I>(
 	title: String,
 	active: bool,

@@ -40,7 +40,7 @@ pub async fn fetch_ffz_bundle(room_login: &str) -> anyhow::Result<AssetBundle> {
 		.get(&set_id.to_string())
 		.ok_or_else(|| anyhow!("ffz set not found"))?;
 
-	let emotes: Vec<AssetRef> = set.emoticons.iter().filter_map(|emote| ffz_emote_to_asset(emote)).collect();
+	let emotes: Vec<AssetRef> = set.emoticons.iter().filter_map(ffz_emote_to_asset).collect();
 	let badges = ffz_room_badges(&body.room);
 	let etag = compute_bundle_etag(&emotes, &badges);
 
@@ -121,16 +121,16 @@ fn ffz_emote_to_asset(emote: &FfzEmote) -> Option<AssetRef> {
 fn ffz_room_badges(room: &FfzRoom) -> Vec<AssetRef> {
 	let mut badges = Vec::new();
 
-	if let Some(urls) = room.vip_badge.as_ref() {
-		if let Some(badge) = ffz_badge_from_urls("ffz:vip", "VIP", urls) {
-			badges.push(badge);
-		}
+	if let Some(urls) = room.vip_badge.as_ref()
+		&& let Some(badge) = ffz_badge_from_urls("ffz:vip", "VIP", urls)
+	{
+		badges.push(badge);
 	}
 
-	if let Some(urls) = room.mod_urls.as_ref() {
-		if let Some(badge) = ffz_badge_from_urls("ffz:moderator", "Moderator", urls) {
-			badges.push(badge);
-		}
+	if let Some(urls) = room.mod_urls.as_ref()
+		&& let Some(badge) = ffz_badge_from_urls("ffz:moderator", "Moderator", urls)
+	{
+		badges.push(badge);
 	}
 
 	badges

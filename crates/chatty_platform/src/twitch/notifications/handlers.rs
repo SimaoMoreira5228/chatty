@@ -89,7 +89,7 @@ pub(crate) fn handle_notification_json(
 			let mut ingest = IngestEvent::new(
 				Platform::Twitch,
 				d.room.room_id.clone(),
-				IngestPayload::Moderation(crate::ModerationEvent {
+				IngestPayload::Moderation(Box::new(crate::ModerationEvent {
 					kind: "delete".to_string(),
 					actor,
 					target,
@@ -98,7 +98,7 @@ pub(crate) fn handle_notification_json(
 					action: Some(crate::ModerationAction::DeleteMessage {
 						message_id: target_message_platform_id.clone().into_string(),
 					}),
-				}),
+				})),
 			);
 
 			ingest.room = d.room;
@@ -159,14 +159,14 @@ pub(crate) fn handle_notification_json(
 			let mut ingest = IngestEvent::new(
 				Platform::Twitch,
 				b.room.room_id.clone(),
-				IngestPayload::Moderation(crate::ModerationEvent {
+				IngestPayload::Moderation(Box::new(crate::ModerationEvent {
 					kind,
 					actor,
 					target,
 					target_message_platform_id: None,
 					notes: None,
 					action,
-				}),
+				})),
 			);
 
 			ingest.room = b.room;

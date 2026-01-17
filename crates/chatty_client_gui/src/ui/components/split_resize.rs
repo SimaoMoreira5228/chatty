@@ -36,7 +36,7 @@ pub fn begin_resize_drag(
 
 pub fn update_resize_drag(
 	ev: &MouseMoveEvent,
-	proportions: &mut Vec<f32>,
+	proportions: &mut [f32],
 	resize_drag: &Option<ResizeDrag>,
 	min_width: Pixels,
 ) -> bool {
@@ -52,9 +52,9 @@ pub fn update_resize_drag(
 
 	let total_prop = drag.left_proportion + drag.right_proportion;
 	let pixel_delta = ev.position.x - drag.start_x;
-	let prop_delta = f32::from(pixel_delta / drag.container_width);
+	let prop_delta = pixel_delta / drag.container_width;
 
-	let min_prop = f32::from(min_width / drag.container_width);
+	let min_prop = min_width / drag.container_width;
 
 	let next_left = (drag.left_proportion + prop_delta).clamp(min_prop, total_prop - min_prop);
 	let next_right = total_prop - next_left;

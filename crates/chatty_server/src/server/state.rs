@@ -36,16 +36,13 @@ impl GlobalState {
 				continue;
 			}
 
-			match self.topic_refcounts.get_mut(&topic) {
-				Some(rc) => {
-					if *rc <= 1 {
-						self.topic_refcounts.remove(&topic);
-						topics_to_leave.push(topic);
-					} else {
-						*rc -= 1;
-					}
+			if let Some(rc) = self.topic_refcounts.get_mut(&topic) {
+				if *rc <= 1 {
+					self.topic_refcounts.remove(&topic);
+					topics_to_leave.push(topic);
+				} else {
+					*rc -= 1;
 				}
-				None => {}
 			}
 		}
 

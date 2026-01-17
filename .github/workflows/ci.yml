@@ -18,11 +18,21 @@ jobs:
         with:
           components: clippy
 
-      - name: Install dprint
-        run: curl -fsSL https://dprint.dev/install.sh | sh -s -- --install-path /usr/local/bin
+      - uses: dprint/check@v2.3
 
-      - name: dprint check
-        run: dprint check
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            protobuf-compiler \
+            libxcb1-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libvulkan-dev \
+            libwayland-dev
 
       - name: cargo clippy
         run: cargo clippy --all-features --all-targets

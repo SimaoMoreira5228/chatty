@@ -84,7 +84,7 @@ impl IngestRouter {
 			}
 
 			self.room_hub
-				.publish_to_room(ingest.room.clone(), RoomHubItem::Ingest(ingest))
+				.publish_to_room(ingest.room.clone(), RoomHubItem::Ingest(Box::new(ingest)))
 				.await;
 		}
 	}
@@ -115,6 +115,6 @@ pub fn spawn_ingest_router(
 #[allow(dead_code)]
 pub async fn route_one(room_hub: &RoomHub, ingest: IngestEvent) {
 	room_hub
-		.publish_to_room(ingest.room.clone(), RoomHubItem::Ingest(ingest))
+		.publish_to_room(ingest.room.clone(), RoomHubItem::Ingest(Box::new(ingest)))
 		.await;
 }

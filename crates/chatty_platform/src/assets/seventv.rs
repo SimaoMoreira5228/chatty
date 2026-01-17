@@ -237,22 +237,20 @@ query ChannelBadges($platform: Platform!, $platformId: String!) {
 		.ok_or_else(|| anyhow!("7tv user not found"))?;
 
 	let mut dedupe: HashMap<String, AssetRef> = HashMap::new();
-	if let Some(style) = user.style {
-		if let Some(badge) = style.active_badge {
-			if let Some(asset) = seventv_badge_to_asset(badge) {
-				dedupe.entry(asset.id.clone()).or_insert(asset);
-			}
-		}
+	if let Some(style) = user.style
+		&& let Some(badge) = style.active_badge
+		&& let Some(asset) = seventv_badge_to_asset(badge)
+	{
+		dedupe.entry(asset.id.clone()).or_insert(asset);
 	}
 
 	if let Some(inventory) = user.inventory {
 		for edge in inventory.badges {
-			if let Some(node) = edge.to {
-				if let Some(badge) = node.badge {
-					if let Some(asset) = seventv_badge_to_asset(badge) {
-						dedupe.entry(asset.id.clone()).or_insert(asset);
-					}
-				}
+			if let Some(node) = edge.to
+				&& let Some(badge) = node.badge
+				&& let Some(asset) = seventv_badge_to_asset(badge)
+			{
+				dedupe.entry(asset.id.clone()).or_insert(asset);
 			}
 		}
 	}
@@ -302,7 +300,7 @@ fn seventv_emote_to_asset(item: SevenTvEmoteSetEmote) -> Option<AssetRef> {
 		id: item.emote.id,
 		name,
 		image_url: image.url.clone(),
-		image_format: image.mime.split('/').last().unwrap_or("webp").to_string(),
+		image_format: image.mime.split('/').next_back().unwrap_or("webp").to_string(),
 		width: image.width as u32,
 		height: image.height as u32,
 	})
@@ -319,7 +317,7 @@ fn seventv_badge_to_asset(badge: SevenTvBadge) -> Option<AssetRef> {
 		id: badge.id,
 		name: badge.name,
 		image_url: image.url.clone(),
-		image_format: image.mime.split('/').last().unwrap_or("png").to_string(),
+		image_format: image.mime.split('/').next_back().unwrap_or("png").to_string(),
 		width: image.width as u32,
 		height: image.height as u32,
 	})

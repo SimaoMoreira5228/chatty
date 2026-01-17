@@ -36,7 +36,7 @@ impl Default for RoomHubConfig {
 /// Items emitted on a subscriber stream.
 #[derive(Debug, Clone)]
 pub enum RoomHubItem {
-	Ingest(IngestEvent),
+	Ingest(Box<IngestEvent>),
 
 	#[allow(dead_code)]
 	Status(AdapterStatus),
@@ -104,7 +104,7 @@ impl RoomHub {
 	#[allow(dead_code)]
 	pub async fn publish_ingest(&self, event: IngestEvent) {
 		let room = event.room.clone();
-		self.publish_to_room(room, RoomHubItem::Ingest(event)).await;
+		self.publish_to_room(room, RoomHubItem::Ingest(Box::new(event))).await;
 	}
 
 	/// Publish an adapter status event to subscribers of a room.
@@ -131,12 +131,10 @@ impl RoomHub {
 		for (idx, sub) in entry.subscribers.iter_mut().enumerate() {
 			match sub.try_send(item.clone()) {
 				Ok(()) => {
-					if let Some(pending) = entry.pending_lag_by_subscriber.get_mut(idx) {
-						if *pending > 0 {
-							if sub.try_send(RoomHubItem::Lagged { dropped: *pending }).is_ok() {
-								*pending = 0;
-							}
-						}
+					if let Some(pending) = entry.pending_lag_by_subscriber.get_mut(idx)
+						&& *pending > 0 && sub.try_send(RoomHubItem::Lagged { dropped: *pending }).is_ok()
+					{
+						*pending = 0;
 					}
 				}
 				Err(mpsc::error::TrySendError::Full(_)) => {

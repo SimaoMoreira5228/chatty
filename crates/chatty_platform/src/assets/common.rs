@@ -21,10 +21,10 @@ pub(crate) fn prune_map_cache(cache: &Mutex<HashMap<String, CachedBundle>>, ttl:
 
 pub(crate) fn prune_optional_cache(cache: &Mutex<Option<CachedBundle>>, ttl: Duration) {
 	let mut guard = cache.lock();
-	if let Some(entry) = guard.as_ref() {
-		if entry.fetched_at.elapsed() > ttl {
-			*guard = None;
-		}
+	if let Some(entry) = guard.as_ref()
+		&& entry.fetched_at.elapsed() > ttl
+	{
+		*guard = None;
 	}
 }
 

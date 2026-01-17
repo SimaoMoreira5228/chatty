@@ -563,15 +563,15 @@ fn apply_env_overrides(cfg: &mut ServerConfig) {
 		warn!("twitch config: no client_id in server config (waiting for user OAuth)");
 	}
 
-	if let (Some(min), Some(max)) = (cfg.twitch.reconnect_min_delay, cfg.twitch.reconnect_max_delay) {
-		if min > max {
-			warn!(
-				min_ms = min.as_millis(),
-				max_ms = max.as_millis(),
-				"twitch config: reconnect_min_delay > reconnect_max_delay; swapping"
-			);
-			cfg.twitch.reconnect_min_delay = Some(max);
-			cfg.twitch.reconnect_max_delay = Some(min);
-		}
+	if let (Some(min), Some(max)) = (cfg.twitch.reconnect_min_delay, cfg.twitch.reconnect_max_delay)
+		&& min > max
+	{
+		warn!(
+			min_ms = min.as_millis(),
+			max_ms = max.as_millis(),
+			"twitch config: reconnect_min_delay > reconnect_max_delay; swapping"
+		);
+		cfg.twitch.reconnect_min_delay = Some(max);
+		cfg.twitch.reconnect_max_delay = Some(min);
 	}
 }

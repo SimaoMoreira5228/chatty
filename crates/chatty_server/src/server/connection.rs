@@ -167,6 +167,7 @@ impl CommandRateLimiter {
 	}
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn handle_connection(
 	conn_id: u64,
 	connection: quinn::Connection,
@@ -267,24 +268,24 @@ pub async fn handle_connection(
 	if settings.auth_token.is_some() || settings.auth_hmac_secret.is_some() {
 		let provided = hello.auth_token.trim();
 		let mut authorized = false;
-		if let Some(expected) = settings.auth_token.as_ref() {
-			if !provided.is_empty() && provided == expected.expose() {
-				authorized = true;
-			}
+		if let Some(expected) = settings.auth_token.as_ref()
+			&& !provided.is_empty()
+			&& provided == expected.expose()
+		{
+			authorized = true;
 		}
 
-		if !authorized {
-			if let Some(secret) = settings.auth_hmac_secret.as_ref() {
-				if !provided.is_empty() {
-					match verify_hmac_token(provided, secret.expose()) {
-						Ok(claims) => {
-							authorized = true;
-							auth_claims = Some(claims);
-						}
-						Err(e) => {
-							warn!(conn_id, error = %e, "auth token rejected");
-						}
-					}
+		if !authorized
+			&& let Some(secret) = settings.auth_hmac_secret.as_ref()
+			&& !provided.is_empty()
+		{
+			match verify_hmac_token(provided, secret.expose()) {
+				Ok(claims) => {
+					authorized = true;
+					auth_claims = Some(claims);
+				}
+				Err(e) => {
+					warn!(conn_id, error = %e, "auth token rejected");
 				}
 			}
 		}
@@ -799,11 +800,10 @@ pub async fn handle_connection(
 				for result in &mut results {
 					let last_cursor = *last_cursor_by_topic.get(&result.topic).unwrap_or(&0);
 					let outcome = {
-						let outcome = replay_service
+						replay_service
 							.replay(&client_instance_id, &result.topic, last_cursor)
 							.await
-							.context("replay events")?;
-						outcome
+							.context("replay events")?
 					};
 
 					result.status = outcome.status as i32;
@@ -998,10 +998,10 @@ fn negotiate_codec(hello: &pb::Hello) -> Result<pb::Codec, String> {
 	}
 
 	let preferred = pb::Codec::try_from(hello.preferred_codec).ok();
-	if let Some(pref) = preferred {
-		if supported.contains(&pref) {
-			return Ok(pref);
-		}
+	if let Some(pref) = preferred
+		&& supported.contains(&pref)
+	{
+		return Ok(pref);
 	}
 
 	if supported.contains(&pb::Codec::Protobuf) {
@@ -1011,6 +1011,7 @@ fn negotiate_codec(hello: &pb::Hello) -> Result<pb::Codec, String> {
 	Err("server supports only protobuf".to_string())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_command(
 	conn_id: u64,
 	settings: &ConnectionSettings,
@@ -1021,14 +1022,14 @@ async fn handle_command(
 	adapter_manager: &AdapterManager,
 	audit_service: &AuditService,
 ) -> pb::CommandResult {
-	if let Some(expected) = settings.auth_token.as_ref() {
-		if client_auth_token.trim().is_empty() || client_auth_token != expected.expose() {
-			metrics::counter!("chatty_server_commands_not_authorized_total").increment(1);
-			return pb::CommandResult {
-				status: pb::command_result::Status::NotAuthorized as i32,
-				detail: "missing/invalid auth token".to_string(),
-			};
-		}
+	if let Some(expected) = settings.auth_token.as_ref()
+		&& (client_auth_token.trim().is_empty() || client_auth_token != expected.expose())
+	{
+		metrics::counter!("chatty_server_commands_not_authorized_total").increment(1);
+		return pb::CommandResult {
+			status: pb::command_result::Status::NotAuthorized as i32,
+			detail: "missing/invalid auth token".to_string(),
+		};
 	}
 	if settings.auth_hmac_secret.is_some() {
 		let Some(claims) = auth_claims else {

@@ -16,6 +16,7 @@ pub struct TabItem<ID: Clone> {
 	pub pinned: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_tab_strip<ID, T, F, G, H, I, J, K, L>(
 	tabs: Vec<TabItem<ID>>,
 	scroll_handle: ScrollHandle,
@@ -61,7 +62,7 @@ where
 		let scroll_handle = scroll_handle.clone();
 		cx.listener(move |_this, _ev, _window, _cx| {
 			let mut offset = scroll_handle.offset();
-			offset.x = offset.x + px(180.0);
+			offset.x += px(180.0);
 			scroll_handle.set_offset(point(offset.x, offset.y));
 		})
 	};
