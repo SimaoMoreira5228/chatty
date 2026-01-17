@@ -1,0 +1,51 @@
+[package]
+name = "chatty_server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+chatty_domain = { path = "../chatty_domain" }
+chatty_platform = { path = "../chatty_platform" }
+chatty_protocol = { path = "../chatty_protocol" }
+chatty_util = { path = "../chatty_util" }
+
+anyhow = { workspace = true }
+bytes = "1"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+opentelemetry = { workspace = true }
+opentelemetry-otlp = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-opentelemetry = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+futures = { workspace = true }
+metrics = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
+prost = { workspace = true }
+quinn = { workspace = true }
+rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+sqlx = { workspace = true }
+
+base64 = { workspace = true }
+hmac = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+
+async-trait = "0.1"
+dirs = { workspace = true }
+rcgen = "0.14"
+toml = { workspace = true }
+
+[dev-dependencies]
+chatty_client_core = { path = "../chatty_client_core" }
+
+[[bin]]
+name = "chatty_server"
+path = "src/main.rs"

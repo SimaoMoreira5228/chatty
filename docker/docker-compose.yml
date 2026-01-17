@@ -1,0 +1,55 @@
+version: "3.9"
+
+services:
+  chatty-server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.server
+    environment:
+      RUST_LOG: info
+      CHATTY_METRICS_BIND: "0.0.0.0:18208"
+      CHATTY_HEALTH_BIND: "0.0.0.0:18207"
+    volumes:
+      - ./server-config:/data/.chatty
+    ports:
+      - "18203:18203/udp"
+    restart: unless-stopped
+
+  chatty-web:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.web
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 4321
+      TWITCH_CLIENT_ID: ${TWITCH_CLIENT_ID}
+      TWITCH_CLIENT_SECRET: ${TWITCH_CLIENT_SECRET}
+      TWITCH_REDIRECT_URI: ${TWITCH_REDIRECT_URI}
+      TWITCH_SCOPES: ${TWITCH_SCOPES}
+      KICK_CLIENT_ID: ${KICK_CLIENT_ID}
+      KICK_CLIENT_SECRET: ${KICK_CLIENT_SECRET}
+      KICK_REDIRECT_URI: ${KICK_REDIRECT_URI}
+      KICK_SCOPES: ${KICK_SCOPES}
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    depends_on:
+      - chatty-server
+      - chatty-web
+    environment:
+      CHATTY_DOMAIN: ${CHATTY_DOMAIN}
+      CHATTY_ACME_EMAIL: ${CHATTY_ACME_EMAIL}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    restart: unless-stopped
+
+volumes:
+  caddy-data:
+  caddy-config:

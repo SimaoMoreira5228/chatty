@@ -1,0 +1,6 @@
+{
+	"format_on_save": "on",
+	"formatter": { "external": { "command": "./tools/dprint.dotslash", "arguments": ["fmt", "--stdin", "{buffer_path}"] } },
+	"autosave": { "after_delay": { "milliseconds": 120 } },
+	"lsp": { "rust-analyzer": { "initialization_options": { "check": { "extraArgs": ["--all-features"] } } } }
+}

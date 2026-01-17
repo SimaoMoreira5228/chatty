@@ -1,0 +1,389 @@
+syntax = "proto3";
+
+// buf:lint:ignore PACKAGE_DIRECTORY_MATCH
+package chatty.v1;
+
+// v1 is receive-only for clients (they subscribe and receive events).
+message Envelope {
+  uint32 version = 1; // Protocol version (v1 = 1)
+  string request_id = 2;
+
+  oneof msg {
+    // Control / session
+    Hello hello = 10;
+    Welcome welcome = 11;
+
+    // Subscription lifecycle
+    Subscribe subscribe = 20;
+    Unsubscribe unsubscribe = 21;
+    Subscribed subscribed = 22;
+    Unsubscribed unsubscribed = 23;
+
+    // Events (server -> client)
+    EventEnvelope event = 30;
+
+    // Keepalive
+    Ping ping = 40;
+    Pong pong = 41;
+
+    // Commands (future send/mod flows)
+    Command command = 60;
+    CommandResult command_result = 61;
+
+    // Diagnostics
+    Notice notice = 50;
+    Error error = 51;
+  }
+}
+
+message Hello {
+  // Client identifier for observability/debugging, e.g. "chatty-gpui/0.1.0"
+  string client_name = 1;
+
+  // Client instance id.
+  string client_instance_id = 2;
+
+  // Optional auth token for server access.
+  string auth_token = 3;
+
+  // Optional user OAuth token.
+  string user_oauth_token = 4;
+
+  // Optional Twitch client id.
+  string twitch_client_id = 5;
+
+  // Optional Twitch user id.
+  string twitch_user_id = 6;
+
+  // Optional Twitch username/login.
+  string twitch_username = 7;
+
+  // Optional Kick user OAuth token.
+  string kick_user_oauth_token = 8;
+
+  // Optional Kick user id.
+  string kick_user_id = 9;
+
+  // Optional Kick username/login.
+  string kick_username = 10;
+
+  // Supported codecs by the client (optional; defaults to protobuf-only).
+  repeated Codec supported_codecs = 20;
+
+  // Preferred codec (optional; defaults to protobuf).
+  Codec preferred_codec = 21;
+}
+
+message Welcome {
+  // Server identifier, e.g. "chatty-server/0.1.0"
+  string server_name = 1;
+
+  // Server instance id.
+  string server_instance_id = 2;
+
+  // Server time in unix millis.
+  int64 server_time_unix_ms = 3;
+
+  // Hard limits the server wants the client to respect.
+  uint32 max_frame_bytes = 4;
+
+  // Negotiated codec for this session.
+  Codec selected_codec = 5;
+}
+
+enum Codec {
+  CODEC_UNSPECIFIED = 0;
+  CODEC_PROTOBUF = 1;
+  CODEC_CBOR = 2;
+}
+
+// A Topic is the subscription unit.
+message Subscribe {
+  repeated Subscription subs = 1;
+}
+
+message Unsubscribe {
+  repeated string topics = 1;
+}
+
+// Command requests (future send/mod flows).
+message Command {
+  oneof command {
+    SendChatCommand send_chat = 1;
+    DeleteMessageCommand delete_message = 2;
+    TimeoutUserCommand timeout_user = 3;
+    BanUserCommand ban_user = 4;
+  }
+}
+
+message CommandResult {
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    STATUS_OK = 1;
+    STATUS_NOT_SUPPORTED = 2;
+    STATUS_NOT_AUTHORIZED = 3;
+    STATUS_INVALID_TOPIC = 4;
+    STATUS_INVALID_COMMAND = 5;
+    STATUS_INTERNAL_ERROR = 6;
+  }
+
+  Status status = 1;
+  string detail = 2;
+}
+
+message SendChatCommand {
+  string topic = 1;
+  string text = 2;
+  string reply_to_server_message_id = 3;
+  string reply_to_platform_message_id = 4;
+}
+
+message DeleteMessageCommand {
+  string topic = 1;
+  string server_message_id = 2;
+  string platform_message_id = 3;
+}
+
+message TimeoutUserCommand {
+  string topic = 1;
+  string user_id = 2;
+  uint32 duration_seconds = 3;
+  string reason = 4;
+}
+
+message BanUserCommand {
+  string topic = 1;
+  string user_id = 2;
+  string reason = 3;
+}
+
+message Subscription {
+  string topic = 1;
+  uint64 last_cursor = 2;
+}
+
+message Subscribed {
+  // Acknowledgement for subscription requests.
+  repeated SubscriptionResult results = 1;
+}
+
+message Unsubscribed {
+  repeated UnsubscribeResult results = 1;
+}
+
+message SubscriptionResult {
+  string topic = 1;
+
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    STATUS_OK = 1;
+    STATUS_REPLAY_NOT_AVAILABLE = 2; // asked for replay but ring buffer didn't have it
+    STATUS_INVALID_TOPIC = 3;
+    STATUS_NOT_AUTHORIZED = 4;
+    STATUS_INTERNAL_ERROR = 5;
+  }
+
+  Status status = 2;
+
+  // If OK, the server MAY include the current cursor head for this topic.
+  uint64 current_cursor = 3;
+
+  // Optional details for debugging; should be safe for clients.
+  string detail = 4;
+}
+
+message UnsubscribeResult {
+  string topic = 1;
+
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    STATUS_OK = 1;
+    STATUS_NOT_SUBSCRIBED = 2;
+    STATUS_INVALID_TOPIC = 3;
+    STATUS_INTERNAL_ERROR = 4;
+  }
+
+  Status status = 2;
+  string detail = 3;
+}
+
+message EventEnvelope {
+  // Topic this event belongs to.
+  string topic = 1;
+
+  // Server-assigned monotonically increasing cursor for this topic.
+  uint64 cursor = 2;
+
+  // Server time when event was emitted (unix millis).
+  int64 server_time_unix_ms = 3;
+
+  oneof event {
+    ChatMessageEvent chat_message = 10;
+
+    // Indicates the client lagged for this topic and the server dropped events.
+    TopicLaggedEvent topic_lagged = 20;
+
+    // Indicates the user's permissions for this topic.
+    PermissionsEvent permissions = 30;
+
+    // Asset metadata for this topic (emotes/badges).
+    AssetBundleEvent asset_bundle = 40;
+  }
+}
+
+message ChatMessageEvent {
+  Origin origin = 1;
+  ChatMessage message = 2;
+
+  // Server-generated stable id for this message.
+  string server_message_id = 3;
+
+  // Platform-native id when available.
+  string platform_message_id = 4;
+
+  // Optional reference to a message being replied to.
+  ReplyRef reply = 5;
+}
+
+message Origin {
+  Platform platform = 1;
+
+  // Channel identifier in a platform-appropriate canonical format.
+  string channel = 2;
+
+  // Display name for channel (optional).
+  string channel_display = 3;
+}
+
+message ChatMessage {
+  // Author identifiers
+  string author_id = 1;
+  string author_login = 2;
+  string author_display = 3;
+
+  // Message content as plain text.
+  string text = 4;
+
+  // Time on the platform when the message occurred (unix millis).
+  int64 platform_time_unix_ms = 5;
+
+  // Badge ids attached to the author (provider-specific).
+  repeated string badge_ids = 6;
+}
+
+message ReplyRef {
+  // Server or platform id of the referenced message.
+  string server_message_id = 1;
+  string platform_message_id = 2;
+}
+
+enum AssetProvider {
+  ASSET_PROVIDER_UNSPECIFIED = 0;
+  ASSET_PROVIDER_TWITCH = 1;
+  ASSET_PROVIDER_KICK = 2;
+  ASSET_PROVIDER_SEVEN_TV = 3;
+  ASSET_PROVIDER_FFZ = 4;
+  ASSET_PROVIDER_BTTV = 5;
+}
+
+enum AssetScope {
+  ASSET_SCOPE_UNSPECIFIED = 0;
+  ASSET_SCOPE_GLOBAL = 1;
+  ASSET_SCOPE_CHANNEL = 2;
+}
+
+message AssetRef {
+  string id = 1;
+  string name = 2;
+  string image_url = 3;
+  string image_format = 4;
+  uint32 width = 5;
+  uint32 height = 6;
+}
+
+message AssetBundleEvent {
+  Origin origin = 1;
+  AssetProvider provider = 2;
+  AssetScope scope = 3;
+  string cache_key = 4;
+  string etag = 5;
+  repeated AssetRef emotes = 10;
+  repeated AssetRef badges = 11;
+}
+
+message Ping {
+  // Client time in unix millis.
+  int64 client_time_unix_ms = 1;
+}
+
+message Pong {
+  // Echo from Ping
+  int64 client_time_unix_ms = 1;
+
+  // Server time at response (unix millis)
+  int64 server_time_unix_ms = 2;
+}
+
+message Notice {
+  // Machine-readable string code, e.g. "CLIENT_LAGGED".
+  string code = 1;
+
+  // Safe human-readable message.
+  string message = 2;
+
+  // Optional: associated topic if relevant.
+  string topic = 3;
+}
+
+// Emitted when the server drops events for a topic due to backpressure.
+message TopicLaggedEvent {
+  // Best-effort number of events dropped since the last delivered event for this topic.
+  uint64 dropped = 1;
+
+  // Optional, safe details for UI/debugging.
+  string detail = 2;
+}
+
+message PermissionsEvent {
+  // Can send messages to this room/topic.
+  bool can_send = 1;
+
+  // Can reply to messages in this room/topic.
+  bool can_reply = 2;
+
+  // Can delete messages in this room/topic.
+  bool can_delete = 3;
+
+  // Can timeout users in this room/topic.
+  bool can_timeout = 4;
+
+  // Can ban users in this room/topic.
+  bool can_ban = 5;
+
+  // True if the user is a moderator for this room/topic.
+  bool is_moderator = 6;
+
+  // True if the user is the broadcaster/owner for this room/topic.
+  bool is_broadcaster = 7;
+}
+
+message Error {
+  // Machine-readable string code, e.g. "BAD_REQUEST", "UNAUTHORIZED".
+  string code = 1;
+
+  // Safe human-readable message.
+  string message = 2;
+
+  // Optional: associated topic if relevant.
+  string topic = 3;
+
+  // Optional: echoes request_id (server may also set Envelope.request_id).
+  string request_id = 4;
+}
+
+enum Platform {
+  PLATFORM_UNSPECIFIED = 0;
+  PLATFORM_TWITCH = 1;
+  PLATFORM_KICK = 2;
+  PLATFORM_YOUTUBE = 3;
+}

@@ -1,0 +1,50 @@
+[package]
+name = "chatty_client_gui"
+version.workspace = true
+build = "build.rs"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+chatty_client_core = { path = "../chatty_client_core" }
+chatty_domain = { path = "../chatty_domain" }
+chatty_util = { path = "../chatty_util" }
+
+gpui = { git = "https://github.com/zed-industries/zed", optional = true }
+gpui-component = { git = "https://github.com/longbridge/gpui-component.git", optional = true }
+gpui-component-assets = { git = "https://github.com/longbridge/gpui-component.git", optional = true }
+
+anyhow = { workspace = true, optional = true }
+chatty_protocol = { path = "../chatty_protocol", optional = true }
+tokio = { workspace = true, optional = true }
+
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+dirs = { workspace = true }
+rust-embed = { workspace = true }
+rust-i18n = "3.1.5"
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+
+[build-dependencies]
+winres = "0.1"
+
+[features]
+default = []
+# Enables the GPUI client binary UI.
+gpui = ["dep:gpui", "dep:gpui-component", "dep:chatty_protocol", "dep:tokio", "dep:anyhow"]
+# Dev-only helpers (auto-connect, auto-subscribe, debug UI affordances).
+gpui-dev = ["gpui"]
+
+[[bin]]
+name = "chatty"
+path = "src/main.rs"
+
+[package.metadata.bundle]
+name = "Chatty"
+identifier = "com.chatty.client"
+icon = ["assets/app-icons/chatty.icns"]
+resources = ["assets/app-icons"]
+category = "public.app-category.social-networking"

@@ -1,0 +1,42 @@
+---
+import "../styles/globals.css";
+import { Github } from "@lucide/astro";
+---
+
+<html lang="en" class="dark">
+	<head>
+		<meta charset="utf-8" />
+		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+		<meta name="viewport" content="width=device-width" />
+		<meta name="generator" content={Astro.generator} />
+		<title>Chatty</title>
+	</head>
+	<body class="min-h-screen bg-background text-foreground">
+		<main class="mx-auto flex w-full max-w-5xl flex-col gap-8 px-6 py-16">
+			<header class="rounded-2xl border border-border bg-card p-8">
+				<div class="flex flex-wrap items-center justify-between gap-4">
+					<div class="flex items-center gap-3">
+						<img src="/logo.svg" alt="Chatty logo" class="h-10 w-10" />
+						<div>
+							<p class="text-xs uppercase tracking-[0.35em] text-muted-foreground">Chatty</p>
+							<h1 class="text-3xl font-semibold">
+								Chatty is a modern chat client inspired by Chatterino2, built for Twitch and Kick.
+							</h1>
+						</div>
+					</div>
+					<a
+						class="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:text-foreground"
+						href="https://github.com/SimaoMoreira5228/chatty"
+						target="_blank"
+						rel="noreferrer"
+					>
+						<Github class="h-4 w-4" />
+					</a>
+				</div>
+				<p class="mt-4 text-muted-foreground">
+					It blends a fast GUI desktop experience with a low-latency server, so your chat feels instant and stays reliable.
+				</p>
+			</header>
+		</main>
+	</body>
+</html>

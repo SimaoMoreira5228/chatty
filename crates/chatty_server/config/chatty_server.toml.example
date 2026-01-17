@@ -1,0 +1,141 @@
+# Chatty Server configuration (example)
+#
+# Copy to `~/.chatty/config.toml` or pass a path to the server.
+#
+# Precedence:
+# - Environment variables override values in this file (recommended for secrets).
+# - If a value is missing in both, the feature depending on it is disabled or will fail fast.
+#
+
+# Optional shared auth token for clients.
+# Env override: CHATTY_SERVER_AUTH_TOKEN
+auth_token = ""
+
+[server]
+# QUIC bind endpoint for the server (currently set via CLI).
+bind = "quic://127.0.0.1:18203"
+
+# PEM-encoded TLS certificate and key (required for production QUIC).
+# Env override: CHATTY_SERVER_TLS_CERT / CHATTY_SERVER_TLS_KEY
+tls_cert_path = ""
+tls_key_path = ""
+
+# Optional metrics exporter bind (host:port).
+# Env override: CHATTY_METRICS_BIND
+metrics_bind = ""
+ 
+# Health/readiness HTTP bind (host:port).
+# Env override: CHATTY_HEALTH_BIND
+health_bind = "127.0.0.1:18207"
+
+# HMAC secret for stateless access tokens.
+# Env override: CHATTY_SERVER_AUTH_HMAC_SECRET
+auth_hmac_secret = ""
+
+# Command rate limiting (per connection).
+# Set to 0 to disable.
+# Env override: CHATTY_COMMAND_RATE_LIMIT_PER_CONN_BURST / CHATTY_COMMAND_RATE_LIMIT_PER_CONN_PER_MINUTE
+command_rate_limit_per_conn_burst = 20
+command_rate_limit_per_conn_per_minute = 120
+
+# Command rate limiting (per topic).
+# Set to 0 to disable.
+# Env override: CHATTY_COMMAND_RATE_LIMIT_PER_TOPIC_BURST / CHATTY_COMMAND_RATE_LIMIT_PER_TOPIC_PER_MINUTE
+command_rate_limit_per_topic_burst = 10
+command_rate_limit_per_topic_per_minute = 60
+
+
+[persistence]
+# Enable persistence (optional).
+# Env override: CHATTY_PERSISTENCE_ENABLED
+enabled = false
+
+# Database URL (sqlite: or postgres:).
+# Env override: CHATTY_PERSISTENCE_DATABASE_URL
+database_url = ""
+
+# Enable replay (cursor resume) when persistence is enabled.
+# Env override: CHATTY_REPLAY_ENABLED
+replay_enabled = true
+
+# Per-topic replay capacity (optional override).
+# Env override: CHATTY_REPLAY_CAPACITY
+replay_capacity = 2048
+
+# Optional replay retention window in seconds.
+# Env override: CHATTY_REPLAY_RETENTION_SECS
+replay_retention_secs = 0
+
+[twitch]
+# Twitch Helix client id (a.k.a. "Client ID").
+# Env override: CHATTY_TWITCH_CLIENT_ID
+client_id = ""
+
+# Twitch client secret (required for token refresh).
+# Env override: CHATTY_TWITCH_CLIENT_SECRET
+client_secret = ""
+
+# Twitch user access token (bearer) for server-owned ingestion.
+# Env override: CHATTY_TWITCH_USER_ACCESS_TOKEN
+user_access_token = ""
+
+# Twitch refresh token (optional; enables refresh for server-owned tokens).
+# Env override: CHATTY_TWITCH_REFRESH_TOKEN
+refresh_token = ""
+
+# Disable refresh; expiry becomes a hard error.
+# Env override: CHATTY_TWITCH_DISABLE_REFRESH
+disable_refresh = false
+
+# Optional EventSub websocket URL override.
+# Env override: CHATTY_TWITCH_EVENTSUB_WS_URL
+eventsub_ws_url = "wss://eventsub.wss.twitch.tv/ws"
+
+# Reconnect backoff tuning (milliseconds).
+# Env override: CHATTY_TWITCH_RECONNECT_MIN_DELAY_MS / CHATTY_TWITCH_RECONNECT_MAX_DELAY_MS
+reconnect_min_delay_ms = 500
+reconnect_max_delay_ms = 30000
+
+# Refresh buffer (seconds) before expiry.
+refresh_buffer_secs = 60
+
+# Optional overrides: channel login -> broadcaster id.
+[twitch.broadcaster_id_overrides]
+# example_channel = "123456789"
+
+[kick]
+# Kick API base URL.
+# Env override: CHATTY_KICK_BASE_URL
+base_url = "https://api.kick.com"
+
+# Kick user access token (bearer).
+# Env override: CHATTY_KICK_USER_ACCESS_TOKEN
+user_access_token = ""
+
+# Webhook bind for Kick events (host:port).
+# Env override: CHATTY_KICK_WEBHOOK_BIND
+webhook_bind = "0.0.0.0:18206"
+
+# Webhook path for Kick events.
+# Env override: CHATTY_KICK_WEBHOOK_PATH
+webhook_path = "/kick/events"
+
+# Kick webhook public key PEM file path (optional override; defaults to bundled Kick key).
+# Env override: CHATTY_KICK_WEBHOOK_PUBLIC_KEY_PATH
+webhook_public_key_path = ""
+
+# Verify webhook signatures.
+# Env override: CHATTY_KICK_WEBHOOK_VERIFY_SIGNATURES
+webhook_verify_signatures = true
+
+# Auto-subscribe to webhook events on room join.
+# Env override: CHATTY_KICK_WEBHOOK_AUTO_SUBSCRIBE
+webhook_auto_subscribe = false
+
+# Comma-separated list of events to subscribe to.
+# Env override: CHATTY_KICK_WEBHOOK_EVENTS
+webhook_events = "chat.message.sent"
+
+# Optional overrides: channel slug -> broadcaster id.
+[kick.broadcaster_id_overrides]
+# example_channel = "123"

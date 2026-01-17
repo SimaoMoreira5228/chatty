@@ -1,0 +1,18 @@
+[package]
+name = "chatty_domain"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
+uuid = { workspace = true }
+
+[features]
+default = ["errors", "serde"]
+serde = ["dep:serde", "uuid/serde"]
+errors = ["dep:thiserror"]
+
+[lib]
+path = "src/lib.rs"

@@ -1,0 +1,78 @@
+---
+import "../styles/globals.css";
+---
+
+<html lang="en" class="dark">
+	<head>
+		<meta charset="utf-8" />
+		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+		<meta name="viewport" content="width=device-width" />
+		<meta name="generator" content={Astro.generator} />
+		<title>Chatty Twitch Login</title>
+	</head>
+	<body class="min-h-screen bg-background text-foreground">
+		<main class="mx-auto flex w-full max-w-3xl flex-col gap-6 px-6 py-16">
+			<header class="rounded-xl border border-border bg-card p-6">
+				<h1 class="text-2xl font-semibold">Chatty Twitch Login</h1>
+			</header>
+			<div class="flex flex-wrap gap-3">
+				<a class="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground" href="/api/twitch/login">
+					Login with Twitch
+				</a>
+				<a class="rounded-md border border-border px-4 py-2 text-sm text-muted-foreground" href="/">
+					Back to home
+				</a>
+			</div>
+
+			<div class="flex flex-col gap-2">
+				<label class="text-xs uppercase tracking-[0.2em] text-muted-foreground" for="blob">Login Blob</label>
+				<textarea
+					class="min-h-[90px] rounded-md border border-border bg-background px-3 py-2 text-sm"
+					id="blob"
+					readonly
+				></textarea>
+			</div>
+
+			<div class="flex flex-wrap gap-3">
+				<button class="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground" id="copy">
+					Copy Login Blob
+				</button>
+				<button class="rounded-md border border-border px-4 py-2 text-sm text-muted-foreground" id="clear">
+					Clear
+				</button>
+			</div>
+		</main>
+
+		<script>
+		const blob = document.getElementById("blob") as HTMLTextAreaElement | null;
+
+		function updateBlobFromUrl() {
+			if (!blob) return;
+			const raw = window.location.hash.slice(1) || window.location.search.slice(1);
+			const params = new URLSearchParams(raw);
+			const username = params.get("username") ?? "";
+			const userId = params.get("user_id") ?? "";
+			const clientId = params.get("client_id") ?? "";
+			const token = params.get("oauth_token") ?? "";
+			const parts = [`username=${username}`, `user_id=${userId}`, `client_id=${clientId}`, `oauth_token=${token}`]
+				.filter((part) => !part.endsWith("="));
+			blob.value = parts.join(";");
+		}
+
+		document.getElementById("copy")?.addEventListener("click", async () => {
+			if (!blob || !blob.value) return;
+			try {
+				await navigator.clipboard.writeText(blob.value);
+			} catch {
+				alert("Clipboard copy failed. Please copy manually.");
+			}
+		});
+
+		document.getElementById("clear")?.addEventListener("click", () => {
+			if (blob) blob.value = "";
+		});
+
+		updateBlobFromUrl();
+		</script>
+	</body>
+</html>

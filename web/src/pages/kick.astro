@@ -1,0 +1,78 @@
+---
+import "../styles/globals.css";
+---
+
+<html lang="en" class="dark">
+	<head>
+		<meta charset="utf-8" />
+		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+		<meta name="viewport" content="width=device-width" />
+		<meta name="generator" content={Astro.generator} />
+		<title>Chatty Kick Login</title>
+	</head>
+	<body class="min-h-screen bg-background text-foreground">
+		<main class="mx-auto flex w-full max-w-3xl flex-col gap-6 px-6 py-16">
+			<header class="rounded-xl border border-border bg-card p-6">
+				<h1 class="text-2xl font-semibold">Chatty Kick Login</h1>
+			</header>
+
+			<div class="flex flex-wrap gap-3">
+				<a class="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground" href="/api/kick/login">
+					Login with Kick
+				</a>
+				<a class="rounded-md border border-border px-4 py-2 text-sm text-muted-foreground" href="/">
+					Back to home
+				</a>
+			</div>
+
+			<div class="flex flex-col gap-2">
+				<label class="text-xs uppercase tracking-[0.2em] text-muted-foreground" for="kick_bundle">Bundle</label>
+				<textarea
+					class="min-h-[90px] rounded-md border border-border bg-background px-3 py-2 text-sm"
+					id="kick_bundle"
+					readonly
+				></textarea>
+			</div>
+
+			<div class="flex flex-wrap gap-3">
+				<button class="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground" id="kick_copy">
+					Copy bundle
+				</button>
+				<button class="rounded-md border border-border px-4 py-2 text-sm text-muted-foreground" id="kick_clear">
+					Clear
+				</button>
+			</div>
+		</main>
+
+		<script>
+		const bundle = document.getElementById("kick_bundle") as HTMLTextAreaElement | null;
+
+		function updateBundleFromUrl() {
+			if (!bundle) return;
+			const raw = window.location.hash.slice(1) || window.location.search.slice(1);
+			const params = new URLSearchParams(raw);
+			const payload = {
+				oauth_token: params.get("oauth_token") ?? "",
+				user_id: params.get("user_id") ?? "",
+				username: params.get("username") ?? "",
+			};
+			bundle.value = JSON.stringify(payload, null, 2);
+		}
+
+		document.getElementById("kick_copy")?.addEventListener("click", async () => {
+			if (!bundle || !bundle.value) return;
+			try {
+				await navigator.clipboard.writeText(bundle.value);
+			} catch {
+				alert("Clipboard copy failed. Please copy manually.");
+			}
+		});
+
+		document.getElementById("kick_clear")?.addEventListener("click", () => {
+			if (bundle) bundle.value = "";
+		});
+
+		updateBundleFromUrl();
+		</script>
+	</body>
+</html>

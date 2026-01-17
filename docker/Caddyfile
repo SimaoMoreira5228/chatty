@@ -1,0 +1,13 @@
+{
+	email {$CHATTY_ACME_EMAIL}
+}
+
+{$CHATTY_DOMAIN} {
+	encode zstd gzip
+
+	handle /kick/events* {
+		reverse_proxy chatty-server:18206
+	}
+
+	reverse_proxy chatty-web:4321
+}

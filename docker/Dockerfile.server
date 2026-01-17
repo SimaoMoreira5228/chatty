@@ -1,0 +1,30 @@
+FROM rust:1.76-bullseye AS builder
+
+WORKDIR /app
+
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+COPY proto ./proto
+COPY buf.yaml ./
+
+RUN cargo build -p chatty_server --release
+
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV RUST_LOG=info
+ENV HOME=/data
+
+WORKDIR /app
+
+COPY --from=builder /app/target/release/chatty_server /usr/local/bin/chatty_server
+
+EXPOSE 18203/udp
+EXPOSE 18206
+EXPOSE 18207
+EXPOSE 18208
+
+CMD ["chatty_server", "--bind", "quic://0.0.0.0:18203"]

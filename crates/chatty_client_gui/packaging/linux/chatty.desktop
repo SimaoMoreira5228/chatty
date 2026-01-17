@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Chatty
+Comment=Multi-platform chat client
+Exec=chatty
+Icon=chatty
+Terminal=false
+Categories=Network;Chat;

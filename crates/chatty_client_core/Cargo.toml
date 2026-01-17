@@ -1,0 +1,35 @@
+[package]
+name = "chatty_client_core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+chatty_domain = { path = "../chatty_domain" }
+chatty_protocol = { path = "../chatty_protocol" }
+chatty_util = { path = "../chatty_util" }
+
+futures.workspace = true
+tokio.workspace = true
+
+quinn.workspace = true
+rustls.workspace = true
+
+bytes.workspace = true
+
+anyhow.workspace = true
+thiserror.workspace = true
+
+serde = { workspace = true, optional = true }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[build-dependencies]
+chatty_util = { path = "../chatty_util" }
+
+[features]
+default = []
+serde = ["dep:serde"]

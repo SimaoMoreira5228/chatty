@@ -1,0 +1,28 @@
+[package]
+name = "chatty_protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+chatty_domain = { path = "../chatty_domain" }
+
+bytes.workspace = true
+prost.workspace = true
+prost-types.workspace = true
+
+serde = { workspace = true, optional = true }
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[build-dependencies]
+prost-build = "0.14"
+
+[features]
+default = []
+serde = ["dep:serde"]

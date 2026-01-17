@@ -1,0 +1,38 @@
+[package]
+name = "chatty_platform"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+chatty_domain = { path = "../chatty_domain" }
+
+anyhow = { workspace = true }
+async-trait = "0.1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+base64 = { workspace = true }
+bytes = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+futures-util = "0.3"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+metrics = { workspace = true }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "gzip", "form"] }
+rsa = { version = "0.9", default-features = false, features = ["std", "pem", "sha2"] }
+sha2 = { workspace = true }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
+tungstenite = "0.28"
+url = "2"
+urlencoding = "2"
+
+parking_lot = "0.12"
+
+[dev-dependencies]
+proptest = { workspace = true }

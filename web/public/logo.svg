@@ -1,0 +1,58 @@
+<svg
+	width="512"
+	height="512"
+	viewBox="0 0 512 512"
+	xmlns="http://www.w3.org/2000/svg"
+	fill="none"
+>
+	<!-- Left bubble (dark) -->
+	<path
+		d="M96 184
+       a40 40 0 0 1 40 -40
+       h140
+       a40 40 0 0 1 40 40
+       v64
+       a40 40 0 0 1 -40 40
+       h-92
+       l-36 32
+       v-32
+       h-12
+       a40 40 0 0 1 -40 -40
+       z"
+		fill="#111827"
+	/>
+
+	<!-- Right bubble (purple) -->
+	<path
+		d="M236 184
+       a40 40 0 0 1 40 -40
+       h140
+       a40 40 0 0 1 40 40
+       v64
+       a40 40 0 0 1 -40 40
+       h-92
+       v32
+       l-36 -32
+       h-12
+       a40 40 0 0 1 -40 -40
+       z"
+		fill="#6d28d9"
+	/>
+
+	<!-- Center overlap -->
+	<rect
+		x="216"
+		y="144"
+		width="80"
+		height="144"
+		rx="40"
+		fill="#4c3396"
+	/>
+
+	<!-- Notification lines -->
+	<g stroke="#6d28d9" stroke-width="8" stroke-linecap="round">
+		<line x1="388" y1="132" x2="388" y2="112" />
+		<line x1="410" y1="140" x2="426" y2="126" />
+		<line x1="366" y1="140" x2="350" y2="126" />
+	</g>
+</svg>

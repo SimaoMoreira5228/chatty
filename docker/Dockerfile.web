@@ -1,0 +1,25 @@
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./web/
+COPY web/astro.config.mjs web/tsconfig.json web/tailwind.config.cjs web/postcss.config.cjs ./web/
+COPY web/src ./web/src
+COPY web/public ./web/public
+
+RUN corepack enable
+RUN cd web && pnpm install --frozen-lockfile
+RUN cd web && pnpm build
+
+FROM node:20-alpine
+
+ENV NODE_ENV=production
+ENV HOST=0.0.0.0
+ENV PORT=4321
+
+WORKDIR /app
+COPY --from=builder /app/web/dist ./dist
+
+EXPOSE 4321
+
+CMD ["node", "./dist/server/entry.mjs"]
