@@ -794,7 +794,9 @@ pub async fn handle_connection(
 			pb::envelope::Msg::Subscribe(sub) => {
 				let last_cursor_by_topic: HashMap<String, u64> =
 					sub.subs.iter().map(|s| (s.topic.clone(), s.last_cursor)).collect();
+				debug!(conn_id, topics = ?sub.subs.iter().map(|s| &s.topic).collect::<Vec<_>>(), "received Subscribe");
 				let (mut results, topics_to_join) = handle_subscribe(conn_id, &state, sub).await;
+				debug!(conn_id, topics_to_join = ?topics_to_join, "Subscribe processed, topics_to_join determined");
 
 				let mut pending = pending_replay.lock().await;
 				for result in &mut results {
@@ -963,9 +965,12 @@ pub async fn handle_connection(
 	{
 		let topics_to_leave = {
 			let mut st = state.write().await;
+			let topics = st.topics_for_conn(conn_id);
+			debug!(conn_id, topics = ?topics.iter().collect::<Vec<_>>(), "connection closing, removing subscriptions");
 			st.remove_conn(conn_id)
 		};
 		if !topics_to_leave.is_empty() {
+			debug!(conn_id, topics_to_leave = ?topics_to_leave, "connection closed, leaving rooms");
 			adapter_manager.apply_global_joins_leaves(&[], &topics_to_leave).await;
 		}
 	}

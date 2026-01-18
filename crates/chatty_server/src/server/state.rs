@@ -60,7 +60,8 @@ impl GlobalState {
 			let topic = s.topic;
 
 			let (status, detail) = if validate_topic(&topic) {
-				if topic_set.insert(topic.clone()) {
+				let was_new = topic_set.insert(topic.clone());
+				if was_new {
 					let rc = self.topic_refcounts.entry(topic.clone()).or_insert(0);
 					*rc += 1;
 
