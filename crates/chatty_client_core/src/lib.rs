@@ -310,6 +310,8 @@ impl SessionControl {
 			.map(|(topic, last_cursor)| pb::Subscription { topic, last_cursor })
 			.collect();
 
+		debug!(subs = ?subs, "sending subscribe");
+
 		let env = pb::Envelope {
 			version: PROTOCOL_VERSION,
 			request_id: String::new(),
@@ -320,7 +322,10 @@ impl SessionControl {
 
 		let resp = read_one_envelope(&mut self.control_recv, self.max_frame_bytes).await?;
 		match resp.msg {
-			Some(pb::envelope::Msg::Subscribed(s)) => Ok(s),
+			Some(pb::envelope::Msg::Subscribed(s)) => {
+				debug!("subscribe acknowledged");
+				Ok(s)
+			}
 			other => Err(ClientCoreError::Protocol(format!("expected Subscribed, got {other:?}"))),
 		}
 	}
@@ -336,6 +341,7 @@ impl SessionControl {
 		topics: impl IntoIterator<Item = String>,
 	) -> Result<pb::Unsubscribed, ClientCoreError> {
 		let topics_vec: Vec<String> = topics.into_iter().collect();
+		debug!(topics = ?topics_vec, "sending unsubscribe");
 
 		let env = pb::Envelope {
 			version: PROTOCOL_VERSION,
@@ -347,7 +353,10 @@ impl SessionControl {
 
 		let resp = read_one_envelope(&mut self.control_recv, self.max_frame_bytes).await?;
 		match resp.msg {
-			Some(pb::envelope::Msg::Unsubscribed(u)) => Ok(u),
+			Some(pb::envelope::Msg::Unsubscribed(u)) => {
+				debug!("unsubscribe acknowledged");
+				Ok(u)
+			}
 			other => Err(ClientCoreError::Protocol(format!("expected Unsubscribed, got {other:?}"))),
 		}
 	}
@@ -450,7 +459,15 @@ impl SessionEvents {
 					Ok(Some(env)) => {
 						if let Some(msg) = env.msg {
 							match msg {
-								pb::envelope::Msg::Event(ev) => on_event(ev),
+								pb::envelope::Msg::Event(ev) => {
+									debug!(
+										topic = %ev.topic,
+										cursor = ev.cursor,
+										event_kind = %event_kind(&ev),
+										"events stream decoded"
+									);
+									on_event(ev)
+								}
 								other => warn!("unexpected message on events stream: {:?}", other),
 							}
 						}
@@ -472,6 +489,16 @@ async fn write_envelope(
 	send.write_all(&frame).await.map_err(|e| ClientCoreError::Io(e.to_string()))?;
 	send.flush().await.map_err(|e| ClientCoreError::Io(e.to_string()))?;
 	Ok(())
+}
+
+fn event_kind(ev: &pb::EventEnvelope) -> &'static str {
+	match ev.event.as_ref() {
+		Some(pb::event_envelope::Event::ChatMessage(_)) => "chat_message",
+		Some(pb::event_envelope::Event::TopicLagged(_)) => "topic_lagged",
+		Some(pb::event_envelope::Event::Permissions(_)) => "permissions",
+		Some(pb::event_envelope::Event::AssetBundle(_)) => "asset_bundle",
+		None => "empty",
+	}
 }
 
 async fn read_one_envelope(recv: &mut quinn::RecvStream, max_frame_bytes: usize) -> Result<pb::Envelope, ClientCoreError> {

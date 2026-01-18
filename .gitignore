@@ -2,4 +2,3 @@
 .venv/
 architecture/
 **/.env
-docker/server-config/config.toml

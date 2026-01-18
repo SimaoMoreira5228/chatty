@@ -9,6 +9,10 @@ services:
       RUST_LOG: info
       CHATTY_METRICS_BIND: "0.0.0.0:18208"
       CHATTY_HEALTH_BIND: "0.0.0.0:18207"
+      TWITCH_CLIENT_ID: ${TWITCH_CLIENT_ID}
+      TWITCH_CLIENT_SECRET: ${TWITCH_CLIENT_SECRET}
+      KICK_CLIENT_ID: ${KICK_CLIENT_ID}
+      KICK_CLIENT_SECRET: ${KICK_CLIENT_SECRET}
     volumes:
       - ./server-config:/data/.chatty
     ports:

@@ -12,7 +12,7 @@ use chatty_domain::RoomKey;
 use chatty_protocol::pb;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, MissedTickBehavior};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::ui::app_state::AssetRefUi;
 
@@ -22,8 +22,9 @@ pub const CHATTY_UI_AUTO_CONNECT_ENV: &str = "CHATTY_UI_AUTO_CONNECT";
 /// Dev auto-subscribe env list (comma-separated topics).
 pub const CHATTY_UI_AUTO_SUBSCRIBE_ENV: &str = "CHATTY_UI_AUTO_SUBSCRIBE";
 
-const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
-const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(5);
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(3);
+const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(10);
+const KEEPALIVE_MAX_FAILURES: u32 = 3;
 
 /// UI-level events emitted by the networking layer.
 #[derive(Debug, Clone)]
@@ -263,9 +264,9 @@ impl ShutdownHandle {
 }
 
 /// Start networking runtime.
-pub fn start_networking() -> (NetController, mpsc::Receiver<UiEvent>, ShutdownHandle) {
+pub fn start_networking() -> (NetController, mpsc::UnboundedReceiver<UiEvent>, ShutdownHandle) {
 	let (cmd_tx, cmd_rx) = mpsc::channel::<NetCommand>(128);
-	let (ui_tx, ui_rx) = mpsc::channel::<UiEvent>(2048);
+	let (ui_tx, ui_rx) = mpsc::unbounded_channel::<UiEvent>();
 	let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
 	let controller = NetController { cmd_tx };
@@ -333,7 +334,7 @@ fn map_core_err(e: ClientCoreError) -> String {
 
 async fn run_network_task(
 	cmd_rx: mpsc::Receiver<NetCommand>,
-	ui_tx: mpsc::Sender<UiEvent>,
+	ui_tx: mpsc::UnboundedSender<UiEvent>,
 	shutdown_rx: oneshot::Receiver<()>,
 ) {
 	run_network_task_with_session_factory(cmd_rx, ui_tx, shutdown_rx, |cfg, ui_tx| {
@@ -344,13 +345,13 @@ async fn run_network_task(
 
 async fn run_network_task_with_session_factory<F>(
 	mut cmd_rx: mpsc::Receiver<NetCommand>,
-	ui_tx: mpsc::Sender<UiEvent>,
+	ui_tx: mpsc::UnboundedSender<UiEvent>,
 	mut shutdown_rx: oneshot::Receiver<()>,
 	mut connect_fn: F,
 ) where
 	F: FnMut(
 		Box<ClientConfigV1>,
-		mpsc::Sender<UiEvent>,
+		mpsc::UnboundedSender<UiEvent>,
 	) -> Pin<Box<dyn Future<Output = Option<BoxedSessionControl>> + Send>>,
 {
 	let mut session: Option<BoxedSessionControl> = None;
@@ -362,6 +363,7 @@ async fn run_network_task_with_session_factory<F>(
 	let mut last_connect_cfg: Option<ClientConfigV1> = None;
 	let mut reconnect_attempt: u32 = 0;
 	let mut reconnect_deadline: Option<Instant> = None;
+	let mut keepalive_failures: u32 = 0;
 
 	let mut keepalive_tick = tokio::time::interval(KEEPALIVE_INTERVAL);
 	keepalive_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -371,7 +373,7 @@ async fn run_network_task_with_session_factory<F>(
 	loop {
 		tokio::select! {
 			_ = &mut shutdown_rx => {
-				let _ = ui_tx.send(UiEvent::Disconnected { reason: "shutdown".to_string() }).await;
+				let _ = ui_tx.send(UiEvent::Disconnected { reason: "shutdown".to_string() });
 				if let Some(s) = session.as_ref() {
 					s.close(0, "shutdown");
 				}
@@ -389,17 +391,35 @@ async fn run_network_task_with_session_factory<F>(
 						.unwrap_or(0);
 
 					let ping_res = tokio::time::timeout(KEEPALIVE_TIMEOUT, s.ping(client_time_unix_ms)).await;
-					let ping_failed = match ping_res {
-						Err(_) => Some("keepalive timeout; reconnecting".to_string()),
-						Ok(Err(e)) => Some(format!("keepalive error: {}; reconnecting", map_core_err(e))),
-						Ok(Ok(_)) => None,
-					};
+					match ping_res {
+						Ok(Ok(_)) => {
+							keepalive_failures = 0;
+						}
+						Ok(Err(e)) => {
+							keepalive_failures = keepalive_failures.saturating_add(1);
+							warn!(failure = keepalive_failures, error = %map_core_err(e), "keepalive failed");
+						}
+						Err(_) => {
+							keepalive_failures = keepalive_failures.saturating_add(1);
+							warn!(failure = keepalive_failures, "keepalive timeout");
+						}
+					}
 
-					if let Some(message) = ping_failed {
-						let _ = ui_tx.send(UiEvent::Disconnected { reason: message }).await;
-						if let Some(t) = events_task.take() { t.abort(); }
-						if let Some(s) = session.as_ref() { s.close(0, "keepalive timeout"); }
+					if keepalive_failures >= KEEPALIVE_MAX_FAILURES {
+						let _ = ui_tx.send(UiEvent::Disconnected {
+							reason: "keepalive failed; reconnecting".to_string(),
+						});
+
+						if let Some(t) = events_task.take() {
+							t.abort();
+						}
+
+						if let Some(s) = session.as_ref() {
+							s.close(0, "keepalive failed");
+						}
+
 						session = None;
+						keepalive_failures = 0;
 
 						if let Some(cfg) = last_connect_cfg.clone() {
 							reconnect_attempt = reconnect_attempt.saturating_add(1).max(1);
@@ -409,8 +429,7 @@ async fn run_network_task_with_session_factory<F>(
 								.send(UiEvent::Reconnecting {
 									attempt: reconnect_attempt,
 									next_retry_in_ms: ms,
-								})
-								.await;
+								});
 							let _ = cfg;
 						}
 					}
@@ -419,7 +438,7 @@ async fn run_network_task_with_session_factory<F>(
 
 			cmd = cmd_rx.recv() => {
 				let Some(cmd) = cmd else {
-					let _ = ui_tx.send(UiEvent::Disconnected { reason: "ui dropped controller".to_string() }).await;
+					let _ = ui_tx.send(UiEvent::Disconnected { reason: "ui dropped controller".to_string() });
 					if let Some(s) = session.as_ref() {
 						s.close(0, "ui dropped controller");
 					}
@@ -434,7 +453,7 @@ async fn run_network_task_with_session_factory<F>(
 						last_connect_cfg = Some(*cfg.clone());
 						reconnect_attempt = 0;
 						reconnect_deadline = None;
-						let _ = ui_tx.send(UiEvent::Connecting).await;
+						let _ = ui_tx.send(UiEvent::Connecting);
 						if let Some(t) = events_task.take() { t.abort(); }
 						if let Some(s) = session.as_ref() { s.close(0, "reconnect"); }
 						session = connect_fn(cfg.clone(), ui_tx.clone()).await;
@@ -449,7 +468,7 @@ async fn run_network_task_with_session_factory<F>(
 								reconcile_subscriptions_on_connect(s, &topics_refcounts, &cursor_by_topic, &ui_tx, &mut events_task)
 								.await
 							{
-								let _ = ui_tx.send(UiEvent::Error { message: e }).await;
+								let _ = ui_tx.send(UiEvent::Error { message: e });
 								s.close(0, "subscribe failed");
 								session = None;
 							}
@@ -464,7 +483,7 @@ async fn run_network_task_with_session_factory<F>(
 									attempt: reconnect_attempt,
 									next_retry_in_ms: ms,
 								})
-								.await;
+								;
 							let _ = cfg;
 						}
 					}
@@ -476,16 +495,16 @@ async fn run_network_task_with_session_factory<F>(
 						last_connect_cfg = None;
 						reconnect_attempt = 0;
 						reconnect_deadline = None;
-						let _ = ui_tx.send(UiEvent::Disconnected { reason }).await;
+						let _ = ui_tx.send(UiEvent::Disconnected { reason });
 					}
 
 					NetCommand::SubscribeTopic { topic } => {
 						if let Some(s) = session.as_mut() {
 							if let Err(e) = subscribe_topics(s, vec![topic], &cursor_by_topic, &ui_tx, &mut events_task).await {
-								let _ = ui_tx.send(UiEvent::Error { message: e }).await;
+								let _ = ui_tx.send(UiEvent::Error { message: e });
 							}
 						} else {
-							let _ = ui_tx.send(UiEvent::Error { message: "not connected".to_string() }).await;
+							let _ = ui_tx.send(UiEvent::Error { message: "not connected".to_string() });
 						}
 					}
 
@@ -499,7 +518,7 @@ async fn run_network_task_with_session_factory<F>(
 						if was_zero
 							&& let Some(s) = session.as_mut()
 								&& let Err(e) = subscribe_topics(s, vec![topic], &cursor_by_topic, &ui_tx, &mut events_task).await {
-									let _ = ui_tx.send(UiEvent::Error { message: e }).await;
+									let _ = ui_tx.send(UiEvent::Error { message: e });
 								}
 					}
 
@@ -519,7 +538,7 @@ async fn run_network_task_with_session_factory<F>(
 						if became_zero
 							&& let Some(s) = session.as_mut()
 								&& let Err(e) = unsubscribe_topics(s, vec![topic], &ui_tx).await {
-									let _ = ui_tx.send(UiEvent::Error { message: e }).await;
+									let _ = ui_tx.send(UiEvent::Error { message: e });
 								}
 					}
 
@@ -532,14 +551,14 @@ async fn run_network_task_with_session_factory<F>(
 											status: result.status,
 											detail: result.detail,
 										})
-										.await;
+										;
 								}
 								Err(e) => {
-									let _ = ui_tx.send(UiEvent::Error { message: map_core_err(e) }).await;
+									let _ = ui_tx.send(UiEvent::Error { message: map_core_err(e) });
 								}
 							}
 						} else {
-							let _ = ui_tx.send(UiEvent::Error { message: "not connected".to_string() }).await;
+							let _ = ui_tx.send(UiEvent::Error { message: "not connected".to_string() });
 						}
 					}
 				}
@@ -547,7 +566,7 @@ async fn run_network_task_with_session_factory<F>(
 
 			_ = tokio::time::sleep(Duration::from_millis(200)), if cfg!(debug_assertions) && !dev_auto_connect_fired && should_dev_auto_connect() => {
 				dev_auto_connect_fired = true;
-				let _ = ui_tx.send(UiEvent::Connecting).await;
+				let _ = ui_tx.send(UiEvent::Connecting);
 				if let Some(t) = events_task.take() { t.abort(); }
 				if let Some(s) = session.as_ref() { s.close(0, "dev auto-connect"); }
 				session = connect_fn(Box::default(), ui_tx.clone()).await;
@@ -562,7 +581,7 @@ async fn run_network_task_with_session_factory<F>(
 						reconcile_subscriptions_on_connect(s, &topics_refcounts, &cursor_by_topic, &ui_tx, &mut events_task)
 						.await
 					{
-						let _ = ui_tx.send(UiEvent::Error { message: e }).await;
+						let _ = ui_tx.send(UiEvent::Error { message: e });
 						s.close(0, "subscribe failed");
 						session = None;
 					}
@@ -575,7 +594,7 @@ async fn run_network_task_with_session_factory<F>(
 				}
 			}, if reconnect_deadline.is_some() => {
 				if let Some(cfg) = last_connect_cfg.clone() {
-					let _ = ui_tx.send(UiEvent::Connecting).await;
+					let _ = ui_tx.send(UiEvent::Connecting);
 					if let Some(t) = events_task.take() { t.abort(); }
 					if let Some(s) = session.as_ref() { s.close(0, "reconnect"); }
 					session = connect_fn(Box::new(cfg), ui_tx.clone()).await;
@@ -584,7 +603,7 @@ async fn run_network_task_with_session_factory<F>(
 							reconcile_subscriptions_on_connect(s, &topics_refcounts, &cursor_by_topic, &ui_tx, &mut events_task)
 							.await
 						{
-							let _ = ui_tx.send(UiEvent::Error { message: e }).await;
+							let _ = ui_tx.send(UiEvent::Error { message: e });
 							s.close(0, "subscribe failed");
 							session = None;
 						}
@@ -599,7 +618,7 @@ async fn run_network_task_with_session_factory<F>(
 								attempt: reconnect_attempt,
 								next_retry_in_ms: ms,
 							})
-							.await;
+							;
 					}
 				}
 			}
@@ -617,7 +636,7 @@ fn schedule_reconnect(attempt: u32) -> (Instant, u64) {
 
 fn spawn_events_loop(
 	mut events: BoxedSessionEvents,
-	ui_tx: mpsc::Sender<UiEvent>,
+	ui_tx: mpsc::UnboundedSender<UiEvent>,
 	cursor_by_topic: Arc<Mutex<HashMap<String, u64>>>,
 ) -> tokio::task::JoinHandle<()> {
 	tokio::spawn(async move {
@@ -625,36 +644,44 @@ fn spawn_events_loop(
 			.run_events_loop(Box::new(|ev| {
 				let topic = ev.topic.clone();
 				let cursor = ev.cursor;
+				let event_kind = match ev.event.as_ref() {
+					Some(pb::event_envelope::Event::ChatMessage(_)) => "chat_message",
+					Some(pb::event_envelope::Event::TopicLagged(_)) => "topic_lagged",
+					Some(pb::event_envelope::Event::Permissions(_)) => "permissions",
+					Some(pb::event_envelope::Event::AssetBundle(_)) => "asset_bundle",
+					None => "empty",
+				};
+				debug!(%topic, cursor, %event_kind, "events stream received");
 				{
 					let mut cursors = cursor_by_topic.lock().unwrap();
-					let entry = cursors.entry(topic).or_insert(0);
+					let entry = cursors.entry(topic.clone()).or_insert(0);
 					if cursor > *entry {
 						*entry = cursor;
 					}
 				}
 				if let Some(ui_ev) = map_event_envelope_to_ui_event(ev) {
-					let _ = ui_tx.try_send(ui_ev);
+					let _ = ui_tx.send(ui_ev);
+				} else {
+					debug!(%topic, cursor, %event_kind, "event not mapped to UiEvent");
 				}
 			}))
 			.await;
 
 		match res {
 			Ok(()) => {
-				let _ = ui_tx
-					.send(UiEvent::Disconnected {
-						reason: "events stream closed".to_string(),
-					})
-					.await;
+				let _ = ui_tx.send(UiEvent::Disconnected {
+					reason: "events stream closed".to_string(),
+				});
 			}
 			Err(e) => {
 				let msg = map_core_err(e);
-				let _ = ui_tx.send(UiEvent::Disconnected { reason: msg }).await;
+				let _ = ui_tx.send(UiEvent::Disconnected { reason: msg });
 			}
 		}
 	})
 }
 
-async fn connect_session(cfg: ClientConfigV1, ui_tx: mpsc::Sender<UiEvent>) -> Option<BoxedSessionControl> {
+async fn connect_session(cfg: ClientConfigV1, ui_tx: mpsc::UnboundedSender<UiEvent>) -> Option<BoxedSessionControl> {
 	info!(
 		server_host = %cfg.server_host,
 		server_port = cfg.server_port,
@@ -665,18 +692,16 @@ async fn connect_session(cfg: ClientConfigV1, ui_tx: mpsc::Sender<UiEvent>) -> O
 		Ok(s) => s,
 		Err(e) => {
 			let msg = map_core_err(e);
-			let _ = ui_tx.send(UiEvent::Error { message: msg.clone() }).await;
-			let _ = ui_tx.send(UiEvent::Disconnected { reason: msg }).await;
+			let _ = ui_tx.send(UiEvent::Error { message: msg.clone() });
+			let _ = ui_tx.send(UiEvent::Disconnected { reason: msg });
 			return None;
 		}
 	};
 
-	let _ = ui_tx
-		.send(UiEvent::Connected {
-			server_name: "chatty_server".to_string(),
-			server_instance_id: "unknown".to_string(),
-		})
-		.await;
+	let _ = ui_tx.send(UiEvent::Connected {
+		server_name: "chatty_server".to_string(),
+		server_instance_id: "unknown".to_string(),
+	});
 
 	Some(Box::new(session))
 }
@@ -685,7 +710,7 @@ async fn reconcile_subscriptions_on_connect(
 	session: &mut BoxedSessionControl,
 	topics_refcounts: &HashMap<String, usize>,
 	cursor_by_topic: &Arc<Mutex<HashMap<String, u64>>>,
-	ui_tx: &mpsc::Sender<UiEvent>,
+	ui_tx: &mpsc::UnboundedSender<UiEvent>,
 	events_task: &mut Option<tokio::task::JoinHandle<()>>,
 ) -> Result<(), String> {
 	let topics: Vec<String> = topics_refcounts
@@ -699,6 +724,9 @@ async fn reconcile_subscriptions_on_connect(
 	}
 
 	debug!(topics = ?topics, "subscribing topics on connect");
+	if topics.is_empty() {
+		debug!("no topics to subscribe on connect");
+	}
 
 	let mut subs = Vec::with_capacity(topics.len());
 	{
@@ -720,7 +748,7 @@ async fn subscribe_topics(
 	session: &mut BoxedSessionControl,
 	topics: Vec<String>,
 	cursor_by_topic: &Arc<Mutex<HashMap<String, u64>>>,
-	ui_tx: &mpsc::Sender<UiEvent>,
+	ui_tx: &mpsc::UnboundedSender<UiEvent>,
 	events_task: &mut Option<tokio::task::JoinHandle<()>>,
 ) -> Result<(), String> {
 	debug!(topics = ?topics, "subscribing topics");
@@ -743,7 +771,7 @@ async fn subscribe_topics(
 async fn unsubscribe_topics(
 	session: &mut BoxedSessionControl,
 	topics: Vec<String>,
-	_ui_tx: &mpsc::Sender<UiEvent>,
+	_ui_tx: &mpsc::UnboundedSender<UiEvent>,
 ) -> Result<(), String> {
 	debug!(topics = ?topics, "unsubscribing topics");
 
@@ -758,7 +786,7 @@ async fn unsubscribe_topics(
 async fn ensure_events_loop_started(
 	session: &mut BoxedSessionControl,
 	events_task: &mut Option<tokio::task::JoinHandle<()>>,
-	ui_tx: &mpsc::Sender<UiEvent>,
+	ui_tx: &mpsc::UnboundedSender<UiEvent>,
 	cursor_by_topic: &Arc<Mutex<HashMap<String, u64>>>,
 ) -> Result<(), String> {
 	if events_task.is_some() {
@@ -771,12 +799,6 @@ async fn ensure_events_loop_started(
 		.map_err(|e| format!("open events stream failed: {}", map_core_err(e)))?;
 
 	*events_task = Some(spawn_events_loop(events, ui_tx.clone(), Arc::clone(cursor_by_topic)));
-
-	let _ = ui_tx
-		.send(UiEvent::Error {
-			message: "events stream opened".to_string(),
-		})
-		.await;
 
 	Ok(())
 }

@@ -4,8 +4,9 @@ use std::collections::{HashMap, HashSet};
 use std::time::SystemTime;
 
 use gpui::prelude::*;
-use gpui::{AnyElement, Entity, LineFragment, MouseButton, Pixels, Window, div, img, px};
+use gpui::{AnyElement, Entity, MouseButton, Window, div, img, px};
 use gpui_component::button::Button;
+use tracing::debug;
 
 use crate::ui::app_state::{AppState, AssetRefUi, ChatItem, SystemNoticeUi, TabId};
 use crate::ui::badges::cmp_badge_ids;
@@ -31,27 +32,6 @@ pub enum MessageMenuAction {
 	Ban,
 }
 
-pub fn estimate_item_height<T>(item: &ChatItem, split_width: Pixels, window: &Window, cx: &mut Context<T>) -> Pixels
-where
-	T: 'static,
-{
-	let text = match item {
-		ChatItem::ChatMessage(msg) => msg.text.as_str(),
-		ChatItem::SystemNotice(SystemNoticeUi { text, .. }) => text.as_str(),
-		ChatItem::Lagged(lagged) => lagged.detail.as_deref().unwrap_or("Messages skipped"),
-	};
-	let available_width = (f32::from(split_width) - 140.0).max(120.0);
-	let font_size = window.rem_size();
-	let mut line_wrapper = cx.text_system().line_wrapper(window.text_style().font(), font_size);
-	let fragment = LineFragment::text(text);
-	let fragments = [fragment];
-	let boundaries = line_wrapper.wrap_line(&fragments, px(available_width));
-	let line_count = boundaries.count().saturating_add(1).max(1) as f32;
-	let base = font_size * 1.1;
-	let line_height = font_size * 1.35;
-	base + line_height * line_count
-}
-
 #[allow(clippy::too_many_arguments)]
 pub fn build_message_rows_range<T>(
 	app_state: Entity<AppState>,
@@ -72,12 +52,24 @@ where
 	let mut badge_lookup_cache: HashMap<RoomKey, HashMap<String, AssetRefUi>> = HashMap::new();
 
 	let app = app_state.read(cx);
+	debug!(
+		?active_tab,
+		range_start = range.start,
+		range_end = range.end,
+		"build_message_rows_range entry"
+	);
 	if let Some(tab_id) = active_tab
 		&& let Some(tab) = app.tabs.get(&tab_id)
 	{
 		let total = tab.log.items.len();
 		let start = range.start.min(total);
 		let end = range.end.min(total);
+		if total > 0 {
+			debug!(tab_id = tab_id.0, start, end, total, "build_message_rows_range");
+		} else {
+			debug!(tab_id = tab_id.0, start, end, total, "build_message_rows_range empty");
+		}
+
 		for (offset, item) in tab.log.items.iter().skip(start).take(end - start).enumerate() {
 			let idx = start + offset;
 			match item {
@@ -117,6 +109,8 @@ where
 						.flex()
 						.items_start()
 						.gap_2()
+						.w_full()
+						.min_w(px(0.0))
 						.px_3()
 						.py_1()
 						.bg(t.chat_row_bg)
@@ -141,6 +135,7 @@ where
 								.text_sm()
 								.text_color(t.text_muted)
 								.flex_none()
+								.w(px(48.0))
 								.child(format_time(msg.time)),
 						)
 						.child(render_badge_strip(&msg.badge_ids, badge_lookup))
@@ -216,6 +211,8 @@ where
 							.flex()
 							.items_center()
 							.gap_2()
+							.w_full()
+							.min_w(px(0.0))
 							.px_3()
 							.py_1()
 							.bg(t.panel_bg_2)
@@ -356,10 +353,19 @@ where
 							.flex()
 							.items_start()
 							.gap_2()
+							.w_full()
+							.min_w(px(0.0))
 							.px_3()
 							.py_1()
 							.bg(t.chat_row_bg)
-							.child(div().text_sm().text_color(t.text_muted).flex_none().child(format_time(*time)))
+							.child(
+								div()
+									.text_sm()
+									.text_color(t.text_muted)
+									.flex_none()
+									.w(px(48.0))
+									.child(format_time(*time)),
+							)
 							.child(
 								div()
 									.text_sm()
@@ -378,6 +384,8 @@ where
 							.flex()
 							.items_start()
 							.gap_2()
+							.w_full()
+							.min_w(px(0.0))
 							.px_3()
 							.py_1()
 							.bg(t.chat_row_bg)
@@ -386,6 +394,7 @@ where
 									.text_sm()
 									.text_color(t.text_muted)
 									.flex_none()
+									.w(px(48.0))
 									.child(format_time(lagged.time)),
 							)
 							.child(div().text_sm().text_color(t.text_dim).flex_1().min_w(px(0.0)).child(format!(
@@ -435,7 +444,7 @@ fn render_badge_strip(badge_ids: &[String], badge_lookup: &HashMap<String, Asset
 		.into_iter()
 		.filter_map(|id| badge_lookup.get(id))
 		.take(4)
-		.map(|badge| img(badge.image_url.clone()).size_16().into_any_element())
+		.map(|badge| img(badge.image_url.clone()).size_8().into_any_element())
 		.collect::<Vec<_>>();
 
 	if badges.is_empty() {
@@ -459,7 +468,7 @@ fn split_message_fragments(text: &str, emotes: &HashMap<String, AssetRefUi>) -> 
 			if !prefix.is_empty() {
 				out.push(div().child(prefix).into_any_element());
 			}
-			out.push(img(emote.image_url.clone()).size_20().into_any_element());
+			out.push(img(emote.image_url.clone()).size_16().into_any_element());
 			if !suffix.is_empty() {
 				out.push(div().child(suffix).into_any_element());
 			}

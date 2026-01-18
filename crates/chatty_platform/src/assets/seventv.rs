@@ -283,12 +283,7 @@ pub(crate) fn prune_caches() {
 }
 
 fn seventv_emote_to_asset(item: SevenTvEmoteSetEmote) -> Option<AssetRef> {
-	let image = item
-		.emote
-		.images
-		.iter()
-		.find(|img| img.scale == 1)
-		.or_else(|| item.emote.images.first())?;
+	let image = pick_seventv_image(&item.emote.images)?;
 
 	let name = if item.alias.trim().is_empty() {
 		item.emote.default_name.clone()
@@ -307,11 +302,7 @@ fn seventv_emote_to_asset(item: SevenTvEmoteSetEmote) -> Option<AssetRef> {
 }
 
 fn seventv_badge_to_asset(badge: SevenTvBadge) -> Option<AssetRef> {
-	let image = badge
-		.images
-		.iter()
-		.find(|img| img.scale == 1)
-		.or_else(|| badge.images.first())?;
+	let image = pick_seventv_image(&badge.images)?;
 
 	Some(AssetRef {
 		id: badge.id,
@@ -321,6 +312,33 @@ fn seventv_badge_to_asset(badge: SevenTvBadge) -> Option<AssetRef> {
 		width: image.width as u32,
 		height: image.height as u32,
 	})
+}
+
+fn pick_seventv_image(images: &[SevenTvImage]) -> Option<&SevenTvImage> {
+	if images.is_empty() {
+		return None;
+	}
+
+	let preferred_mimes = [
+		"image/png",
+		"image/gif",
+		"image/webp",
+		"image/avif",
+	];
+
+	for mime in preferred_mimes {
+		if let Some(img) = images.iter().find(|img| img.scale == 1 && img.mime.eq_ignore_ascii_case(mime)) {
+			return Some(img);
+		}
+	}
+
+	for mime in preferred_mimes {
+		if let Some(img) = images.iter().find(|img| img.mime.eq_ignore_ascii_case(mime)) {
+			return Some(img);
+		}
+	}
+
+	images.iter().find(|img| img.scale == 1).or_else(|| images.first())
 }
 
 fn get_cached_7tv_emotes(platform: SevenTvPlatform, platform_id: &str) -> Option<AssetBundle> {

@@ -10,7 +10,7 @@ use serde::Deserialize;
 
 use crate::{AssetBundle, AssetProvider, AssetRef, AssetScope};
 
-use super::common::{CachedBundle, compute_bundle_etag, guess_format, prune_map_cache, prune_optional_cache};
+use super::common::{CachedBundle, compute_bundle_etag, prune_map_cache, prune_optional_cache};
 
 const TWITCH_BADGES_TTL: Duration = Duration::from_secs(600);
 
@@ -119,7 +119,7 @@ fn twitch_badge_to_asset(set_id: &str, badge: TwitchBadgeVersion) -> Option<Asse
 		id: format!("twitch:{set_id}:{}", badge.id),
 		name: badge.title.unwrap_or_else(|| format!("{set_id}:{}", badge.id)),
 		image_url: url.clone(),
-		image_format: guess_format(&url),
+		image_format: "png".to_string(),
 		width: 0,
 		height: 0,
 	})

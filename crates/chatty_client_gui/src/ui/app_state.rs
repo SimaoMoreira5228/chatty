@@ -9,6 +9,7 @@ use crate::ui::settings::GuiSettings;
 
 use chatty_domain::{Platform, RoomId, RoomKey, RoomTopic};
 use std::str::FromStr;
+use tracing::debug;
 
 /// Tab identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -491,6 +492,16 @@ impl AppState {
 		}
 	}
 
+	pub fn attach_tab_to_window(&mut self, window_id: WindowId, tab_id: TabId) {
+		let Some(w) = self.windows.get_mut(&window_id) else {
+			return;
+		};
+
+		if !w.tabs.contains(&tab_id) {
+			w.tabs.push(tab_id);
+		}
+	}
+
 	pub fn set_active_tab(&mut self, window_id: WindowId, tab_id: TabId) {
 		let Some(w) = self.windows.get_mut(&window_id) else {
 			return;
@@ -562,7 +573,9 @@ impl AppState {
 	}
 
 	/// Append a chat item to tabs that target the given room.
-	pub fn push_chat_item_for_room(&mut self, room: &RoomKey, item: ChatItem) {
+	/// Returns the list of tab ids that received the item.
+	pub fn push_chat_item_for_room(&mut self, room: &RoomKey, item: ChatItem) -> Vec<TabId> {
+		debug!(room = %room, item_kind = ?item, "push chat item for room");
 		let matching_tabs: Vec<TabId> = self
 			.tabs
 			.iter()
@@ -577,21 +590,31 @@ impl AppState {
 			})
 			.collect();
 
-		for tid in matching_tabs {
-			if let Some(tab) = self.tabs.get_mut(&tid) {
+		debug!(
+			room = %room,
+			tab_count = matching_tabs.len(),
+			tabs = ?matching_tabs,
+			"push chat item matched tabs"
+		);
+
+		for tid in &matching_tabs {
+			debug!(tab_id = tid.0, "push chat item to tab");
+			if let Some(tab) = self.tabs.get_mut(tid) {
 				tab.log.push(item.clone());
 			}
 		}
+
+		matching_tabs
 	}
 
 	/// Convenience: push a normal chat message.
-	pub fn push_message(&mut self, msg: ChatMessageUi) {
+	pub fn push_message(&mut self, msg: ChatMessageUi) -> Vec<TabId> {
 		let room = msg.room.clone();
-		self.push_chat_item_for_room(&room, ChatItem::ChatMessage(msg));
+		self.push_chat_item_for_room(&room, ChatItem::ChatMessage(msg))
 	}
 
 	/// Convenience: push a lagged event (messages skipped).
-	pub fn push_lagged(&mut self, room: &RoomKey, dropped: u64, detail: Option<String>) {
+	pub fn push_lagged(&mut self, room: &RoomKey, dropped: u64, detail: Option<String>) -> Vec<TabId> {
 		self.push_chat_item_for_room(
 			room,
 			ChatItem::Lagged(LaggedUi {
@@ -599,7 +622,7 @@ impl AppState {
 				dropped,
 				detail,
 			}),
-		);
+		)
 	}
 
 	pub fn set_connection_status(&mut self, st: ConnectionStatus) {
@@ -704,7 +727,7 @@ mod tests {
 		st.add_tab_to_window(win, tab);
 
 		for idx in 0..10 {
-			st.push_message(ChatMessageUi {
+			let _ = st.push_message(ChatMessageUi {
 				time: SystemTime::now(),
 				platform: Platform::Twitch,
 				room: room.clone(),

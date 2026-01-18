@@ -185,6 +185,8 @@ impl MainWindow {
 							crate::ui::reducer::reduce(state, window_id, crate::ui::reducer::UiAction::NetEvent(ev));
 						crate::ui::reducer::apply_commands(state, window_id, commands);
 					});
+
+					cx.notify();
 				});
 			}
 		})

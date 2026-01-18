@@ -133,6 +133,7 @@ impl MainPage {
 			.layouts
 			.into_iter()
 			.map(|l| {
+				let active_split_id = l.active_split_id.clone();
 				let total_width: f32 = l.splits.iter().map(|s| s.width).sum();
 				let split_proportions = if total_width > 0.0 {
 					l.splits.iter().map(|s| s.width / total_width).collect()
@@ -145,11 +146,18 @@ impl MainPage {
 					}
 				};
 
+				let mut active_split_index = 0usize;
+				if let Some(active_id) = active_split_id.as_ref() {
+					if let Some(idx) = l.splits.iter().position(|s| &s.id == active_id) {
+						active_split_index = idx;
+					}
+				}
+
 				LayoutModel {
 					id: l.id,
 					title: l.title,
 					pinned: l.pinned,
-					active_split_index: 0,
+					active_split_index,
 					use_fixed_split_widths: false,
 					desired_split_count: l.splits.len(),
 					split_proportions,
@@ -180,13 +188,25 @@ impl MainPage {
 		if self.active_layout_id.is_none() && !self.layouts.is_empty() {
 			self.active_layout_id = Some(self.layouts[0].id.clone());
 		}
+
+		let desired_active_tab = self
+			.active_layout()
+			.and_then(|l| l.splits.get(l.active_split_index))
+			.and_then(|s| s.active_tab_id)
+			.filter(|id| id.0 != 0);
+		if let Some(tab_id) = desired_active_tab {
+			let win = self.bound_window;
+			self.app_state.update(cx, |state, _cx| {
+				state.set_active_tab(win, tab_id);
+			});
+		}
 	}
 
 	fn restore_tab_to_app_state(&mut self, ut: settings::UiTab, cx: &mut Context<Self>) -> TabId {
 		let win = self.bound_window;
 		self.app_state.update(cx, |state, _cx| {
 			let tab_id = state.restore_tab(ut);
-			state.add_tab_to_window(win, tab_id);
+			state.attach_tab_to_window(win, tab_id);
 			tab_id
 		})
 	}
@@ -957,11 +977,46 @@ impl MainPage {
 			Some(l) => l,
 			None => return,
 		};
+		let default_tab = window_tabs.first().copied();
 
 		layout.splits.retain(|s| {
 			s.active_tab_id
 				.is_none_or(|id| id.0 == 0 || (valid_tabs.contains(&id) && window_tabs.contains(&id)))
 		});
+
+		for split in &mut layout.splits {
+			split
+				.tabs
+				.retain(|id| id.0 == 0 || (valid_tabs.contains(id) && window_tabs.contains(id)));
+			if let Some(active) = split.active_tab_id
+				&& active.0 != 0
+				&& valid_tabs.contains(&active)
+				&& window_tabs.contains(&active)
+				&& !split.tabs.contains(&active)
+			{
+				split.tabs.push(active);
+			}
+
+			let active = split.active_tab_id;
+			let active_valid = active
+				.map(|id| id.0 != 0 && valid_tabs.contains(&id) && window_tabs.contains(&id))
+				.unwrap_or(false);
+			if !active_valid {
+				split.active_tab_id = split
+					.tabs
+					.iter()
+					.find(|id| id.0 != 0)
+					.copied()
+					.or(default_tab);
+			}
+
+			if let Some(active) = split.active_tab_id
+				&& active.0 != 0
+				&& !split.tabs.contains(&active)
+			{
+				split.tabs.push(active);
+			}
+		}
 
 		if layout.splits.is_empty() {
 			if let Some(first_tab) = window_tabs.first().copied() {
@@ -987,7 +1042,31 @@ impl MainPage {
 		let t = theme::theme();
 		let layout = self.active_layout().unwrap();
 		let split = layout.splits.get(index).unwrap();
-		let tab_id = split.active_tab_id.unwrap_or(TabId(0));
+		let split_tab_id = split.active_tab_id.unwrap_or(TabId(0));
+		let window_active_tab_id = self
+			.app_state
+			.read(cx)
+			.windows
+			.get(&self.bound_window)
+			.and_then(|w| w.active_tab)
+			.unwrap_or(TabId(0));
+
+		let mut tab_id = split_tab_id;
+		if index == layout.active_split_index && window_active_tab_id.0 != 0 {
+			tab_id = window_active_tab_id;
+		}
+
+		if index == layout.active_split_index && tab_id.0 != 0 {
+			if let Some(layout) = self.active_layout_mut()
+				&& let Some(split) = layout.splits.get_mut(index)
+				&& split.active_tab_id != Some(tab_id)
+			{
+				split.active_tab_id = Some(tab_id);
+				if !split.tabs.contains(&tab_id) {
+					split.tabs.push(tab_id);
+				}
+			}
+		}
 
 		let (title, item_count, has_tab, badges) = {
 			let app = self.app_state.read(cx);
@@ -1005,16 +1084,20 @@ impl MainPage {
 			(title, count, tab.is_some(), badges)
 		};
 
-		let (active_split_index, split_count, split_width) = {
+		let (active_split_index, split_count, split_width, split_height) = {
 			let layout = self.active_layout().unwrap();
 			let width = split_content_width(index, &layout.split_proportions, self.split_bounds, layout.splits.len());
-			(layout.active_split_index, layout.splits.len(), width)
+			let height = self.split_bounds.map(|b| b.size.height).unwrap_or(px(600.0));
+			(layout.active_split_index, layout.splits.len(), width, height)
 		};
 
 		let view = cx.entity();
 		let app_state = self.app_state.clone();
 		let menu_state = self.message_menu.clone();
 		let emote_image_cache = self.emote_image_cache.clone();
+		let header_height = 36.0;
+		let input_height = if has_tab { 44.0 } else { 0.0 };
+		let split_height = px((f32::from(split_height) - header_height - input_height).max(0.0));
 		let messages = render_split_messages(
 			view,
 			app_state,
@@ -1022,6 +1105,7 @@ impl MainPage {
 			has_tab,
 			item_count,
 			split_width,
+			split_height,
 			tab_id,
 			emote_image_cache,
 			menu_state,
@@ -1090,6 +1174,7 @@ impl MainPage {
 			.id(("split", index as u64))
 			.flex()
 			.flex_col()
+			.h_full()
 			.w(split_width)
 			.flex_none()
 			.min_w(px(220.0))
@@ -1272,7 +1357,9 @@ impl MainPage {
 			platform_message_id: None,
 		};
 
-		self.app_state.update(cx, |state, _cx| state.push_message(msg));
+		self.app_state.update(cx, |state, _cx| {
+			let _ = state.push_message(msg);
+		});
 		cx.notify();
 	}
 
@@ -1729,12 +1816,15 @@ impl MainPage {
 		if let Some(rest) = raw.strip_prefix("group:") {
 			if let Ok(gid) = rest.parse::<u64>() {
 				let group_id = crate::ui::app_state::GroupId(gid);
+				let win = self.bound_window;
 				let tab_id = self.app_state.update(cx, |state, _cx| {
 					let title = state
 						.group(group_id)
 						.map(|g| g.name.clone())
 						.unwrap_or_else(|| "group".to_string());
-					state.create_tab_for_group(title, group_id)
+					let tab_id = state.create_tab_for_group(title, group_id);
+					state.add_tab_to_window(win, tab_id);
+					tab_id
 				});
 				self.update_split_tab(split_index, tab_id, cx);
 
@@ -1762,9 +1852,12 @@ impl MainPage {
 			}
 		};
 
-		let tab_id = self
-			.app_state
-			.update(cx, |state, _cx| state.create_tab_for_room(room.room_id.to_string(), room));
+		let win = self.bound_window;
+		let tab_id = self.app_state.update(cx, |state, _cx| {
+			let tab_id = state.create_tab_for_room(room.room_id.to_string(), room);
+			state.add_tab_to_window(win, tab_id);
+			tab_id
+		});
 		self.update_split_tab(split_index, tab_id, cx);
 
 		if let Some(old_id) = old_tab_id
@@ -1806,9 +1899,12 @@ impl MainPage {
 			.and_then(|l| l.splits.get(split_index))
 			.and_then(|s| s.active_tab_id);
 
+		let win = self.bound_window;
 		let tab_id = self.app_state.update(cx, |state, _cx| {
 			let gid = state.create_group("New Group", rooms);
-			state.create_tab_for_group("New Group", gid)
+			let tab_id = state.create_tab_for_group("New Group", gid);
+			state.add_tab_to_window(win, tab_id);
+			tab_id
 		});
 		self.update_split_tab(split_index, tab_id, cx);
 

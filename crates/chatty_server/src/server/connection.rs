@@ -770,197 +770,201 @@ pub async fn handle_connection(
 		}
 	});
 
-	while let Some(env) = ctrl_rx.recv().await {
-		let Some(msg) = env.msg else { continue };
+	let loop_result = async {
+		while let Some(env) = ctrl_rx.recv().await {
+			let Some(msg) = env.msg else { continue };
 
-		match msg {
-			pb::envelope::Msg::Ping(ping) => {
-				let pong = pb::Pong {
-					client_time_unix_ms: ping.client_time_unix_ms,
-					server_time_unix_ms: unix_ms_now(),
-				};
-
-				send_envelope(
-					&mut control_send,
-					pb::Envelope {
-						version: PROTOCOL_VERSION,
-						request_id: env.request_id,
-						msg: Some(pb::envelope::Msg::Pong(pong)),
-					},
-				)
-				.await?;
-			}
-
-			pb::envelope::Msg::Subscribe(sub) => {
-				let last_cursor_by_topic: HashMap<String, u64> =
-					sub.subs.iter().map(|s| (s.topic.clone(), s.last_cursor)).collect();
-				debug!(conn_id, topics = ?sub.subs.iter().map(|s| &s.topic).collect::<Vec<_>>(), "received Subscribe");
-				let (mut results, topics_to_join) = handle_subscribe(conn_id, &state, sub).await;
-				debug!(conn_id, topics_to_join = ?topics_to_join, "Subscribe processed, topics_to_join determined");
-
-				let mut pending = pending_replay.lock().await;
-				for result in &mut results {
-					let last_cursor = *last_cursor_by_topic.get(&result.topic).unwrap_or(&0);
-					let outcome = {
-						replay_service
-							.replay(&client_instance_id, &result.topic, last_cursor)
-							.await
-							.context("replay events")?
+			match msg {
+				pb::envelope::Msg::Ping(ping) => {
+					let pong = pb::Pong {
+						client_time_unix_ms: ping.client_time_unix_ms,
+						server_time_unix_ms: unix_ms_now(),
 					};
 
-					result.status = outcome.status as i32;
-					result.current_cursor = outcome.current_cursor;
-
-					if !outcome.items.is_empty() {
-						pending.extend(outcome.items);
-					}
-
-					if outcome.status == pb::subscription_result::Status::ReplayNotAvailable && last_cursor > 0 {
-						let lagged = pb::TopicLaggedEvent {
-							dropped: outcome.current_cursor.saturating_sub(last_cursor),
-							detail: "replay buffer exhausted".to_string(),
-						};
-						let env = pb::EventEnvelope {
-							topic: result.topic.clone(),
-							cursor: 0,
-							server_time_unix_ms: unix_ms_now(),
-							event: Some(pb::event_envelope::Event::TopicLagged(lagged)),
-						};
-
-						let env = replay_service
-							.push_event(&client_instance_id, &result.topic, env)
-							.await
-							.context("persist replay event")?;
-						result.current_cursor = env.cursor;
-						pending.push(env);
-					}
-				}
-				drop(pending);
-
-				let permission_results = results.clone();
-				send_envelope(
-					&mut control_send,
-					pb::Envelope {
-						version: PROTOCOL_VERSION,
-						request_id: env.request_id,
-						msg: Some(pb::envelope::Msg::Subscribed(pb::Subscribed { results })),
-					},
-				)
-				.await?;
-
-				adapter_manager.apply_global_joins_leaves(&topics_to_join, &[]).await;
-
-				let mut permission_events: Vec<pb::EventEnvelope> = Vec::new();
-				for result in &permission_results {
-					if result.status != pb::subscription_result::Status::Ok as i32 {
-						continue;
-					}
-					let Ok(room) = RoomTopic::parse(&result.topic) else {
-						continue;
-					};
-					if let Some(perms) = adapter_manager.query_permissions(&room).await {
-						let env = pb::EventEnvelope {
-							topic: result.topic.clone(),
-							cursor: 0,
-							server_time_unix_ms: unix_ms_now(),
-							event: Some(pb::event_envelope::Event::Permissions(pb::PermissionsEvent {
-								can_send: perms.can_send,
-								can_reply: perms.can_reply,
-								can_delete: perms.can_delete,
-								can_timeout: perms.can_timeout,
-								can_ban: perms.can_ban,
-								is_moderator: perms.is_moderator,
-								is_broadcaster: perms.is_broadcaster,
-							})),
-						};
-
-						let env = replay_service
-							.push_event(&client_instance_id, &result.topic, env)
-							.await
-							.context("persist permissions event")?;
-						permission_events.push(env);
-					}
+					send_envelope(
+						&mut control_send,
+						pb::Envelope {
+							version: PROTOCOL_VERSION,
+							request_id: env.request_id,
+							msg: Some(pb::envelope::Msg::Pong(pong)),
+						},
+					)
+					.await?;
 				}
 
-				if !permission_events.is_empty() {
+				pb::envelope::Msg::Subscribe(sub) => {
+					let last_cursor_by_topic: HashMap<String, u64> =
+						sub.subs.iter().map(|s| (s.topic.clone(), s.last_cursor)).collect();
+					debug!(conn_id, topics = ?sub.subs.iter().map(|s| &s.topic).collect::<Vec<_>>(), "received Subscribe");
+					let (mut results, topics_to_join) = handle_subscribe(conn_id, &state, sub).await;
+					debug!(conn_id, topics_to_join = ?topics_to_join, "Subscribe processed, topics_to_join determined");
+
 					let mut pending = pending_replay.lock().await;
-					pending.extend(permission_events);
+					for result in &mut results {
+						let last_cursor = *last_cursor_by_topic.get(&result.topic).unwrap_or(&0);
+						let outcome = {
+							replay_service
+								.replay(&client_instance_id, &result.topic, last_cursor)
+								.await
+								.context("replay events")?
+						};
+
+						result.status = outcome.status as i32;
+						result.current_cursor = outcome.current_cursor;
+						if !outcome.items.is_empty() {
+							pending.extend(outcome.items);
+						}
+
+						if outcome.status == pb::subscription_result::Status::ReplayNotAvailable && last_cursor > 0 {
+							let lagged = pb::TopicLaggedEvent {
+								dropped: outcome.current_cursor.saturating_sub(last_cursor),
+								detail: "replay buffer exhausted".to_string(),
+							};
+							let env = pb::EventEnvelope {
+								topic: result.topic.clone(),
+								cursor: 0,
+								server_time_unix_ms: unix_ms_now(),
+								event: Some(pb::event_envelope::Event::TopicLagged(lagged)),
+							};
+
+							let env = replay_service
+								.push_event(&client_instance_id, &result.topic, env)
+								.await
+								.context("persist replay event")?;
+							result.current_cursor = env.cursor;
+							pending.push(env);
+						}
+					}
+					drop(pending);
+
+					let permission_results = results.clone();
+					send_envelope(
+						&mut control_send,
+						pb::Envelope {
+							version: PROTOCOL_VERSION,
+							request_id: env.request_id,
+							msg: Some(pb::envelope::Msg::Subscribed(pb::Subscribed { results })),
+						},
+					)
+					.await?;
+
+					adapter_manager.apply_global_joins_leaves(&topics_to_join, &[]).await;
+
+					let mut permission_events: Vec<pb::EventEnvelope> = Vec::new();
+					for result in &permission_results {
+						if result.status != pb::subscription_result::Status::Ok as i32 {
+							continue;
+						}
+						let Ok(room) = RoomTopic::parse(&result.topic) else {
+							continue;
+						};
+						if let Some(perms) = adapter_manager.query_permissions(&room).await {
+							let env = pb::EventEnvelope {
+								topic: result.topic.clone(),
+								cursor: 0,
+								server_time_unix_ms: unix_ms_now(),
+								event: Some(pb::event_envelope::Event::Permissions(pb::PermissionsEvent {
+									can_send: perms.can_send,
+									can_reply: perms.can_reply,
+									can_delete: perms.can_delete,
+									can_timeout: perms.can_timeout,
+									can_ban: perms.can_ban,
+									is_moderator: perms.is_moderator,
+									is_broadcaster: perms.is_broadcaster,
+								})),
+							};
+
+							let env = replay_service
+								.push_event(&client_instance_id, &result.topic, env)
+								.await
+								.context("persist permissions event")?;
+							permission_events.push(env);
+						}
+					}
+
+					if !permission_events.is_empty() {
+						let mut pending = pending_replay.lock().await;
+						pending.extend(permission_events);
+					}
+
+					let mut guard = events_send.lock().await;
+					if guard.is_none() {
+						info!(
+							conn_id,
+							"waiting to accept events bidirectional stream (client-opened; after Subscribed)"
+						);
+						let (send, _recv) = connection.accept_bi().await.context("accept events bidirectional stream")?;
+						info!(conn_id, "accepted events bidirectional stream (server will only write)");
+						*guard = Some(send);
+					}
+
+					if let Some(events_send) = guard.as_mut() {
+						let mut pending = pending_replay.lock().await;
+						for env in pending.drain(..) {
+							let frame = encode_frame(
+								&pb::Envelope {
+									version: PROTOCOL_VERSION,
+									request_id: String::new(),
+									msg: Some(pb::envelope::Msg::Event(env)),
+								},
+								DEFAULT_MAX_FRAME_SIZE,
+							)?;
+							events_send.write_all(&frame).await?;
+						}
+					}
 				}
 
-				let mut guard = events_send.lock().await;
-				if guard.is_none() {
-					info!(
+				pb::envelope::Msg::Unsubscribe(unsub) => {
+					let (results, topics_to_leave) = handle_unsubscribe(conn_id, &state, unsub).await;
+
+					send_envelope(
+						&mut control_send,
+						pb::Envelope {
+							version: PROTOCOL_VERSION,
+							request_id: env.request_id,
+							msg: Some(pb::envelope::Msg::Unsubscribed(pb::Unsubscribed { results })),
+						},
+					)
+					.await?;
+
+					adapter_manager.apply_global_joins_leaves(&[], &topics_to_leave).await;
+				}
+
+				pb::envelope::Msg::Command(cmd) => {
+					let result = handle_command(
 						conn_id,
-						"waiting to accept events bidirectional stream (client-opened; after Subscribed)"
-					);
-					let (send, _recv) = connection.accept_bi().await.context("accept events bidirectional stream")?;
-					info!(conn_id, "accepted events bidirectional stream (server will only write)");
-					*guard = Some(send);
+						&settings,
+						&client_auth_token,
+						auth_claims.as_ref(),
+						&mut rate_limiter,
+						&cmd,
+						&adapter_manager,
+						&audit_service,
+					)
+					.await;
+					send_envelope(
+						&mut control_send,
+						pb::Envelope {
+							version: PROTOCOL_VERSION,
+							request_id: env.request_id,
+							msg: Some(pb::envelope::Msg::CommandResult(result)),
+						},
+					)
+					.await?;
 				}
-				if let Some(events_send) = guard.as_mut() {
-					let mut pending = pending_replay.lock().await;
-					for env in pending.drain(..) {
-						let frame = encode_frame(
-							&pb::Envelope {
-								version: PROTOCOL_VERSION,
-								request_id: String::new(),
-								msg: Some(pb::envelope::Msg::Event(env)),
-							},
-							DEFAULT_MAX_FRAME_SIZE,
-						)?;
-						events_send.write_all(&frame).await?;
-					}
+
+				pb::envelope::Msg::Hello(_) => {
+					debug!(conn_id, "ignoring duplicate Hello");
 				}
-			}
 
-			pb::envelope::Msg::Unsubscribe(unsub) => {
-				let (results, topics_to_leave) = handle_unsubscribe(conn_id, &state, unsub).await;
-
-				send_envelope(
-					&mut control_send,
-					pb::Envelope {
-						version: PROTOCOL_VERSION,
-						request_id: env.request_id,
-						msg: Some(pb::envelope::Msg::Unsubscribed(pb::Unsubscribed { results })),
-					},
-				)
-				.await?;
-
-				adapter_manager.apply_global_joins_leaves(&[], &topics_to_leave).await;
-			}
-
-			pb::envelope::Msg::Command(cmd) => {
-				let result = handle_command(
-					conn_id,
-					&settings,
-					&client_auth_token,
-					auth_claims.as_ref(),
-					&mut rate_limiter,
-					&cmd,
-					&adapter_manager,
-					&audit_service,
-				)
-				.await;
-				send_envelope(
-					&mut control_send,
-					pb::Envelope {
-						version: PROTOCOL_VERSION,
-						request_id: env.request_id,
-						msg: Some(pb::envelope::Msg::CommandResult(result)),
-					},
-				)
-				.await?;
-			}
-
-			pb::envelope::Msg::Hello(_) => {
-				debug!(conn_id, "ignoring duplicate Hello");
-			}
-
-			other => {
-				warn!(conn_id, "unhandled control message: {:?}", other);
+				other => {
+					warn!(conn_id, "unhandled control message: {:?}", other);
+				}
 			}
 		}
+		Ok::<(), anyhow::Error>(())
 	}
+	.await;
 
 	{
 		let topics_to_leave = {
@@ -978,7 +982,7 @@ pub async fn handle_connection(
 	let _ = reader_task.await;
 	let _ = events_task.await;
 
-	Ok(())
+	loop_result
 }
 
 async fn wait_for_hello(ctrl_rx: &mut mpsc::UnboundedReceiver<pb::Envelope>) -> anyhow::Result<pb::Hello> {

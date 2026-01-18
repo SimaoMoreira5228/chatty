@@ -11,7 +11,7 @@ use chatty_domain::{Platform, RoomKey};
 use futures_util::{SinkExt, StreamExt};
 use tokio::time::{Instant, sleep};
 use tokio_tungstenite::tungstenite::protocol::Message;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use url::Url;
 
 use super::helix::{HelixClient, HelixCreateSubscriptionResponse, HelixSubscriptionData, refresh_user_token};
@@ -835,6 +835,7 @@ impl TwitchEventSubAdapter {
 				continue;
 			}
 			if let Err(e) = self.ensure_subscription_for_room(session_id, &room).await {
+				warn!(error = ?e, room=%room, "twitch ensure subscription failed");
 				if Self::is_helix_auth_error(&e) {
 					self.invalidate_auth("twitch auth failed; waiting for refreshed OAuth", events_tx);
 					return;

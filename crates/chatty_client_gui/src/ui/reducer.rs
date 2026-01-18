@@ -3,11 +3,13 @@
 use std::time::SystemTime;
 
 use crate::ui::app_state::{
-	AppState, AssetBundleUi, ChatItem, ChatMessageUi, RoomPermissions, SystemNoticeUi, UiNotificationKind, WindowId,
+	AppState, AssetBundleUi, ChatItem, ChatMessageUi, RoomPermissions, SystemNoticeUi, TabTarget, UiNotificationKind,
+	WindowId,
 };
 use crate::ui::net::UiEvent;
 use chatty_domain::RoomTopic;
 use chatty_protocol::pb;
+use tracing::debug;
 
 #[derive(Debug, Clone)]
 pub enum UiAction {
@@ -60,6 +62,8 @@ pub fn reduce(state: &mut AppState, _window_id: WindowId, action: UiAction) -> V
 				badge_ids,
 				..
 			} => {
+				debug!(%topic, author_login = %author_login, "ui reducer chat message");
+
 				if let Ok(room) = RoomTopic::parse(&topic) {
 					let msg = ChatMessageUi {
 						time: SystemTime::now(),
@@ -73,7 +77,32 @@ pub fn reduce(state: &mut AppState, _window_id: WindowId, action: UiAction) -> V
 						badge_ids,
 						platform_message_id,
 					};
-					state.push_message(msg);
+					let matching_tabs = state.push_message(msg);
+
+					if let Some(first_match) = matching_tabs.first().copied() {
+						let active = state.windows.get(&_window_id).and_then(|w| w.active_tab);
+						let active_matches_room = match active {
+							None => false,
+							Some(tid) => {
+								if matching_tabs.contains(&tid) {
+									true
+								} else {
+									match state.tabs.get(&tid).map(|t| &t.target) {
+										Some(TabTarget::Room(rk)) => rk == &room,
+										Some(TabTarget::Group(gid)) => state
+											.groups
+											.get(gid)
+											.is_some_and(|g| g.rooms.iter().any(|r| r == &room)),
+										None => false,
+									}
+								}
+							}
+						};
+
+						if !active_matches_room {
+							state.set_active_tab(_window_id, first_match);
+						}
+					}
 				} else {
 					commands.push(UiCommand::AppendSystemLine {
 						text: format!("Unmapped topic: {}", topic),
@@ -84,7 +113,7 @@ pub fn reduce(state: &mut AppState, _window_id: WindowId, action: UiAction) -> V
 				topic, dropped, detail, ..
 			} => {
 				if let Ok(room) = RoomTopic::parse(&topic) {
-					state.push_lagged(&room, dropped, Some(detail.clone()));
+					let _ = state.push_lagged(&room, dropped, Some(detail.clone()));
 				} else {
 					commands.push(UiCommand::AppendSystemLine {
 						text: format!("Messages skipped ({}): {}", dropped, detail),
