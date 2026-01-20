@@ -1,10 +1,11 @@
 #![forbid(unsafe_code)]
 
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
 use anyhow::Context;
 use reqwest::StatusCode;
 use reqwest::header::{HeaderMap, RETRY_AFTER};
 use serde::{Deserialize, Serialize};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use url::Url;
 
 const EVENTSUB_SUBSCRIPTIONS_PATH: &str = "/helix/eventsub/subscriptions";
@@ -36,34 +37,40 @@ fn retry_delay_from_headers(headers: &HeaderMap) -> Option<Duration> {
 	None
 }
 
-async fn send_with_retry(req: reqwest::RequestBuilder, label: &'static str) -> anyhow::Result<reqwest::Response> {
-	let retry_builder = req.try_clone();
-	let resp = req.send().await.with_context(|| format!("helix {label} send"))?;
-	let status = resp.status();
+impl HelixClient {
+	async fn send_with_retry(&self, req: reqwest::RequestBuilder, label: &'static str) -> anyhow::Result<reqwest::Response> {
+		let retry_builder = req.try_clone();
+		let resp = req.send().await.with_context(|| format!("helix {label} send"))?;
+		let status = resp.status();
 
-	if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
-		let body = resp.text().await.unwrap_or_default();
-		anyhow::bail!("helix auth failed (status={status}) body={body}");
+		if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+			let body = resp.text().await.unwrap_or_default();
+			let client_id_present = !self.client_id.is_empty();
+			let bearer_token_present = !self.bearer_token.is_empty();
+			anyhow::bail!(
+				"helix auth failed (status={status}) body={body} client_id_present={client_id_present} bearer_token_present={bearer_token_present}"
+			);
+		}
+
+		if status == StatusCode::TOO_MANY_REQUESTS
+			&& let Some(delay) = retry_delay_from_headers(resp.headers())
+			&& let Some(retry) = retry_builder
+		{
+			tokio::time::sleep(delay).await;
+			let retry_resp = retry.send().await.with_context(|| format!("helix {label} retry send"))?;
+			return Ok(retry_resp);
+		}
+
+		if status.is_server_error()
+			&& let Some(retry) = retry_builder
+		{
+			tokio::time::sleep(Duration::from_millis(250)).await;
+			let retry_resp = retry.send().await.with_context(|| format!("helix {label} retry send"))?;
+			return Ok(retry_resp);
+		}
+
+		Ok(resp)
 	}
-
-	if status == StatusCode::TOO_MANY_REQUESTS
-		&& let Some(delay) = retry_delay_from_headers(resp.headers())
-		&& let Some(retry) = retry_builder
-	{
-		tokio::time::sleep(delay).await;
-		let retry_resp = retry.send().await.with_context(|| format!("helix {label} retry send"))?;
-		return Ok(retry_resp);
-	}
-
-	if status.is_server_error()
-		&& let Some(retry) = retry_builder
-	{
-		tokio::time::sleep(Duration::from_millis(250)).await;
-		let retry_resp = retry.send().await.with_context(|| format!("helix {label} retry send"))?;
-		return Ok(retry_resp);
-	}
-
-	Ok(resp)
 }
 
 fn null_to_vec<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
@@ -171,12 +178,13 @@ impl HelixClient {
 			},
 		};
 
-		let resp = send_with_retry(
-			self.authed(self.http.post(url)).json(&req),
-			"POST /helix/eventsub/subscriptions",
-		)
-		.await
-		.with_context(|| format!("helix POST {EVENTSUB_SUBSCRIPTIONS_PATH} send (type={kind})"))?;
+		let resp = self
+			.send_with_retry(
+				self.authed(self.http.post(url)).json(&req),
+				"POST /helix/eventsub/subscriptions",
+			)
+			.await
+			.with_context(|| format!("helix POST {EVENTSUB_SUBSCRIPTIONS_PATH} send (type={kind})"))?;
 
 		let status = resp.status();
 		let body = resp
@@ -201,7 +209,8 @@ impl HelixClient {
 	pub(crate) async fn get_user_by_login(&self, login: &str) -> anyhow::Result<Option<HelixUser>> {
 		let url = self.url(&format!("/helix/users?login={}", urlencoding::encode(login)))?;
 
-		let resp = send_with_retry(self.authed(self.http.get(url)), "GET /helix/users")
+		let resp = self
+			.send_with_retry(self.authed(self.http.get(url)), "GET /helix/users")
 			.await
 			.context("helix GET /helix/users send")?;
 
@@ -219,7 +228,8 @@ impl HelixClient {
 	pub(crate) async fn get_token_user(&self) -> anyhow::Result<HelixUser> {
 		let url = self.url("/helix/users")?;
 
-		let resp = send_with_retry(self.authed(self.http.get(url)), "GET /helix/users (whoami)")
+		let resp = self
+			.send_with_retry(self.authed(self.http.get(url)), "GET /helix/users (whoami)")
 			.await
 			.context("helix GET /helix/users (whoami) send")?;
 
@@ -243,7 +253,8 @@ impl HelixClient {
 			u = urlencoding::encode(user_id),
 		))?;
 
-		let resp = send_with_retry(self.authed(self.http.get(url)), "GET /helix/moderation/moderators")
+		let resp = self
+			.send_with_retry(self.authed(self.http.get(url)), "GET /helix/moderation/moderators")
 			.await
 			.context("helix GET /helix/moderation/moderators send")?;
 
@@ -312,7 +323,8 @@ impl HelixClient {
 			message,
 			reply_parent_message_id: reply_to,
 		};
-		let resp = send_with_retry(self.authed(self.http.post(url)).json(&req), "POST /helix/chat/messages")
+		let resp = self
+			.send_with_retry(self.authed(self.http.post(url)).json(&req), "POST /helix/chat/messages")
 			.await
 			.context("helix POST /helix/chat/messages send")?;
 		let status = resp.status();
@@ -336,7 +348,8 @@ impl HelixClient {
 			m = urlencoding::encode(moderator_id),
 			msg = urlencoding::encode(message_id),
 		))?;
-		let resp = send_with_retry(self.authed(self.http.delete(url)), "DELETE /helix/moderation/chat")
+		let resp = self
+			.send_with_retry(self.authed(self.http.delete(url)), "DELETE /helix/moderation/chat")
 			.await
 			.context("helix DELETE /helix/moderation/chat send")?;
 		let status = resp.status();
@@ -368,7 +381,8 @@ impl HelixClient {
 				reason,
 			},
 		};
-		let resp = send_with_retry(self.authed(self.http.post(url)).json(&req), "POST /helix/moderation/bans")
+		let resp = self
+			.send_with_retry(self.authed(self.http.post(url)).json(&req), "POST /helix/moderation/bans")
 			.await
 			.context("helix POST /helix/moderation/bans send")?;
 		let status = resp.status();
@@ -485,7 +499,8 @@ impl HelixClient {
 
 		let url = self.url(&path)?;
 
-		let resp = send_with_retry(self.authed(self.http.get(url)), "GET /helix/eventsub/subscriptions")
+		let resp = self
+			.send_with_retry(self.authed(self.http.get(url)), "GET /helix/eventsub/subscriptions")
 			.await
 			.context("helix GET /helix/eventsub/subscriptions send")?;
 
@@ -533,7 +548,8 @@ impl HelixClient {
 			base = EVENTSUB_SUBSCRIPTIONS_PATH
 		))?;
 
-		let resp = send_with_retry(self.authed(self.http.delete(url)), "DELETE /helix/eventsub/subscriptions")
+		let resp = self
+			.send_with_retry(self.authed(self.http.delete(url)), "DELETE /helix/eventsub/subscriptions")
 			.await
 			.context("helix DELETE /helix/eventsub/subscriptions send")?;
 

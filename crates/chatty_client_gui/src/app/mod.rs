@@ -12,5 +12,4 @@ pub use model::{
 	Chatty, ClipboardTarget, InsertTarget, Message, Page, PaneState, PendingCommand, PlatformChoice, SettingsCategory,
 	ShortcutKeyChoice, SplitLayoutChoice, ThemeChoice,
 };
-
 pub use run::run;

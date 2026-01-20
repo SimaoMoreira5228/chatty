@@ -15,7 +15,8 @@ use chatty_platform::twitch::{TwitchConfig, TwitchEventSubAdapter};
 use chatty_util::endpoint::QuicEndpoint;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 use crate::quic::config::QuicServerConfig;
 use crate::server::adapter_manager::{AdapterManagerConfig, start_global_adapter_manager};

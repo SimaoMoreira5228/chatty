@@ -8,14 +8,86 @@ use anyhow::Context;
 use parking_lot::Mutex;
 use serde::Deserialize;
 
+use super::common::{CachedBundle, compute_bundle_etag, prune_map_cache, prune_optional_cache};
 use crate::{AssetBundle, AssetProvider, AssetRef, AssetScope};
 
-use super::common::{CachedBundle, compute_bundle_etag, prune_map_cache, prune_optional_cache};
-
 const TWITCH_BADGES_TTL: Duration = Duration::from_secs(600);
+const TWITCH_EMOTES_TTL: Duration = Duration::from_secs(600);
 
 static TWITCH_BADGES_CACHE: OnceLock<Mutex<Option<CachedBundle>>> = OnceLock::new();
 static TWITCH_CHANNEL_BADGES_CACHE: OnceLock<Mutex<HashMap<String, CachedBundle>>> = OnceLock::new();
+static TWITCH_GLOBAL_EMOTES_CACHE: OnceLock<Mutex<Option<CachedBundle>>> = OnceLock::new();
+static TWITCH_CHANNEL_EMOTES_CACHE: OnceLock<Mutex<HashMap<String, CachedBundle>>> = OnceLock::new();
+
+pub async fn fetch_twitch_global_emotes_bundle(client_id: &str, bearer_token: &str) -> anyhow::Result<AssetBundle> {
+	if let Some(bundle) = get_cached_twitch_global_emotes() {
+		return Ok(bundle);
+	}
+
+	let url = "https://api.twitch.tv/helix/chat/emotes/global";
+	let resp = reqwest::Client::new()
+		.get(url)
+		.header("Client-Id", client_id)
+		.header("Authorization", format!("Bearer {bearer_token}"))
+		.send()
+		.await
+		.context("twitch global emotes request")?
+		.error_for_status()
+		.context("twitch global emotes status")?;
+
+	let body: TwitchEmotesResponse = resp.json().await.context("twitch global emotes json")?;
+	let emotes: Vec<AssetRef> = body.data.into_iter().filter_map(twitch_emote_to_asset).collect();
+	let etag = compute_bundle_etag(&emotes, &[]);
+
+	let bundle = AssetBundle {
+		provider: AssetProvider::Twitch,
+		scope: AssetScope::Global,
+		cache_key: "twitch:emotes:global".to_string(),
+		etag: Some(etag),
+		emotes,
+		badges: Vec::new(),
+	};
+
+	set_cached_twitch_global_emotes(bundle.clone());
+	Ok(bundle)
+}
+
+pub async fn fetch_twitch_channel_emotes_bundle(
+	client_id: &str,
+	bearer_token: &str,
+	broadcaster_id: &str,
+) -> anyhow::Result<AssetBundle> {
+	if let Some(bundle) = get_cached_twitch_channel_emotes(broadcaster_id) {
+		return Ok(bundle);
+	}
+
+	let url = format!("https://api.twitch.tv/helix/chat/emotes?broadcaster_id={broadcaster_id}");
+	let resp = reqwest::Client::new()
+		.get(url)
+		.header("Client-Id", client_id)
+		.header("Authorization", format!("Bearer {bearer_token}"))
+		.send()
+		.await
+		.context("twitch channel emotes request")?
+		.error_for_status()
+		.context("twitch channel emotes status")?;
+
+	let body: TwitchEmotesResponse = resp.json().await.context("twitch channel emotes json")?;
+	let emotes: Vec<AssetRef> = body.data.into_iter().filter_map(twitch_emote_to_asset).collect();
+	let etag = compute_bundle_etag(&emotes, &[]);
+
+	let bundle = AssetBundle {
+		provider: AssetProvider::Twitch,
+		scope: AssetScope::Channel,
+		cache_key: format!("twitch:emotes:channel:{broadcaster_id}"),
+		etag: Some(etag),
+		emotes,
+		badges: Vec::new(),
+	};
+
+	set_cached_twitch_channel_emotes(broadcaster_id, bundle.clone());
+	Ok(bundle)
+}
 
 pub async fn fetch_twitch_badges_bundle(client_id: &str, bearer_token: &str) -> anyhow::Result<AssetBundle> {
 	if let Some(bundle) = get_cached_twitch_badges() {
@@ -111,6 +183,12 @@ pub(crate) fn prune_caches() {
 	if let Some(cache) = TWITCH_CHANNEL_BADGES_CACHE.get() {
 		prune_map_cache(cache, TWITCH_BADGES_TTL);
 	}
+	if let Some(cache) = TWITCH_GLOBAL_EMOTES_CACHE.get() {
+		prune_optional_cache(cache, TWITCH_EMOTES_TTL);
+	}
+	if let Some(cache) = TWITCH_CHANNEL_EMOTES_CACHE.get() {
+		prune_map_cache(cache, TWITCH_EMOTES_TTL);
+	}
 }
 
 fn twitch_badge_to_asset(set_id: &str, badge: TwitchBadgeVersion) -> Option<AssetRef> {
@@ -161,6 +239,74 @@ fn get_cached_twitch_channel_badges(broadcaster_id: &str) -> Option<AssetBundle>
 	}
 }
 
+fn twitch_emote_to_asset(emote: TwitchEmote) -> Option<AssetRef> {
+	let (url, format) = if emote.format.iter().any(|f| f == "animated") {
+		(
+			format!("https://static-cdn.jtvnw.net/emoticons/v2/{}/animated/dark/1.0", emote.id),
+			"gif".to_string(),
+		)
+	} else {
+		(emote.images.url_1x, "png".to_string())
+	};
+
+	Some(AssetRef {
+		id: format!("twitch:emote:{}", emote.id),
+		name: emote.name,
+		image_url: url,
+		image_format: format,
+		width: 0,
+		height: 0,
+	})
+}
+
+fn get_cached_twitch_global_emotes() -> Option<AssetBundle> {
+	let cache = TWITCH_GLOBAL_EMOTES_CACHE.get_or_init(|| Mutex::new(None));
+	let mut guard = cache.lock();
+	let entry = guard.as_ref()?;
+	if entry.fetched_at.elapsed() <= TWITCH_EMOTES_TTL {
+		Some(entry.bundle.clone())
+	} else {
+		*guard = None;
+		None
+	}
+}
+
+fn set_cached_twitch_global_emotes(bundle: AssetBundle) {
+	let cache = TWITCH_GLOBAL_EMOTES_CACHE.get_or_init(|| Mutex::new(None));
+	let mut guard = cache.lock();
+	*guard = Some(CachedBundle {
+		fetched_at: std::time::Instant::now(),
+		bundle,
+	});
+}
+
+fn get_cached_twitch_channel_emotes(broadcaster_id: &str) -> Option<AssetBundle> {
+	let cache = TWITCH_CHANNEL_EMOTES_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+	let mut guard = cache.lock();
+	if let Some(entry) = guard.get(broadcaster_id) {
+		if entry.fetched_at.elapsed() <= TWITCH_EMOTES_TTL {
+			Some(entry.bundle.clone())
+		} else {
+			guard.remove(broadcaster_id);
+			None
+		}
+	} else {
+		None
+	}
+}
+
+fn set_cached_twitch_channel_emotes(broadcaster_id: &str, bundle: AssetBundle) {
+	let cache = TWITCH_CHANNEL_EMOTES_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+	let mut guard = cache.lock();
+	guard.insert(
+		broadcaster_id.to_string(),
+		CachedBundle {
+			fetched_at: std::time::Instant::now(),
+			bundle,
+		},
+	);
+}
+
 fn set_cached_twitch_channel_badges(broadcaster_id: &str, bundle: AssetBundle) {
 	let cache = TWITCH_CHANNEL_BADGES_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
 	let mut guard = cache.lock();
@@ -192,4 +338,24 @@ struct TwitchBadgeVersion {
 	title: Option<String>,
 	#[serde(rename = "image_url_1x")]
 	image_url_1x: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TwitchEmotesResponse {
+	data: Vec<TwitchEmote>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TwitchEmote {
+	id: String,
+	name: String,
+	images: TwitchEmoteImages,
+	#[serde(default)]
+	format: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TwitchEmoteImages {
+	#[serde(rename = "url_1x")]
+	url_1x: String,
 }

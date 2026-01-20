@@ -47,6 +47,7 @@ pub(crate) fn handle_notification_json(
 					},
 					text: n.text,
 					badges: n.badge_ids,
+					emotes: n.emotes.clone(),
 				}),
 			);
 

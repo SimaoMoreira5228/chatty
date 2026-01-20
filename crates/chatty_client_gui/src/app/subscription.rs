@@ -1,14 +1,15 @@
 #![forbid(unsafe_code)]
 
+use std::time::Duration;
+
 use chatty_client_ui::settings::ShortcutKey;
-use iced::Subscription;
-use iced::keyboard;
+use iced::{Subscription, keyboard};
 
 use crate::app::{Chatty, Message};
 
 impl Chatty {
 	pub fn subscription(&self) -> Subscription<Message> {
-		iced::event::listen_with(|event, _status, _id| match event {
+		let input = iced::event::listen_with(|event, _status, _id| match event {
 			iced::Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) => {
 				Some(Message::ModifiersChanged(modifiers))
 			}
@@ -24,9 +25,13 @@ impl Chatty {
 			iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
 				Some(Message::CursorMoved(position.x, position.y))
 			}
+			iced::Event::Mouse(iced::mouse::Event::WheelScrolled { .. }) => Some(Message::UserScrolled),
 			iced::Event::Window(iced::window::Event::Resized(size)) => Some(Message::WindowResized(size.width, size.height)),
 			_ => None,
-		})
+		});
+
+		let anim = iced::time::every(Duration::from_millis(50)).map(Message::AnimationTick);
+		Subscription::batch(vec![input, anim])
 	}
 }
 

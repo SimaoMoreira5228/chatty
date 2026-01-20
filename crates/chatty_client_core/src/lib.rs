@@ -200,11 +200,12 @@ impl SessionControl {
 			Some(addr) => vec![addr],
 			None => {
 				let hostport = format!("{}:{}", cfg.server_host, cfg.server_port);
-				let addrs = hostport
+				let addrs_iter = hostport
 					.to_socket_addrs()
 					.map_err(|e| ClientCoreError::Connect(format!("failed to resolve {hostport}: {e}")))?;
 
-				let addrs: Vec<SocketAddr> = addrs.collect();
+				let addrs: Vec<SocketAddr> = addrs_iter.collect();
+				debug!(hostport = %hostport, addrs = ?addrs, "resolved DNS to addresses");
 				if addrs.is_empty() {
 					return Err(ClientCoreError::Connect(format!(
 						"DNS resolution returned no addresses for {hostport}"
@@ -217,7 +218,9 @@ impl SessionControl {
 		let mut last_err: Option<String> = None;
 		let mut conn: Option<quinn::Connection> = None;
 
+		debug!(candidates = ?candidates, "connect candidates");
 		for server_addr in candidates {
+			info!(addr = %server_addr, sni = %server_name, "attempting connect to candidate");
 			let connecting = endpoint
 				.connect_with(quinn_cfg.clone(), server_addr, &server_name)
 				.map_err(|e| ClientCoreError::Connect(format!("connect_with({server_addr}, sni={server_name}): {e}")))?;
@@ -228,12 +231,14 @@ impl SessionControl {
 					break;
 				}
 				Ok(Err(e)) => {
-					last_err = Some(format!("connect failed (addr={server_addr}, sni={server_name}): {e}"));
+					let msg = format!("connect failed (addr={server_addr}, sni={server_name}): {e}");
+					debug!(%msg, "connect attempt failed");
+					last_err = Some(msg);
 				}
 				Err(_) => {
-					last_err = Some(format!(
-						"connect timeout after {connect_timeout:?} (addr={server_addr}, sni={server_name})"
-					));
+					let msg = format!("connect timeout after {connect_timeout:?} (addr={server_addr}, sni={server_name})");
+					debug!(%msg, "connect attempt timed out");
+					last_err = Some(msg);
 				}
 			}
 		}
@@ -246,10 +251,12 @@ impl SessionControl {
 
 		info!(remote = %conn.remote_address(), "connected");
 
+		debug!("opening control stream (open_bi)");
 		let (mut control_send, mut control_recv) = tokio::time::timeout(connect_timeout, conn.open_bi())
 			.await
 			.map_err(|_| ClientCoreError::Io(format!("timeout opening control stream after {connect_timeout:?}")))?
 			.map_err(|e| ClientCoreError::Io(format!("open_bi(control) failed: {e}")))?;
+		debug!("opened control stream (open_bi) successfully");
 
 		let hello = pb::Hello {
 			client_name: cfg.client_name,
@@ -273,6 +280,7 @@ impl SessionControl {
 		write_envelope(&mut control_send, &env, cfg.max_frame_bytes)
 			.await
 			.map_err(|e| ClientCoreError::Io(format!("send Hello failed: {e}")))?;
+		debug!("sent Hello envelope to server (without sensitive fields)");
 
 		let welcome_env = tokio::time::timeout(connect_timeout, read_one_envelope(&mut control_recv, cfg.max_frame_bytes))
 			.await
@@ -507,6 +515,7 @@ fn event_kind(ev: &pb::EventEnvelope) -> &'static str {
 		Some(pb::event_envelope::Event::TopicLagged(_)) => "topic_lagged",
 		Some(pb::event_envelope::Event::Permissions(_)) => "permissions",
 		Some(pb::event_envelope::Event::AssetBundle(_)) => "asset_bundle",
+		Some(pb::event_envelope::Event::RoomState(_)) => "room_state",
 		None => "empty",
 	}
 }
@@ -559,7 +568,11 @@ fn make_insecure_client_config() -> anyhow::Result<ClientConfig> {
 			_ocsp_response: &[u8],
 			_now: rustls::pki_types::UnixTime,
 		) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-			let _ = _intermediates;
+			use sha2::{Digest, Sha256};
+			let der = _end_entity.as_ref();
+			let digest = Sha256::digest(der);
+			let hex = digest.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+			tracing::info!(cert_sha256 = %hex, "server certificate fingerprint (sha256)");
 			Ok(rustls::client::danger::ServerCertVerified::assertion())
 		}
 

@@ -60,6 +60,7 @@ fn mod_gating_allows_non_moderation_payloads_even_when_not_mod() {
 		},
 		text: "hi".to_string(),
 		badges: Vec::new(),
+		emotes: Vec::new(),
 	});
 
 	assert!(should_emit_payload(false, &room_state));

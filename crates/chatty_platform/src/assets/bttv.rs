@@ -7,10 +7,10 @@ use std::time::Duration;
 use anyhow::Context;
 use parking_lot::Mutex;
 use serde::Deserialize;
-
-use crate::{AssetBundle, AssetProvider, AssetRef, AssetScope};
+use tracing::{info, warn};
 
 use super::common::{CachedBundle, compute_bundle_etag, prune_map_cache, prune_optional_cache};
+use crate::{AssetBundle, AssetProvider, AssetRef, AssetScope};
 
 const BTTV_BASE_URL: &str = "https://api.betterttv.net/3";
 const BTTV_EMOTES_TTL: Duration = Duration::from_secs(300);
@@ -54,6 +54,12 @@ pub async fn fetch_bttv_bundle(provider: &str, provider_id: &str) -> anyhow::Res
 		badges: Vec::new(),
 	};
 
+	if bundle.emotes.is_empty() {
+		warn!(provider=%provider, provider_id=%provider_id, "bttv channel emote bundle empty");
+	} else {
+		info!(provider=%provider, provider_id=%provider_id, emote_count = bundle.emotes.len(), "bttv channel emote bundle fetched");
+	}
+
 	set_cached_bttv_emotes(provider, provider_id, bundle.clone());
 	Ok(bundle)
 }
@@ -84,6 +90,12 @@ pub async fn fetch_bttv_global_emotes_bundle() -> anyhow::Result<AssetBundle> {
 		emotes,
 		badges: Vec::new(),
 	};
+
+	if bundle.emotes.is_empty() {
+		warn!("bttv global emotes bundle empty");
+	} else {
+		info!(emote_count = bundle.emotes.len(), "bttv global emotes bundle fetched");
+	}
 
 	set_cached_bttv_global_emotes(bundle.clone());
 	Ok(bundle)
@@ -121,6 +133,12 @@ pub async fn fetch_bttv_badges_bundle(provider: &str) -> anyhow::Result<AssetBun
 		emotes: Vec::new(),
 		badges,
 	};
+
+	if bundle.badges.is_empty() {
+		warn!(provider=%provider, "bttv badges bundle empty");
+	} else {
+		info!(provider=%provider, badge_count = bundle.badges.len(), "bttv badges bundle fetched");
+	}
 
 	set_cached_bttv_badges(provider, bundle.clone());
 	Ok(bundle)

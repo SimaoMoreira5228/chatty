@@ -228,6 +228,7 @@ async fn run_minimal_server(
 				text: "synthetic smoke-test message".to_string(),
 				platform_time_unix_ms: unix_ms_now(),
 				badge_ids: Vec::new(),
+				emotes: Vec::new(),
 			}),
 			server_message_id: "server-msg-1".to_string(),
 			platform_message_id: String::new(),

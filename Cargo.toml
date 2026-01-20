@@ -44,5 +44,3 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "macros", "sqlite", "postgres", "mysql", "migrate"] }
 
 proptest = "1.9"
-
-ashpd = "0.12.1"

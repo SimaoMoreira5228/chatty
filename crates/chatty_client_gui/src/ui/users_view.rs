@@ -3,14 +3,13 @@
 use std::collections::HashMap;
 
 use chatty_client_ui::app_state::ChatItem;
-use iced::Shadow;
 use iced::widget::{column, container, row, rule, scrollable, svg, text, text_input};
-use iced::{Alignment, Background, Border, Element, Length};
+use iced::{Alignment, Background, Border, Element, Length, Shadow};
+use rust_i18n::t;
 
 use crate::app::{Chatty, Message};
 use crate::assets::svg_handle;
 use crate::theme;
-use rust_i18n::t;
 
 pub fn view(app: &Chatty, palette: theme::Palette) -> Element<'_, Message> {
 	let mut title = t!("users.title").to_string();

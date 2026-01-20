@@ -1,28 +1,33 @@
 #![forbid(unsafe_code)]
 
-use lru::LruCache;
-use std::collections::HashSet;
-use std::num::NonZeroUsize;
-use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
-use tokio::sync::mpsc;
-
+use std::collections::{HashMap, HashSet};
 #[cfg(not(test))]
-use tokio::sync::Semaphore;
+use std::io::Cursor;
+use std::num::NonZeroUsize;
+use std::sync::{Arc, Mutex as StdMutex};
+use std::time::{Duration, Instant};
 
 use chatty_client_core::ClientConfigV1;
 use chatty_client_ui::app_state::{AppState, JoinRequest, TabId, TabTarget, UiNotificationKind};
 use chatty_client_ui::net::{self, NetController};
 use chatty_client_ui::settings::{ShortcutKey, SplitLayoutKind, ThemeKind};
 use chatty_domain::{Platform, RoomKey};
-use iced::Task;
-use iced::keyboard;
 use iced::widget::image::Handle as ImageHandle;
-use iced::widget::pane_grid;
-use tokio::sync::Mutex;
+use iced::widget::{pane_grid, text_editor};
+use iced::{Task, keyboard};
+#[cfg(not(test))]
+use image::AnimationDecoder;
+#[cfg(not(test))]
+use image::codecs::gif::GifDecoder;
+#[cfg(not(test))]
+use image::codecs::webp::WebPDecoder;
+use lru::LruCache;
+use rust_i18n::t;
+#[cfg(not(test))]
+use tokio::sync::Semaphore;
+use tokio::sync::{Mutex, mpsc};
 
 use crate::app::net::{UiEventReceiver, recv_next};
-use rust_i18n::t;
 
 #[allow(dead_code)]
 #[allow(clippy::enum_variant_names)]
@@ -44,7 +49,9 @@ pub enum Message {
 	VimUpKeyChanged(String),
 	VimRightKeyChanged(String),
 	CursorMoved(f32, f32),
+	UserScrolled,
 	WindowResized(f32, f32),
+	AnimationTick(Instant),
 
 	CharPressed(char, keyboard::Modifiers),
 	NamedKeyPressed(iced::keyboard::key::Named),
@@ -83,8 +90,10 @@ pub enum Message {
 	PaneComposerChanged(pane_grid::Pane, String),
 	PaneSendPressed(pane_grid::Pane),
 	Sent(Result<(), String>),
+	MessageTextEdit(String, text_editor::Action),
 
 	MessageActionButtonPressed(chatty_domain::RoomKey, Option<String>, Option<String>, Option<String>),
+	DismissMessageAction,
 	ReplyToMessage(chatty_domain::RoomKey, Option<String>, Option<String>),
 	DeleteMessage(chatty_domain::RoomKey, Option<String>, Option<String>),
 	TimeoutUser(chatty_domain::RoomKey, String),
@@ -111,6 +120,7 @@ pub enum Message {
 	AutoConnectToggled(bool),
 
 	NetPolled(Option<chatty_client_ui::net::UiEvent>),
+	AutoJoinCompleted(Vec<(RoomKey, Result<(), String>)>),
 	NavigatePaneLeft,
 	NavigatePaneDown,
 	NavigatePaneUp,
@@ -300,6 +310,7 @@ pub struct Chatty {
 	pub(crate) modifiers: keyboard::Modifiers,
 
 	pub(crate) window_size: Option<(f32, f32)>,
+	pub(crate) last_cursor_pos: Option<(f32, f32)>,
 	pub(crate) toast: Option<String>,
 
 	pub(crate) pending_import_root: Option<crate::ui::layout::UiRootState>,
@@ -310,11 +321,18 @@ pub struct Chatty {
 	pub(crate) pending_auto_connect_cfg: Option<ClientConfigV1>,
 
 	pub(crate) image_cache: Arc<StdMutex<LruCache<String, ImageHandle>>>,
+	pub(crate) animated_cache: Arc<StdMutex<LruCache<String, AnimatedImage>>>,
 	pub(crate) image_loading: Arc<StdMutex<HashSet<String>>>,
 	pub(crate) image_failed: Arc<StdMutex<HashSet<String>>>,
 	pub(crate) pending_commands: Vec<PendingCommand>,
 	pub(crate) image_fetch_sender: mpsc::Sender<String>,
 	pub(crate) pending_message_action: Option<PendingMessageAction>,
+	pub(crate) message_text_editors: HashMap<String, text_editor::Content>,
+	pub(crate) animation_start: Instant,
+	pub(crate) animation_clock: Instant,
+
+	pub(crate) follow_end: bool,
+	pub(crate) last_focus: Option<std::time::Instant>,
 	pub(crate) pending_deletion: Option<(chatty_domain::RoomKey, Option<String>, Option<String>)>,
 
 	pub(crate) insert_mode: bool,
@@ -339,10 +357,129 @@ pub enum PendingCommand {
 	},
 }
 
-pub(crate) type PendingMessageAction = (chatty_domain::RoomKey, Option<String>, Option<String>, Option<String>);
+#[derive(Debug, Clone)]
+pub(crate) struct PendingMessageAction {
+	pub(crate) room: chatty_domain::RoomKey,
+	pub(crate) server_message_id: Option<String>,
+	pub(crate) platform_message_id: Option<String>,
+	pub(crate) author_id: Option<String>,
+	pub(crate) cursor_pos: Option<(f32, f32)>,
+}
 
 pub(crate) fn first_char_lower(s: &str) -> char {
 	s.chars().next().map(|c| c.to_ascii_lowercase()).unwrap_or('\0')
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AnimatedImage {
+	pub(crate) frames: Vec<ImageHandle>,
+	pub(crate) delays: Vec<Duration>,
+	pub(crate) total: Duration,
+}
+
+impl AnimatedImage {
+	pub(crate) fn frame_at(&self, elapsed: Duration) -> Option<&ImageHandle> {
+		if self.frames.is_empty() {
+			return None;
+		}
+
+		let total_ms = self.total.as_millis() as u64;
+		let mut t_ms = if total_ms == 0 {
+			0
+		} else {
+			(elapsed.as_millis() as u64) % total_ms
+		};
+		for (idx, delay) in self.delays.iter().enumerate() {
+			let delay_ms = delay.as_millis() as u64;
+			if t_ms <= delay_ms {
+				return self.frames.get(idx);
+			}
+			t_ms = t_ms.saturating_sub(delay_ms);
+		}
+
+		self.frames.last()
+	}
+}
+
+#[cfg(not(test))]
+fn decode_animated_image(bytes: &[u8]) -> Option<AnimatedImage> {
+	if bytes.len() < 12 {
+		return None;
+	}
+
+	let is_gif = bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a");
+	let is_webp = bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP");
+
+	if is_gif {
+		return decode_gif(bytes);
+	}
+	if is_webp {
+		return decode_webp(bytes);
+	}
+
+	None
+}
+
+#[cfg(not(test))]
+fn decode_gif(bytes: &[u8]) -> Option<AnimatedImage> {
+	let decoder = GifDecoder::new(Cursor::new(bytes)).ok()?;
+	let frames = decoder.into_frames().collect_frames().ok()?;
+	if frames.len() < 2 {
+		return None;
+	}
+
+	let mut handles = Vec::with_capacity(frames.len());
+	let mut delays = Vec::with_capacity(frames.len());
+	let mut total = Duration::ZERO;
+
+	for frame in frames {
+		let delay = frame.delay();
+		let ms = delay.numer_denom_ms().0.max(20);
+		let d = Duration::from_millis(ms as u64);
+		total += d;
+		delays.push(d);
+		let buffer = frame.into_buffer();
+		let width = buffer.width();
+		let height = buffer.height();
+		handles.push(ImageHandle::from_rgba(width, height, buffer.into_raw()));
+	}
+
+	Some(AnimatedImage {
+		frames: handles,
+		delays,
+		total,
+	})
+}
+
+#[cfg(not(test))]
+fn decode_webp(bytes: &[u8]) -> Option<AnimatedImage> {
+	let decoder = WebPDecoder::new(Cursor::new(bytes)).ok()?;
+	let frames = decoder.into_frames().collect_frames().ok()?;
+	if frames.len() < 2 {
+		return None;
+	}
+
+	let mut handles = Vec::with_capacity(frames.len());
+	let mut delays = Vec::with_capacity(frames.len());
+	let mut total = Duration::ZERO;
+
+	for frame in frames {
+		let delay = frame.delay();
+		let ms = delay.numer_denom_ms().0.max(20);
+		let d = Duration::from_millis(ms as u64);
+		total += d;
+		delays.push(d);
+		let buffer = frame.into_buffer();
+		let width = buffer.width();
+		let height = buffer.height();
+		handles.push(ImageHandle::from_rgba(width, height, buffer.into_raw()));
+	}
+
+	Some(AnimatedImage {
+		frames: handles,
+		delays,
+		total,
+	})
 }
 
 impl Chatty {
@@ -380,6 +517,7 @@ impl Chatty {
 			masonry_flip: false,
 			modifiers: keyboard::Modifiers::default(),
 			window_size: None,
+			last_cursor_pos: None,
 			toast: None,
 			pending_import_root: None,
 			pending_export_root: None,
@@ -388,8 +526,11 @@ impl Chatty {
 			pending_error: None,
 			insert_mode: false,
 			insert_target: None,
+			follow_end: true,
+			last_focus: None,
 			pending_auto_connect_cfg: None,
 			image_cache: Arc::new(StdMutex::new(LruCache::new(NonZeroUsize::new(512).unwrap()))),
+			animated_cache: Arc::new(StdMutex::new(LruCache::new(NonZeroUsize::new(256).unwrap()))),
 			image_loading: Arc::new(StdMutex::new(HashSet::new())),
 			image_failed: Arc::new(StdMutex::new(HashSet::new())),
 			pending_commands: Vec::new(),
@@ -399,11 +540,15 @@ impl Chatty {
 			},
 			pending_deletion: None,
 			pending_message_action: None,
+			message_text_editors: HashMap::new(),
+			animation_start: Instant::now(),
+			animation_clock: Instant::now(),
 		};
 
 		#[cfg(not(test))]
 		{
 			let image_cache_arc = Arc::clone(&instance.image_cache);
+			let animated_cache_arc = Arc::clone(&instance.animated_cache);
 			let image_loading_arc = Arc::clone(&instance.image_loading);
 			let image_failed_arc = Arc::clone(&instance.image_failed);
 			let (img_tx, mut img_rx) = mpsc::channel::<String>(200);
@@ -415,6 +560,7 @@ impl Chatty {
 				let client = reqwest::Client::new();
 				while let Some(url) = img_rx.recv().await {
 					let img_cache = Arc::clone(&image_cache_arc);
+					let animated_cache = Arc::clone(&animated_cache_arc);
 					let image_loading = Arc::clone(&image_loading_arc);
 					let image_failed = Arc::clone(&image_failed_arc);
 					let sem = Arc::clone(&sem);
@@ -430,6 +576,13 @@ impl Chatty {
 						}
 
 						{
+							let guard = animated_cache.lock().unwrap();
+							if guard.contains(&url) {
+								return;
+							}
+						}
+
+						{
 							let mut l = image_loading.lock().unwrap();
 							l.insert(url.clone());
 						}
@@ -438,14 +591,24 @@ impl Chatty {
 						let mut attempt = 0u8;
 						while attempt < 3 && !succeeded {
 							attempt += 1;
+							tracing::debug!(url = %url, attempt, "fetching image");
 							match tokio::time::timeout(std::time::Duration::from_secs(8), client.get(&url).send()).await {
 								Ok(Ok(resp)) => {
 									match tokio::time::timeout(std::time::Duration::from_secs(8), resp.bytes()).await {
 										Ok(Ok(bytes)) => {
-											let handle = iced::widget::image::Handle::from_bytes(bytes.to_vec());
-											let mut g = img_cache.lock().unwrap();
-											g.put(url.clone(), handle);
-											succeeded = true;
+											let bytes = bytes.to_vec();
+											if let Some(animated) = decode_animated_image(&bytes) {
+												let mut g = animated_cache.lock().unwrap();
+												g.put(url.clone(), animated);
+												tracing::info!(url = %url, attempt, "animated image decoded");
+												succeeded = true;
+											} else {
+												let handle = iced::widget::image::Handle::from_bytes(bytes);
+												let mut g = img_cache.lock().unwrap();
+												g.put(url.clone(), handle);
+												tracing::info!(url = %url, attempt, "image fetch succeeded");
+												succeeded = true;
+											}
 										}
 										_ => {
 											if attempt < 3 {
@@ -455,6 +618,7 @@ impl Chatty {
 									}
 								}
 								_ => {
+									tracing::warn!(url = %url, attempt, "image fetch request failed");
 									if attempt < 3 {
 										tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 									}
@@ -470,9 +634,11 @@ impl Chatty {
 						if !succeeded {
 							let mut f = image_failed.lock().unwrap();
 							f.insert(url.clone());
+							tracing::error!(url = %url, "image fetch final failure");
 						} else {
 							let mut f = image_failed.lock().unwrap();
 							f.remove(&url);
+							tracing::debug!(url = %url, "image marked healthy");
 						}
 					});
 				}
@@ -531,6 +697,7 @@ impl Chatty {
 			None
 		}
 	}
+
 	pub fn navigate_pane(&mut self, dx: i32, dy: i32) {
 		let ids: Vec<pane_grid::Pane> = self.panes.iter().map(|(id, _)| *id).collect();
 		if ids.is_empty() {
@@ -557,8 +724,9 @@ impl Chatty {
 	}
 
 	pub fn capture_ui_root(&self) -> crate::ui::layout::UiRootState {
-		use crate::ui::layout::UiTab;
 		use iced::Size;
+
+		use crate::ui::layout::{UiPane, UiTab};
 
 		let mut tabs: Vec<UiTab> = Vec::new();
 		for (_id, tab) in self.state.tabs.iter() {
@@ -572,15 +740,61 @@ impl Chatty {
 			});
 		}
 
+		let mut pane_layouts: std::collections::HashMap<pane_grid::Pane, UiPane> = std::collections::HashMap::new();
+		for (pane_id, pane_state) in self.panes.iter() {
+			let tab_room = pane_state
+				.tab_id
+				.and_then(|tid| self.state.tabs.get(&tid))
+				.and_then(|tab| match &tab.target {
+					TabTarget::Room(room) => Some(room.clone()),
+					_ => None,
+				});
+			pane_layouts.insert(
+				*pane_id,
+				UiPane {
+					join_raw: pane_state.join_raw.clone(),
+					composer: pane_state.composer.clone(),
+					tab_room,
+				},
+			);
+		}
+
 		let (w, h) = self.window_size.unwrap_or((800.0, 600.0));
 		let bounds = Size::new(w, h);
 		let regions_map = self.panes.layout().pane_regions(8.0, 50.0, bounds);
 		let regions_vec: Vec<(pane_grid::Pane, iced::Rectangle)> = regions_map.into_iter().collect();
 
-		fn build_node(regions: &[(pane_grid::Pane, iced::Rectangle)], bounds: iced::Size) -> crate::ui::layout::UiNode {
+		fn build_node(
+			regions: &[(pane_grid::Pane, iced::Rectangle)],
+			bounds: iced::Size,
+			pane_layouts: &std::collections::HashMap<pane_grid::Pane, UiPane>,
+		) -> crate::ui::layout::UiNode {
+			let bounds_for = |regions: &[(pane_grid::Pane, iced::Rectangle)]| -> iced::Rectangle {
+				let mut min_x = f32::MAX;
+				let mut min_y = f32::MAX;
+				let mut max_x = f32::MIN;
+				let mut max_y = f32::MIN;
+				for (_pane, r) in regions {
+					min_x = min_x.min(r.x);
+					min_y = min_y.min(r.y);
+					max_x = max_x.max(r.x + r.width);
+					max_y = max_y.max(r.y + r.height);
+				}
+				if min_x == f32::MAX {
+					return iced::Rectangle::with_size(iced::Size::new(bounds.width, bounds.height));
+				}
+				iced::Rectangle {
+					x: min_x,
+					y: min_y,
+					width: (max_x - min_x).max(1.0),
+					height: (max_y - min_y).max(1.0),
+				}
+			};
+
 			if regions.len() == 1 {
-				let (_p, _r) = &regions[0];
-				return crate::ui::layout::UiNode::Leaf(crate::ui::layout::UiPane::default());
+				let (p, _r) = &regions[0];
+				let pane_state = pane_layouts.get(p).cloned().unwrap_or_default();
+				return crate::ui::layout::UiNode::Leaf(pane_state);
 			}
 
 			let mut centers_x: Vec<f32> = regions.iter().map(|(_, r)| r.x + r.width / 2.0).collect();
@@ -598,14 +812,12 @@ impl Chatty {
 			}
 
 			if !left.is_empty() && !right.is_empty() {
-				let left_width = left.iter().map(|(_, r)| r.width).sum::<f32>();
-				let right_width = right.iter().map(|(_, r)| r.width).sum::<f32>();
-				let total_width = (left_width + right_width).max(1.0);
-				let ratio = (left_width / total_width).clamp(0.05, 0.95);
-				let first_bounds = iced::Size::new(left_width, bounds.height);
-				let second_bounds = iced::Size::new(right_width, bounds.height);
-				let first = build_node(&left, first_bounds);
-				let second = build_node(&right, second_bounds);
+				let left_bounds = bounds_for(&left);
+				let ratio = (left_bounds.width / bounds.width.max(1.0)).clamp(0.05, 0.95);
+				let first_bounds = iced::Size::new(bounds.width * ratio, bounds.height);
+				let second_bounds = iced::Size::new(bounds.width * (1.0 - ratio), bounds.height);
+				let first = build_node(&left, first_bounds, pane_layouts);
+				let second = build_node(&right, second_bounds, pane_layouts);
 				return crate::ui::layout::UiNode::Split {
 					axis: crate::ui::layout::UiAxis::Vertical,
 					ratio,
@@ -629,14 +841,12 @@ impl Chatty {
 			}
 
 			if !top.is_empty() && !bottom.is_empty() {
-				let top_h = top.iter().map(|(_, r)| r.height).sum::<f32>();
-				let bottom_h = bottom.iter().map(|(_, r)| r.height).sum::<f32>();
-				let total_h = (top_h + bottom_h).max(1.0);
-				let ratio = (top_h / total_h).clamp(0.05, 0.95);
-				let first_bounds = iced::Size::new(bounds.width, top_h);
-				let second_bounds = iced::Size::new(bounds.width, bottom_h);
-				let first = build_node(&top, first_bounds);
-				let second = build_node(&bottom, second_bounds);
+				let top_bounds = bounds_for(&top);
+				let ratio = (top_bounds.height / bounds.height.max(1.0)).clamp(0.05, 0.95);
+				let first_bounds = iced::Size::new(bounds.width, bounds.height * ratio);
+				let second_bounds = iced::Size::new(bounds.width, bounds.height * (1.0 - ratio));
+				let first = build_node(&top, first_bounds, pane_layouts);
+				let second = build_node(&bottom, second_bounds, pane_layouts);
 				return crate::ui::layout::UiNode::Split {
 					axis: crate::ui::layout::UiAxis::Horizontal,
 					ratio,
@@ -647,7 +857,10 @@ impl Chatty {
 
 			let mut items: Vec<(crate::ui::layout::UiNode, iced::Rectangle)> = regions
 				.iter()
-				.map(|(_, r)| (crate::ui::layout::UiNode::Leaf(crate::ui::layout::UiPane::default()), *r))
+				.map(|(p, r)| {
+					let pane_state = pane_layouts.get(p).cloned().unwrap_or_default();
+					(crate::ui::layout::UiNode::Leaf(pane_state), *r)
+				})
 				.collect();
 
 			while items.len() > 1 {
@@ -706,7 +919,7 @@ impl Chatty {
 			items.into_iter().next().map(|(n, _)| n).unwrap_or_default()
 		}
 
-		let root_node = build_node(&regions_vec, bounds);
+		let root_node = build_node(&regions_vec, bounds, &pane_layouts);
 
 		let ids: Vec<pane_grid::Pane> = self.panes.iter().map(|(id, _)| *id).collect();
 		let focused_idx = ids.iter().position(|p| *p == self.focused_pane).unwrap_or(0);
@@ -759,13 +972,17 @@ impl Chatty {
 			reply_to_platform_message_id: String::new(),
 		});
 
-		fn build_on_pane(node: &UiNode, panes: &mut pane_grid::State<PaneState>, pane_id: pane_grid::Pane) {
+		fn build_on_pane<F>(
+			node: &UiNode,
+			panes: &mut pane_grid::State<PaneState>,
+			pane_id: pane_grid::Pane,
+			apply_leaf: &mut F,
+		) where
+			F: FnMut(&crate::ui::layout::UiPane, pane_grid::Pane, &mut pane_grid::State<PaneState>),
+		{
 			match node {
 				UiNode::Leaf(up) => {
-					if let Some(p) = panes.get_mut(pane_id) {
-						p.composer = up.composer.clone();
-						p.join_raw = up.join_raw.clone();
-					}
+					apply_leaf(up, pane_id, panes);
 				}
 				UiNode::Split {
 					axis,
@@ -788,15 +1005,30 @@ impl Chatty {
 						pane_id,
 						new_state,
 					) {
-						build_on_pane(first, panes, pane_id);
-						build_on_pane(second, panes, new_pane);
+						build_on_pane(first, panes, pane_id, apply_leaf);
+						build_on_pane(second, panes, new_pane, apply_leaf);
 						panes.resize(split, *ratio);
 					}
 				}
 			}
 		}
 
-		build_on_pane(&root.root, &mut new_panes, new_root);
+		let mut apply_leaf =
+			|up: &crate::ui::layout::UiPane, pane_id: pane_grid::Pane, panes: &mut pane_grid::State<PaneState>| {
+				if let Some(p) = panes.get_mut(pane_id) {
+					p.composer = up.composer.clone();
+					p.join_raw = up.join_raw.clone();
+					if let Some(room) = up.tab_room.as_ref() {
+						let tid = self.ensure_tab_for_room(room);
+						p.tab_id = Some(tid);
+						if p.join_raw.trim().is_empty() {
+							p.join_raw = format!("{}:{}", room.platform.as_str(), room.room_id.as_str());
+						}
+					}
+				}
+			};
+
+		build_on_pane(&root.root, &mut new_panes, new_root, &mut apply_leaf);
 
 		self.panes = new_panes;
 
@@ -869,6 +1101,38 @@ impl Chatty {
 		self.panes.get(self.focused_pane).and_then(|p| p.tab_id)
 	}
 
+	pub(crate) fn message_key(m: &chatty_client_ui::app_state::ChatMessageUi) -> String {
+		let time = m
+			.time
+			.duration_since(std::time::UNIX_EPOCH)
+			.map(|d| d.as_millis())
+			.unwrap_or(0);
+		format!(
+			"{}:{}:{}:{}",
+			m.room,
+			m.server_message_id.as_deref().unwrap_or(""),
+			m.platform_message_id.as_deref().unwrap_or(""),
+			time
+		)
+	}
+
+	pub(crate) fn selection_text(text: &str) -> String {
+		let mut out = String::with_capacity(text.len());
+		let mut chars = text.chars().peekable();
+		while let Some(ch) = chars.next() {
+			if is_emoji_base(ch) {
+				out.push('□');
+				consume_emoji_suffix(&mut chars);
+				continue;
+			}
+			if is_emoji_modifier(ch) || is_variation_selector(ch) || is_zwj(ch) {
+				continue;
+			}
+			out.push(ch);
+		}
+		out
+	}
+
 	pub(crate) fn pane_room(&self, pane: pane_grid::Pane) -> Option<RoomKey> {
 		let tab_id = self.panes.get(pane).and_then(|p| p.tab_id)?;
 		let tab = self.state.tabs.get(&tab_id)?;
@@ -918,10 +1182,53 @@ impl Chatty {
 	}
 }
 
+fn is_emoji_base(ch: char) -> bool {
+	let code = ch as u32;
+	(0x1F300..=0x1FAFF).contains(&code) || (0x2600..=0x27BF).contains(&code) || (0x1F1E6..=0x1F1FF).contains(&code)
+}
+
+fn is_emoji_modifier(ch: char) -> bool {
+	matches!(ch as u32, 0x1F3FB..=0x1F3FF)
+}
+
+fn is_variation_selector(ch: char) -> bool {
+	matches!(ch, '\u{FE0E}' | '\u{FE0F}')
+}
+
+fn is_zwj(ch: char) -> bool {
+	ch == '\u{200D}'
+}
+
+fn consume_emoji_suffix<I>(chars: &mut std::iter::Peekable<I>)
+where
+	I: Iterator<Item = char>,
+{
+	loop {
+		match chars.peek().copied() {
+			Some(next) if is_variation_selector(next) || is_emoji_modifier(next) => {
+				chars.next();
+			}
+			Some(next) if is_zwj(next) => {
+				chars.next();
+				if let Some(after) = chars.next()
+					&& is_emoji_base(after)
+				{
+					continue;
+				}
+			}
+			Some(next) if (next as u32) >= 0x1F1E6 && (next as u32) <= 0x1F1FF => {
+				chars.next();
+			}
+			_ => break,
+		}
+	}
+}
+
 #[cfg(test)]
 mod tests {
-	use super::*;
 	use tempfile::tempdir;
+
+	use super::*;
 
 	fn roundtrip_for_layout<F>(mut make_layout: F)
 	where

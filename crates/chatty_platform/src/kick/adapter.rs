@@ -7,12 +7,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use chatty_domain::{Platform, RoomId, RoomKey};
-use tracing::{debug, info, warn};
-
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use bytes::Bytes;
+use chatty_domain::{Platform, RoomId, RoomKey};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
@@ -24,7 +22,9 @@ use rsa::pkcs8::DecodePublicKey;
 use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
+use tracing::{debug, info, warn};
 
+use super::client::KickClient;
 use crate::assets::{
 	SevenTvPlatform, ensure_asset_cache_pruner, fetch_7tv_badges_bundle, fetch_7tv_bundle, fetch_7tv_channel_badges_bundle,
 	fetch_kick_badge_bundle, fetch_kick_emote_bundle,
@@ -34,8 +34,6 @@ use crate::{
 	ChatMessage, CommandError, CommandRequest, IngestEvent, IngestPayload, PermissionsInfo, PlatformAdapter, SecretString,
 	UserRef, new_session_id, status,
 };
-
-use super::client::KickClient;
 
 #[derive(Clone)]
 pub struct KickConfig {
@@ -345,6 +343,7 @@ fn parse_numeric_id(value: &str) -> Result<u64, CommandError> {
 }
 
 const KICK_PUBLIC_KEY_PEM: &str = include_str!("public_key.pem");
+const MAX_KICK_WEBHOOK_BODY_BYTES: usize = 1_048_576; // 1 MiB
 
 #[derive(Debug, serde::Deserialize)]
 struct KickWebhookChatMessage {
@@ -403,19 +402,40 @@ struct KickWebhookState {
 	events_tx: AdapterEventTx,
 }
 
-async fn run_kick_webhook_server(bind: SocketAddr, state: KickWebhookState) -> anyhow::Result<()> {
+async fn run_kick_webhook_server(
+	bind: SocketAddr,
+	state: KickWebhookState,
+	mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+) -> anyhow::Result<()> {
 	let listener = TcpListener::bind(bind).await?;
 	loop {
-		let (stream, _addr) = listener.accept().await?;
-		let io = TokioIo::new(stream);
-		let state = state.clone();
-		tokio::spawn(async move {
-			let service = service_fn(move |req| handle_kick_webhook(req, state.clone()));
-			if let Err(err) = http1::Builder::new().serve_connection(io, service).await {
-				warn!(error = %err, "kick webhook connection error");
+		tokio::select! {
+			biased;
+			_ = shutdown_rx.changed() => {
+				info!(%bind, "kick webhook server shutting down");
+				break;
 			}
-		});
+			accept = listener.accept() => {
+				match accept {
+					Ok((stream, _addr)) => {
+						let io = TokioIo::new(stream);
+						let state = state.clone();
+						tokio::spawn(async move {
+							let service = service_fn(move |req| handle_kick_webhook(req, state.clone()));
+							if let Err(err) = http1::Builder::new().serve_connection(io, service).await {
+								warn!(error = %err, "kick webhook connection error");
+							}
+						});
+					}
+					Err(err) => {
+						warn!(error = %err, "kick webhook accept failed");
+						tokio::time::sleep(Duration::from_millis(100)).await;
+					}
+				}
+			}
+		}
 	}
+	Ok(())
 }
 
 async fn handle_kick_webhook(
@@ -467,6 +487,14 @@ async fn handle_kick_webhook(
 		}
 	};
 
+	if body_bytes.len() > MAX_KICK_WEBHOOK_BODY_BYTES {
+		metrics::counter!("chatty_kick_webhook_body_too_large_total").increment(1);
+		return Ok(Response::builder()
+			.status(StatusCode::PAYLOAD_TOO_LARGE)
+			.body(Full::new(Bytes::new()))
+			.unwrap());
+	}
+
 	if state.verify_signatures {
 		if state.public_key.is_none() {
 			warn!("kick webhook signature verification enabled but no public key is configured");
@@ -483,6 +511,29 @@ async fn handle_kick_webhook(
 				.body(Full::new(Bytes::new()))
 				.unwrap());
 		}
+
+		match chrono::DateTime::parse_from_rfc3339(timestamp) {
+			Ok(parsed_ts) => {
+				let parsed_utc = parsed_ts.with_timezone(&chrono::Utc);
+				let now = chrono::Utc::now();
+				let age_secs = (now.signed_duration_since(parsed_utc)).num_seconds().abs();
+				if age_secs > 300 {
+					metrics::counter!("chatty_kick_webhook_stale_timestamp_total").increment(1);
+					return Ok(Response::builder()
+						.status(StatusCode::UNAUTHORIZED)
+						.body(Full::new(Bytes::new()))
+						.unwrap());
+				}
+			}
+			Err(_) => {
+				metrics::counter!("chatty_kick_webhook_timestamp_invalid_total").increment(1);
+				return Ok(Response::builder()
+					.status(StatusCode::UNAUTHORIZED)
+					.body(Full::new(Bytes::new()))
+					.unwrap());
+			}
+		}
+
 		let mut signed = Vec::new();
 		signed.extend_from_slice(message_id.as_bytes());
 		signed.push(b'.');
@@ -665,6 +716,8 @@ impl PlatformAdapter for KickEventAdapter {
 		let session_id = new_session_id();
 		let platform = this.platform();
 
+		let mut webhook_shutdown_tx: Option<tokio::sync::watch::Sender<bool>> = None;
+
 		if let Some(bind) = this.cfg.webhook_bind {
 			let public_key_pem = if let Some(path) = this.cfg.webhook_public_key_path.clone() {
 				match std::fs::read_to_string(&path) {
@@ -692,8 +745,11 @@ impl PlatformAdapter for KickEventAdapter {
 			let status_detail = format!("kick webhook listening on {bind}{}", this.cfg.webhook_path);
 			let _ = events_tx.try_send(status(platform, true, status_detail));
 
+			let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+			webhook_shutdown_tx = Some(shutdown_tx.clone());
+
 			tokio::spawn(async move {
-				if let Err(err) = run_kick_webhook_server(bind, state).await {
+				if let Err(err) = run_kick_webhook_server(bind, state, shutdown_rx).await {
 					warn!(error = %err, "kick webhook server stopped");
 				}
 			});
@@ -724,13 +780,15 @@ impl PlatformAdapter for KickEventAdapter {
 					if guard.insert(room.clone()) {
 						let detail = format!("joined kick room:{}", room.room_id.as_str());
 						let _ = events_tx.try_send(status(platform, true, detail));
+						let cache_key = format!("kick:channel:{}:native", room.room_id.as_str());
+						info!(%platform, room=%room.room_id, cache_key=%cache_key, "emitting AssetBundle ingest");
 						let ingest = IngestEvent::new(
 							platform,
 							room.room_id.clone(),
 							IngestPayload::AssetBundle(AssetBundle {
 								provider: AssetProvider::Kick,
 								scope: AssetScope::Channel,
-								cache_key: format!("kick:channel:{}:native", room.room_id.as_str()),
+								cache_key: cache_key.clone(),
 								etag: Some("empty".to_string()),
 								emotes: Vec::new(),
 								badges: Vec::new(),
@@ -743,9 +801,11 @@ impl PlatformAdapter for KickEventAdapter {
 						let broadcaster_id = this.resolve_broadcaster_id(&room).await.ok();
 						tokio::spawn(async move {
 							if let Some(id) = broadcaster_id {
+								info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, "fetching 7tv channel badges bundle (kick)");
 								if let Ok(bundle) =
 									fetch_7tv_channel_badges_bundle(SevenTvPlatform::Kick, &id.to_string()).await
 								{
+									info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
 									let ingest = IngestEvent::new(
 										Platform::Kick,
 										room_for_assets.room_id.clone(),
@@ -754,7 +814,9 @@ impl PlatformAdapter for KickEventAdapter {
 									let _ = events_tx.try_send(AdapterEvent::Ingest(Box::new(ingest)));
 								}
 
+								info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, "fetching 7tv emote set bundle (kick)");
 								if let Ok(bundle) = fetch_7tv_bundle(SevenTvPlatform::Kick, &id.to_string()).await {
+									info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
 									let ingest = IngestEvent::new(
 										Platform::Kick,
 										room_for_assets.room_id.clone(),
@@ -765,6 +827,7 @@ impl PlatformAdapter for KickEventAdapter {
 							}
 
 							if let Ok(bundle) = fetch_7tv_badges_bundle().await {
+								info!(%platform, room=%room_for_assets.room_id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
 								let ingest = IngestEvent::new(
 									Platform::Kick,
 									room_for_assets.room_id.clone(),
@@ -774,6 +837,7 @@ impl PlatformAdapter for KickEventAdapter {
 							}
 
 							if let Some(bundle) = fetch_kick_badge_bundle(room_for_assets.room_id.as_str()).await {
+								info!(%platform, room=%room_for_assets.room_id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
 								let ingest = IngestEvent::new(
 									Platform::Kick,
 									room_for_assets.room_id.clone(),
@@ -818,6 +882,10 @@ impl PlatformAdapter for KickEventAdapter {
 				}
 				AdapterControl::Shutdown => {
 					info!(%platform, "kick adapter received Shutdown");
+
+					if let Some(tx) = webhook_shutdown_tx.take() {
+						let _ = tx.send(true);
+					}
 					break;
 				}
 			}

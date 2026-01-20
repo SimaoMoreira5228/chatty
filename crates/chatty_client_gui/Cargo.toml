@@ -20,6 +20,7 @@ tracing-subscriber.workspace = true
 
 dirs = { workspace = true }
 iced = { version = "0.14", features = ["image", "selector", "svg", "tokio", "advanced"] }
+image = { version = "0.25", default-features = false, features = ["gif", "webp"] }
 lru = "0.16"
 open = "5.3"
 reqwest = { version = "0.13", features = ["native-tls"] }

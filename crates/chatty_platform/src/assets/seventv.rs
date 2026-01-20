@@ -7,10 +7,10 @@ use std::time::Duration;
 use anyhow::{Context, anyhow};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-
-use crate::{AssetBundle, AssetProvider, AssetRef, AssetScope};
+use tracing::info;
 
 use super::common::{CachedBundle, compute_bundle_etag, prune_map_cache, prune_optional_cache};
+use crate::{AssetBundle, AssetProvider, AssetRef, AssetScope};
 
 const SEVENTV_GQL_URL: &str = "https://api.7tv.app/v4/gql";
 const SEVENTV_EMOTES_TTL: Duration = Duration::from_secs(300);
@@ -43,27 +43,50 @@ pub async fn fetch_7tv_bundle(platform: SevenTvPlatform, platform_id: &str) -> a
 
 	let query = r#"
 query UserEmoteSet($platform: Platform!, $platformId: String!) {
-  userByConnection(platform: $platform, platformId: $platformId) {
-    personalEmoteSet {
-      id
-      emotes {
-        items {
-          alias
-          emote {
-            id
-            defaultName
-            images {
-              url
-              width
-              height
-              mime
-              scale
-            }
-          }
-        }
-      }
-    }
-  }
+	users {
+		userByConnection(platform: $platform, platformId: $platformId) {
+			personalEmoteSet {
+				id
+				emotes {
+					items {
+						alias
+						emote {
+							id
+							defaultName
+							images {
+								url
+								width
+								height
+								mime
+								scale
+							}
+						}
+					}
+				}
+			}
+			style {
+				activeEmoteSet {
+					id
+					emotes {
+						items {
+							alias
+							emote {
+								id
+								defaultName
+								images {
+									url
+									width
+									height
+									mime
+									scale
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
 }
 "#;
 
@@ -87,8 +110,9 @@ query UserEmoteSet($platform: Platform!, $platformId: String!) {
 	let body: SevenTvResponse = resp.json().await.context("7tv gql json")?;
 	let set = body
 		.data
-		.and_then(|d| d.user_by_connection)
-		.and_then(|u| u.personal_emote_set)
+		.and_then(|d| d.users)
+		.and_then(|u| u.user_by_connection)
+		.and_then(|u| u.personal_emote_set.or_else(|| u.style.and_then(|s| s.active_emote_set)))
 		.ok_or_else(|| anyhow!("7tv emote set not found"))?;
 
 	let emotes: Vec<AssetRef> = set.emotes.items.into_iter().filter_map(seventv_emote_to_asset).collect();
@@ -102,6 +126,8 @@ query UserEmoteSet($platform: Platform!, $platformId: String!) {
 		emotes,
 		badges: Vec::new(),
 	};
+
+	info!(platform=%platform.as_str(), platform_id=%platform_id, cache_key=%bundle.cache_key, emote_count=bundle.emotes.len(), "7tv channel emote bundle fetched");
 
 	set_cached_7tv_emotes(platform, platform_id, bundle.clone());
 	Ok(bundle)
@@ -167,6 +193,8 @@ query Badges {
 		badges,
 	};
 
+	info!(cache_key=%bundle.cache_key, badge_count=bundle.badges.len(), "7tv global badges bundle fetched");
+
 	set_cached_7tv_badges(bundle.clone());
 	Ok(bundle)
 }
@@ -178,38 +206,40 @@ pub async fn fetch_7tv_channel_badges_bundle(platform: SevenTvPlatform, platform
 
 	let query = r#"
 query ChannelBadges($platform: Platform!, $platformId: String!) {
-  userByConnection(platform: $platform, platformId: $platformId) {
-    style {
-      activeBadge {
-        id
-        name
-        images {
-          url
-          width
-          height
-          mime
-          scale
-        }
-      }
-    }
-    inventory {
-      badges {
-        to {
-          badge {
-            id
-            name
-            images {
-              url
-              width
-              height
-              mime
-              scale
-            }
-          }
-        }
-      }
-    }
-  }
+	users {
+		userByConnection(platform: $platform, platformId: $platformId) {
+			style {
+				activeBadge {
+					id
+					name
+					images {
+						url
+						width
+						height
+						mime
+						scale
+					}
+				}
+			}
+			inventory {
+				badges {
+					to {
+						badge {
+							id
+							name
+							images {
+								url
+								width
+								height
+								mime
+								scale
+							}
+						}
+					}
+				}
+			}
+		}
+	}
 }
 "#;
 
@@ -233,7 +263,8 @@ query ChannelBadges($platform: Platform!, $platformId: String!) {
 	let body: SevenTvChannelBadgesResponse = resp.json().await.context("7tv channel badges gql json")?;
 	let user = body
 		.data
-		.and_then(|d| d.user_by_connection)
+		.and_then(|d| d.users)
+		.and_then(|u| u.user_by_connection)
 		.ok_or_else(|| anyhow!("7tv user not found"))?;
 
 	let mut dedupe: HashMap<String, AssetRef> = HashMap::new();
@@ -266,6 +297,8 @@ query ChannelBadges($platform: Platform!, $platformId: String!) {
 		badges,
 	};
 
+	info!(platform=%platform.as_str(), platform_id=%platform_id, cache_key=%bundle.cache_key, badge_count=bundle.badges.len(), "7tv channel badges bundle fetched");
+
 	set_cached_7tv_channel_badges(platform, platform_id, bundle.clone());
 	Ok(bundle)
 }
@@ -283,7 +316,7 @@ pub(crate) fn prune_caches() {
 }
 
 fn seventv_emote_to_asset(item: SevenTvEmoteSetEmote) -> Option<AssetRef> {
-	let image = pick_seventv_image(&item.emote.images)?;
+	let image = pick_seventv_emote_image(&item.emote.images)?;
 
 	let name = if item.alias.trim().is_empty() {
 		item.emote.default_name.clone()
@@ -302,7 +335,7 @@ fn seventv_emote_to_asset(item: SevenTvEmoteSetEmote) -> Option<AssetRef> {
 }
 
 fn seventv_badge_to_asset(badge: SevenTvBadge) -> Option<AssetRef> {
-	let image = pick_seventv_image(&badge.images)?;
+	let image = pick_seventv_badge_image(&badge.images)?;
 
 	Some(AssetRef {
 		id: badge.id,
@@ -314,12 +347,24 @@ fn seventv_badge_to_asset(badge: SevenTvBadge) -> Option<AssetRef> {
 	})
 }
 
-fn pick_seventv_image(images: &[SevenTvImage]) -> Option<&SevenTvImage> {
+fn pick_seventv_emote_image(images: &[SevenTvImage]) -> Option<&SevenTvImage> {
+	pick_seventv_image(images, true)
+}
+
+fn pick_seventv_badge_image(images: &[SevenTvImage]) -> Option<&SevenTvImage> {
+	pick_seventv_image(images, false)
+}
+
+fn pick_seventv_image(images: &[SevenTvImage], prefer_gif: bool) -> Option<&SevenTvImage> {
 	if images.is_empty() {
 		return None;
 	}
 
-	let preferred_mimes = ["image/png", "image/gif", "image/webp", "image/avif"];
+	let preferred_mimes = if prefer_gif {
+		["image/gif", "image/webp", "image/png", "image/avif"]
+	} else {
+		["image/png", "image/webp", "image/gif", "image/avif"]
+	};
 
 	for mime in preferred_mimes {
 		if let Some(img) = images
@@ -438,6 +483,11 @@ struct SevenTvResponse {
 
 #[derive(Debug, Deserialize)]
 struct SevenTvData {
+	users: Option<SevenTvUsersQuery>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SevenTvUsersQuery {
 	#[serde(rename = "userByConnection")]
 	user_by_connection: Option<SevenTvUser>,
 }
@@ -454,6 +504,11 @@ struct SevenTvChannelBadgesResponse {
 
 #[derive(Debug, Deserialize)]
 struct SevenTvChannelBadgesData {
+	users: Option<SevenTvUsersChannelBadgesQuery>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SevenTvUsersChannelBadgesQuery {
 	#[serde(rename = "userByConnection")]
 	user_by_connection: Option<SevenTvChannelBadgesUser>,
 }
@@ -488,6 +543,8 @@ struct SevenTvEntitlementNodeBadge {
 struct SevenTvUserStyle {
 	#[serde(rename = "activeBadge")]
 	active_badge: Option<SevenTvBadge>,
+	#[serde(rename = "activeEmoteSet")]
+	active_emote_set: Option<SevenTvEmoteSet>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -505,6 +562,8 @@ struct SevenTvBadges {
 struct SevenTvUser {
 	#[serde(rename = "personalEmoteSet")]
 	personal_emote_set: Option<SevenTvEmoteSet>,
+	#[serde(default)]
+	style: Option<SevenTvUserStyle>,
 }
 
 #[derive(Debug, Deserialize)]

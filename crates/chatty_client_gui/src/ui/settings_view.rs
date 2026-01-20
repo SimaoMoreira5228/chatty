@@ -5,9 +5,10 @@ use iced::{Alignment, Background, Border, Element, Length, Shadow};
 use rust_i18n::t;
 include!(concat!(env!("OUT_DIR"), "/locales_generated.rs"));
 
+use chatty_domain::Platform;
+
 use crate::app::{Chatty, Message, PlatformChoice, SettingsCategory, ShortcutKeyChoice, SplitLayoutChoice, ThemeChoice};
 use crate::theme;
-use chatty_domain::Platform;
 
 fn single_char(s: &str) -> String {
 	s.chars()
@@ -64,249 +65,253 @@ pub fn view(app: &Chatty, palette: theme::Palette) -> Element<'_, Message> {
 
 	let gs = app.state.gui_settings().clone();
 	let right: Element<'_, Message> = match app.settings_category {
-		SettingsCategory::General => column![
-			text(t!("settings.general")).color(palette.text),
-			rule::horizontal(1),
-			row![text(t!("settings.theme")).color(palette.text_dim), theme_picker]
+		SettingsCategory::General => scrollable(
+			column![
+				text(t!("settings.general")).color(palette.text),
+				rule::horizontal(1),
+				row![text(t!("settings.theme")).color(palette.text_dim), theme_picker]
+					.spacing(12)
+					.align_y(Alignment::Center),
+				row![text(t!("settings.default_split")).color(palette.text_dim), split_picker]
+					.spacing(12)
+					.align_y(Alignment::Center),
+				row![text(t!("settings.default_platform")).color(palette.text_dim), platform_picker]
+					.spacing(12)
+					.align_y(Alignment::Center),
+				row![
+					text(t!("settings.max_log_items")).color(palette.text_dim),
+					text_input("2000", &app.max_log_items_raw).on_input(Message::MaxLogItemsChanged),
+				]
 				.spacing(12)
 				.align_y(Alignment::Center),
-			row![text(t!("settings.default_split")).color(palette.text_dim), split_picker]
+				row![
+					text(t!("settings.auto_connect")).color(palette.text_dim),
+					iced::widget::checkbox(gs.auto_connect_on_startup).on_toggle(Message::AutoConnectToggled),
+				]
 				.spacing(12)
 				.align_y(Alignment::Center),
-			row![text(t!("settings.default_platform")).color(palette.text_dim), platform_picker]
+				row![text(t!("settings.locale")).color(palette.text_dim), {
+					let locales: &'static [&'static str] = AVAILABLE_LOCALES;
+					let selected: Option<&'static str> = locales
+						.iter()
+						.copied()
+						.find(|s| *s == gs.locale)
+						.or_else(|| locales.first().copied());
+					pick_list(locales, selected, |s: &'static str| Message::LocaleSelected(s.to_string()))
+				}]
 				.spacing(12)
 				.align_y(Alignment::Center),
-			row![
-				text(t!("settings.max_log_items")).color(palette.text_dim),
-				text_input("2000", &app.max_log_items_raw).on_input(Message::MaxLogItemsChanged),
 			]
 			.spacing(12)
-			.align_y(Alignment::Center),
-			row![
-				text(t!("settings.auto_connect")).color(palette.text_dim),
-				iced::widget::checkbox(gs.auto_connect_on_startup).on_toggle(Message::AutoConnectToggled),
-			]
-			.spacing(12)
-			.align_y(Alignment::Center),
-			row![text(t!("settings.locale")).color(palette.text_dim), {
-				let locales: &'static [&'static str] = AVAILABLE_LOCALES;
-				let selected: Option<&'static str> = locales
-					.iter()
-					.copied()
-					.find(|s| *s == gs.locale)
-					.or_else(|| locales.first().copied());
-				pick_list(locales, selected, |s: &'static str| Message::LocaleSelected(s.to_string()))
-			}]
-			.spacing(12)
-			.align_y(Alignment::Center),
-		]
-		.spacing(12)
-		.padding(12)
+			.padding(12),
+		)
 		.into(),
-		SettingsCategory::Keybinds => column![
-			text(t!("settings.keybinds")).color(palette.text),
-			rule::horizontal(1),
-			text(t!("settings.pane_drag_drop")).color(palette.text_dim),
-			row![
-				text(t!("settings.hold_to_drag")).color(palette.text_dim),
-				drag_modifier_picker
-			]
-			.spacing(12)
-			.align_y(Alignment::Center),
-			text(t!("settings.split_actions")).color(palette.text_dim),
-			row![
-				text(t!("settings.close_split")).color(palette.text_dim),
-				container(close_key_input).padding(2).style(move |_theme| container::Style {
-					text_color: Some(palette.text),
-					background: Some(Background::Color(palette.surface_bg)),
-					border: Border {
-						color: if close_invalid { red } else { palette.border },
-						width: 1.0,
-						radius: 6.0.into(),
-					},
-					shadow: Shadow::default(),
-					snap: false,
-				}),
-				if close_invalid {
-					text(t!("settings.required")).color(red)
-				} else {
-					text("")
-				}
-			]
-			.spacing(12)
-			.align_y(Alignment::Center),
-			row![
-				text(t!("settings.new_split")).color(palette.text_dim),
-				container(new_key_input).padding(2).style(move |_theme| container::Style {
-					text_color: Some(palette.text),
-					background: Some(Background::Color(palette.surface_bg)),
-					border: Border {
-						color: if new_invalid { red } else { palette.border },
-						width: 1.0,
-						radius: 6.0.into(),
-					},
-					shadow: Shadow::default(),
-					snap: false,
-				}),
-				if new_invalid {
-					text(t!("settings.required")).color(red)
-				} else {
-					text("")
-				}
-			]
-			.spacing(12)
-			.align_y(Alignment::Center),
-			row![
-				text(t!("settings.reconnect")).color(palette.text_dim),
-				container(reconnect_key_input)
-					.padding(2)
-					.style(move |_theme| container::Style {
+		SettingsCategory::Keybinds => scrollable(
+			column![
+				text(t!("settings.keybinds")).color(palette.text),
+				rule::horizontal(1),
+				text(t!("settings.pane_drag_drop")).color(palette.text_dim),
+				row![
+					text(t!("settings.hold_to_drag")).color(palette.text_dim),
+					drag_modifier_picker
+				]
+				.spacing(12)
+				.align_y(Alignment::Center),
+				text(t!("settings.split_actions")).color(palette.text_dim),
+				row![
+					text(t!("settings.close_split")).color(palette.text_dim),
+					container(close_key_input).padding(2).style(move |_theme| container::Style {
 						text_color: Some(palette.text),
 						background: Some(Background::Color(palette.surface_bg)),
 						border: Border {
-							color: if reconnect_invalid { red } else { palette.border },
+							color: if close_invalid { red } else { palette.border },
 							width: 1.0,
 							radius: 6.0.into(),
 						},
 						shadow: Shadow::default(),
 						snap: false,
 					}),
-				if reconnect_invalid {
-					text(t!("settings.required")).color(red)
-				} else {
-					text("")
-				}
+					if close_invalid {
+						text(t!("settings.required")).color(red)
+					} else {
+						text("")
+					}
+				]
+				.spacing(12)
+				.align_y(Alignment::Center),
+				row![
+					text(t!("settings.new_split")).color(palette.text_dim),
+					container(new_key_input).padding(2).style(move |_theme| container::Style {
+						text_color: Some(palette.text),
+						background: Some(Background::Color(palette.surface_bg)),
+						border: Border {
+							color: if new_invalid { red } else { palette.border },
+							width: 1.0,
+							radius: 6.0.into(),
+						},
+						shadow: Shadow::default(),
+						snap: false,
+					}),
+					if new_invalid {
+						text(t!("settings.required")).color(red)
+					} else {
+						text("")
+					}
+				]
+				.spacing(12)
+				.align_y(Alignment::Center),
+				row![
+					text(t!("settings.reconnect")).color(palette.text_dim),
+					container(reconnect_key_input)
+						.padding(2)
+						.style(move |_theme| container::Style {
+							text_color: Some(palette.text),
+							background: Some(Background::Color(palette.surface_bg)),
+							border: Border {
+								color: if reconnect_invalid { red } else { palette.border },
+								width: 1.0,
+								radius: 6.0.into(),
+							},
+							shadow: Shadow::default(),
+							snap: false,
+						}),
+					if reconnect_invalid {
+						text(t!("settings.required")).color(red)
+					} else {
+						text("")
+					}
+				]
+				.spacing(12)
+				.align_y(Alignment::Center),
+				text(t!("settings.shortcuts_help")).color(palette.text_muted),
+				row![
+					text(t!("settings.vim_navigation")).color(palette.text_dim),
+					iced::widget::checkbox(keybinds.vim_nav).on_toggle(Message::VimNavToggled)
+				]
+				.spacing(12)
+				.align_y(Alignment::Center),
+				row![
+					text(t!("settings.vim_left")).color(palette.text_dim),
+					container(
+						text_input("h", &keybinds.vim_left_key)
+							.on_input(|s: String| Message::VimLeftKeyChanged(single_char(&s)))
+							.width(Length::FillPortion(1))
+					)
+					.padding(2)
+					.style(move |_theme| container::Style {
+						text_color: Some(palette.text),
+						background: Some(Background::Color(palette.surface_bg)),
+						border: Border {
+							color: if vim_left_invalid { red } else { palette.border },
+							width: 1.0,
+							radius: 6.0.into(),
+						},
+						shadow: Shadow::default(),
+						snap: false,
+					}),
+					if vim_left_invalid {
+						text(t!("settings.required")).color(red)
+					} else {
+						text("")
+					}
+				]
+				.spacing(12)
+				.align_y(Alignment::Center),
+				row![
+					text(t!("settings.vim_down")).color(palette.text_dim),
+					container(
+						text_input("j", &keybinds.vim_down_key)
+							.on_input(|s: String| Message::VimDownKeyChanged(single_char(&s)))
+							.width(Length::FillPortion(1))
+					)
+					.padding(2)
+					.style(move |_theme| container::Style {
+						text_color: Some(palette.text),
+						background: Some(Background::Color(palette.surface_bg)),
+						border: Border {
+							color: if vim_down_invalid { red } else { palette.border },
+							width: 1.0,
+							radius: 6.0.into(),
+						},
+						shadow: Shadow::default(),
+						snap: false,
+					}),
+					if vim_down_invalid {
+						text(t!("settings.required")).color(red)
+					} else {
+						text("")
+					}
+				]
+				.spacing(12)
+				.align_y(Alignment::Center),
+				row![
+					text(t!("settings.vim_up")).color(palette.text_dim),
+					container(
+						text_input("k", &keybinds.vim_up_key)
+							.on_input(|s: String| Message::VimUpKeyChanged(single_char(&s)))
+							.width(Length::FillPortion(1))
+					)
+					.padding(2)
+					.style(move |_theme| container::Style {
+						text_color: Some(palette.text),
+						background: Some(Background::Color(palette.surface_bg)),
+						border: Border {
+							color: if vim_up_invalid { red } else { palette.border },
+							width: 1.0,
+							radius: 6.0.into(),
+						},
+						shadow: Shadow::default(),
+						snap: false,
+					}),
+					if vim_up_invalid {
+						text(t!("settings.required")).color(red)
+					} else {
+						text("")
+					}
+				]
+				.spacing(12)
+				.align_y(Alignment::Center),
+				row![
+					text(t!("settings.vim_right")).color(palette.text_dim),
+					container(
+						text_input("l", &keybinds.vim_right_key)
+							.on_input(|s: String| Message::VimRightKeyChanged(single_char(&s)))
+							.width(Length::FillPortion(1))
+					)
+					.padding(2)
+					.style(move |_theme| container::Style {
+						text_color: Some(palette.text),
+						background: Some(Background::Color(palette.surface_bg)),
+						border: Border {
+							color: if vim_right_invalid { red } else { palette.border },
+							width: 1.0,
+							radius: 6.0.into(),
+						},
+						shadow: Shadow::default(),
+						snap: false,
+					}),
+					if vim_right_invalid {
+						text(t!("settings.required")).color(red)
+					} else {
+						text("")
+					}
+				]
+				.spacing(12)
+				.align_y(Alignment::Center),
+				text(t!("settings.vim_nav_help")).color(palette.text_muted),
+				row![
+					button(text(t!("export_layout_title"))).on_press(Message::ExportLayoutPressed),
+					button(text(t!("settings.import_layout_clipboard"))).on_press(Message::ImportLayoutPressed),
+					button(text(t!("settings.import_from_file"))).on_press(Message::ImportFromFilePressed),
+					button(text(t!("settings.reset_layout"))).on_press(Message::ResetLayoutPressed),
+				]
+				.spacing(8)
+				.align_y(Alignment::Center),
+				text(t!("settings.export_description")).color(palette.text_muted),
 			]
 			.spacing(12)
-			.align_y(Alignment::Center),
-			text(t!("settings.shortcuts_help")).color(palette.text_muted),
-			row![
-				text(t!("settings.vim_navigation")).color(palette.text_dim),
-				iced::widget::checkbox(keybinds.vim_nav).on_toggle(Message::VimNavToggled)
-			]
-			.spacing(12)
-			.align_y(Alignment::Center),
-			row![
-				text(t!("settings.vim_left")).color(palette.text_dim),
-				container(
-					text_input("h", &keybinds.vim_left_key)
-						.on_input(|s: String| Message::VimLeftKeyChanged(single_char(&s)))
-						.width(Length::FillPortion(1))
-				)
-				.padding(2)
-				.style(move |_theme| container::Style {
-					text_color: Some(palette.text),
-					background: Some(Background::Color(palette.surface_bg)),
-					border: Border {
-						color: if vim_left_invalid { red } else { palette.border },
-						width: 1.0,
-						radius: 6.0.into(),
-					},
-					shadow: Shadow::default(),
-					snap: false,
-				}),
-				if vim_left_invalid {
-					text(t!("settings.required")).color(red)
-				} else {
-					text("")
-				}
-			]
-			.spacing(12)
-			.align_y(Alignment::Center),
-			row![
-				text(t!("settings.vim_down")).color(palette.text_dim),
-				container(
-					text_input("j", &keybinds.vim_down_key)
-						.on_input(|s: String| Message::VimDownKeyChanged(single_char(&s)))
-						.width(Length::FillPortion(1))
-				)
-				.padding(2)
-				.style(move |_theme| container::Style {
-					text_color: Some(palette.text),
-					background: Some(Background::Color(palette.surface_bg)),
-					border: Border {
-						color: if vim_down_invalid { red } else { palette.border },
-						width: 1.0,
-						radius: 6.0.into(),
-					},
-					shadow: Shadow::default(),
-					snap: false,
-				}),
-				if vim_down_invalid {
-					text(t!("settings.required")).color(red)
-				} else {
-					text("")
-				}
-			]
-			.spacing(12)
-			.align_y(Alignment::Center),
-			row![
-				text(t!("settings.vim_up")).color(palette.text_dim),
-				container(
-					text_input("k", &keybinds.vim_up_key)
-						.on_input(|s: String| Message::VimUpKeyChanged(single_char(&s)))
-						.width(Length::FillPortion(1))
-				)
-				.padding(2)
-				.style(move |_theme| container::Style {
-					text_color: Some(palette.text),
-					background: Some(Background::Color(palette.surface_bg)),
-					border: Border {
-						color: if vim_up_invalid { red } else { palette.border },
-						width: 1.0,
-						radius: 6.0.into(),
-					},
-					shadow: Shadow::default(),
-					snap: false,
-				}),
-				if vim_up_invalid {
-					text(t!("settings.required")).color(red)
-				} else {
-					text("")
-				}
-			]
-			.spacing(12)
-			.align_y(Alignment::Center),
-			row![
-				text(t!("settings.vim_right")).color(palette.text_dim),
-				container(
-					text_input("l", &keybinds.vim_right_key)
-						.on_input(|s: String| Message::VimRightKeyChanged(single_char(&s)))
-						.width(Length::FillPortion(1))
-				)
-				.padding(2)
-				.style(move |_theme| container::Style {
-					text_color: Some(palette.text),
-					background: Some(Background::Color(palette.surface_bg)),
-					border: Border {
-						color: if vim_right_invalid { red } else { palette.border },
-						width: 1.0,
-						radius: 6.0.into(),
-					},
-					shadow: Shadow::default(),
-					snap: false,
-				}),
-				if vim_right_invalid {
-					text(t!("settings.required")).color(red)
-				} else {
-					text("")
-				}
-			]
-			.spacing(12)
-			.align_y(Alignment::Center),
-			text(t!("settings.vim_nav_help")).color(palette.text_muted),
-			row![
-				button(text(t!("export_layout_title"))).on_press(Message::ExportLayoutPressed),
-				button(text(t!("settings.import_layout_clipboard"))).on_press(Message::ImportLayoutPressed),
-				button(text(t!("settings.import_from_file"))).on_press(Message::ImportFromFilePressed),
-				button(text(t!("settings.reset_layout"))).on_press(Message::ResetLayoutPressed),
-			]
-			.spacing(8)
-			.align_y(Alignment::Center),
-			text(t!("settings.export_description")).color(palette.text_muted),
-		]
-		.spacing(12)
-		.padding(12)
+			.padding(12),
+		)
 		.into(),
 		SettingsCategory::Server => {
 			let endpoint_locked = chatty_client_core::ClientConfigV1::server_endpoint_locked();
@@ -345,20 +350,21 @@ pub fn view(app: &Chatty, palette: theme::Palette) -> Element<'_, Message> {
 			} else {
 				None
 			};
-
-			column![
-				text(t!("settings.server")).color(palette.text),
-				rule::horizontal(1),
-				endpoint_row,
-				if let Some(h) = hmac_row { h } else { text("").into() },
-				row![
-					button(text(t!("settings.connect"))).on_press(Message::ConnectPressed),
-					button(text(t!("settings.disconnect"))).on_press(Message::DisconnectPressed),
+			scrollable(
+				column![
+					text(t!("settings.server")).color(palette.text),
+					rule::horizontal(1),
+					endpoint_row,
+					if let Some(h) = hmac_row { h } else { text("").into() },
+					row![
+						button(text(t!("settings.connect"))).on_press(Message::ConnectPressed),
+						button(text(t!("settings.disconnect"))).on_press(Message::DisconnectPressed),
+					]
+					.spacing(10),
 				]
-				.spacing(10),
-			]
-			.spacing(12)
-			.padding(12)
+				.spacing(12)
+				.padding(12),
+			)
 			.into()
 		}
 		SettingsCategory::Accounts => {
@@ -494,13 +500,16 @@ pub fn view(app: &Chatty, palette: theme::Palette) -> Element<'_, Message> {
 	};
 
 	row![
-		container(categories).width(180).style(move |_theme| container::Style {
-			text_color: Some(palette.text),
-			background: Some(Background::Color(palette.panel_bg_2)),
-			border: Border::default(),
-			shadow: Shadow::default(),
-			snap: false,
-		}),
+		container(categories)
+			.width(180)
+			.height(Length::Fill)
+			.style(move |_theme| container::Style {
+				text_color: Some(palette.text),
+				background: Some(Background::Color(palette.panel_bg_2)),
+				border: Border::default(),
+				shadow: Shadow::default(),
+				snap: false,
+			}),
 		container(right)
 			.width(Length::Fill)
 			.height(Length::Fill)

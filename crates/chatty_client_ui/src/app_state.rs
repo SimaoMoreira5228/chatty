@@ -6,7 +6,7 @@ use std::str::FromStr;
 use std::time::SystemTime;
 
 use chatty_domain::{Platform, RoomId, RoomKey, RoomTopic};
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::settings;
 use crate::settings::GuiSettings;
@@ -73,6 +73,7 @@ pub struct ChatMessageUi {
 	pub user_display: Option<String>,
 	pub text: String,
 	pub badge_ids: Vec<String>,
+	pub emotes: Vec<AssetRefUi>,
 	pub platform_message_id: Option<String>,
 }
 
@@ -85,6 +86,17 @@ pub struct RoomPermissions {
 	pub can_ban: bool,
 	pub is_moderator: bool,
 	pub is_broadcaster: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RoomStateUi {
+	pub emote_only: Option<bool>,
+	pub subscribers_only: Option<bool>,
+	pub unique_chat: Option<bool>,
+	pub slow_mode: Option<bool>,
+	pub slow_mode_wait_time_seconds: Option<u64>,
+	pub followers_only: Option<bool>,
+	pub followers_only_duration_minutes: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -187,6 +199,7 @@ pub struct AppState {
 	pub last_focused_target: Option<TabTarget>,
 	pub settings: GuiSettings,
 	pub room_permissions: HashMap<RoomKey, RoomPermissions>,
+	pub room_states: HashMap<RoomKey, RoomStateUi>,
 	pub asset_bundles: HashMap<String, AssetBundleUi>,
 	pub room_asset_cache_keys: HashMap<RoomKey, Vec<String>>,
 	pub global_asset_cache_keys: Vec<String>,
@@ -215,6 +228,7 @@ impl AppState {
 			settings,
 			notifications: Vec::new(),
 			room_permissions: HashMap::new(),
+			room_states: HashMap::new(),
 			asset_bundles: HashMap::new(),
 			room_asset_cache_keys: HashMap::new(),
 			global_asset_cache_keys: Vec::new(),
@@ -248,6 +262,10 @@ impl AppState {
 	}
 
 	pub fn set_gui_settings(&mut self, cfg: GuiSettings) {
+		info!(
+			"set_gui_settings: auto_connect={} vim_nav={}",
+			cfg.auto_connect_on_startup, cfg.keybinds.vim_nav
+		);
 		self.default_platform = cfg.default_platform;
 		self.settings = cfg.clone();
 		settings::set_and_persist(cfg);
@@ -367,6 +385,7 @@ impl AppState {
 	}
 
 	pub fn set_connection_status(&mut self, st: ConnectionStatus) {
+		info!(?st, "connection status changed");
 		self.connection = st;
 	}
 

@@ -19,7 +19,8 @@ use super::{eventsub, notifications};
 use crate::assets::{
 	SevenTvPlatform, ensure_asset_cache_pruner, fetch_7tv_badges_bundle, fetch_7tv_bundle, fetch_7tv_channel_badges_bundle,
 	fetch_bttv_badges_bundle, fetch_bttv_bundle, fetch_bttv_global_emotes_bundle, fetch_ffz_badges_bundle, fetch_ffz_bundle,
-	fetch_twitch_badges_bundle, fetch_twitch_channel_badges_bundle,
+	fetch_ffz_global_emotes_bundle, fetch_twitch_badges_bundle, fetch_twitch_channel_badges_bundle,
+	fetch_twitch_channel_emotes_bundle, fetch_twitch_global_emotes_bundle,
 };
 use crate::{
 	AdapterAuth, AdapterControl, AdapterControlRx, AdapterEvent, AdapterEventTx, AssetBundle, AssetProvider, AssetScope,
@@ -444,7 +445,7 @@ impl TwitchEventSubAdapter {
 			CommandRequest::SendChat { room, .. }
 			| CommandRequest::DeleteMessage { room, .. }
 			| CommandRequest::TimeoutUser { room, .. }
-			| CommandRequest::BanUser { room, .. } => room,
+			| CommandRequest::BanUser { room, .. } => room.clone(),
 		};
 
 		if room.platform != Platform::Twitch {
@@ -456,23 +457,17 @@ impl TwitchEventSubAdapter {
 			)));
 		}
 		let broadcaster_id = self
-			.resolve_broadcaster_id(room)
+			.resolve_broadcaster_id(&room)
 			.await
 			.map_err(|e| CommandError::Internal(format!("twitch {e}")))?;
 		let token_user_id = self
 			.resolve_token_user_id()
 			.await
 			.map_err(|e| CommandError::Internal(format!("twitch {e}")))?;
-		let is_mod = self.refresh_mod_status_if_needed(room).await;
-		if !is_mod && token_user_id != broadcaster_id {
-			return Err(CommandError::NotAuthorized(Some(
-				"twitch moderator or broadcaster required".to_string(),
-			)));
-		}
-
 		let helix = self
 			.helix_client()
 			.map_err(|e| CommandError::Internal(format!("twitch {e}")))?;
+
 		match request {
 			CommandRequest::SendChat {
 				text,
@@ -487,29 +482,56 @@ impl TwitchEventSubAdapter {
 				)
 				.await
 				.map_err(|e| CommandError::Internal(format!("twitch {e}"))),
-			CommandRequest::DeleteMessage { platform_message_id, .. } => helix
-				.delete_chat_message(&broadcaster_id, &token_user_id, &platform_message_id)
-				.await
-				.map_err(|e| CommandError::Internal(format!("twitch {e}"))),
+			CommandRequest::DeleteMessage { platform_message_id, .. } => {
+				let is_mod = self.refresh_mod_status_if_needed(&room).await;
+				if !is_mod && token_user_id != broadcaster_id {
+					return Err(CommandError::NotAuthorized(Some(
+						"twitch moderator or broadcaster required".to_string(),
+					)));
+				}
+
+				helix
+					.delete_chat_message(&broadcaster_id, &token_user_id, &platform_message_id)
+					.await
+					.map_err(|e| CommandError::Internal(format!("twitch {e}")))
+			}
 			CommandRequest::TimeoutUser {
 				user_id,
 				duration_seconds,
 				reason,
 				..
-			} => helix
-				.ban_user(
-					&broadcaster_id,
-					&token_user_id,
-					&user_id,
-					Some(duration_seconds),
-					reason.as_deref(),
-				)
-				.await
-				.map_err(|e| CommandError::Internal(format!("twitch {e}"))),
-			CommandRequest::BanUser { user_id, reason, .. } => helix
-				.ban_user(&broadcaster_id, &token_user_id, &user_id, None, reason.as_deref())
-				.await
-				.map_err(|e| CommandError::Internal(format!("twitch {e}"))),
+			} => {
+				let is_mod = self.refresh_mod_status_if_needed(&room).await;
+				if !is_mod && token_user_id != broadcaster_id {
+					return Err(CommandError::NotAuthorized(Some(
+						"twitch moderator or broadcaster required".to_string(),
+					)));
+				}
+
+				helix
+					.ban_user(
+						&broadcaster_id,
+						&token_user_id,
+						&user_id,
+						Some(duration_seconds),
+						reason.as_deref(),
+					)
+					.await
+					.map_err(|e| CommandError::Internal(format!("twitch {e}")))
+			}
+			CommandRequest::BanUser { user_id, reason, .. } => {
+				let is_mod = self.refresh_mod_status_if_needed(&room).await;
+				if !is_mod && token_user_id != broadcaster_id {
+					return Err(CommandError::NotAuthorized(Some(
+						"twitch moderator or broadcaster required".to_string(),
+					)));
+				}
+
+				helix
+					.ban_user(&broadcaster_id, &token_user_id, &user_id, None, reason.as_deref())
+					.await
+					.map_err(|e| CommandError::Internal(format!("twitch {e}")))
+			}
 		}
 	}
 
@@ -621,6 +643,9 @@ impl TwitchEventSubAdapter {
 	}
 
 	async fn ensure_subscription_for_room(&mut self, session_id: &str, room: &RoomKey) -> anyhow::Result<()> {
+		let perms = self.permissions_for_room(room).await;
+		let can_moderate = perms.is_moderator || perms.is_broadcaster;
+
 		for sub_type in [
 			TwitchSubscriptionType::ChatMessage,
 			TwitchSubscriptionType::ChatMessageDelete,
@@ -630,6 +655,17 @@ impl TwitchEventSubAdapter {
 			TwitchSubscriptionType::ChannelCheer,
 			TwitchSubscriptionType::ChannelSubscribe,
 		] {
+			if matches!(
+				sub_type,
+				TwitchSubscriptionType::ChannelBan
+					| TwitchSubscriptionType::ChannelModerate
+					| TwitchSubscriptionType::ChatMessageDelete
+			) && !can_moderate
+			{
+				debug!(room=%room, sub_type=?sub_type, "skipping subscription; missing moderator/broadcaster permissions");
+				continue;
+			}
+
 			self.ensure_subscription_for_room_and_type(session_id, room, sub_type).await?;
 		}
 
@@ -653,11 +689,10 @@ impl TwitchEventSubAdapter {
 		};
 		let is_moderator = self.refresh_mod_status_if_needed(room).await;
 		let is_broadcaster = token_user_id == broadcaster_id;
-		let can_send = is_moderator || is_broadcaster;
 		let can_moderate = is_moderator || is_broadcaster;
 		PermissionsInfo {
-			can_send,
-			can_reply: can_send,
+			can_send: true,
+			can_reply: true,
 			can_delete: can_moderate,
 			can_timeout: can_moderate,
 			can_ban: can_moderate,
@@ -869,13 +904,15 @@ impl TwitchEventSubAdapter {
 
 				let inserted = self.joined_rooms.insert(room.clone());
 				if inserted {
+					let cache_key = format!("twitch:channel:{}:native", room.room_id.as_str());
+					info!(%platform, room=%room.room_id, cache_key=%cache_key, "emitting AssetBundle ingest");
 					let mut ingest = IngestEvent::new(
 						platform,
 						room.room_id.clone(),
 						IngestPayload::AssetBundle(AssetBundle {
 							provider: AssetProvider::Twitch,
 							scope: AssetScope::Channel,
-							cache_key: format!("twitch:channel:{}:native", room.room_id.as_str()),
+							cache_key: cache_key.clone(),
 							etag: Some("empty".to_string()),
 							emotes: Vec::new(),
 							badges: Vec::new(),
@@ -892,6 +929,18 @@ impl TwitchEventSubAdapter {
 					let bearer_token = self.cfg.user_access_token.expose().to_string();
 					tokio::spawn(async move {
 						if let Ok(bundle) = fetch_twitch_badges_bundle(&client_id, &bearer_token).await {
+							info!(%platform, room=%room_for_assets.room_id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
+							let mut ingest = IngestEvent::new(
+								Platform::Twitch,
+								room_for_assets.room_id.clone(),
+								IngestPayload::AssetBundle(bundle),
+							);
+							ingest.trace.session_id = session_id.clone();
+							let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+						}
+
+						if let Ok(bundle) = fetch_twitch_global_emotes_bundle(&client_id, &bearer_token).await {
+							info!(%platform, room=%room_for_assets.room_id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
 							let mut ingest = IngestEvent::new(
 								Platform::Twitch,
 								room_for_assets.room_id.clone(),
@@ -902,6 +951,18 @@ impl TwitchEventSubAdapter {
 						}
 
 						if let Ok(bundle) = fetch_ffz_bundle(room_for_assets.room_id.as_str()).await {
+							info!(%platform, room=%room_for_assets.room_id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
+							let mut ingest = IngestEvent::new(
+								Platform::Twitch,
+								room_for_assets.room_id.clone(),
+								IngestPayload::AssetBundle(bundle),
+							);
+							ingest.trace.session_id = session_id.clone();
+							let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+						}
+
+						if let Ok(bundle) = fetch_ffz_global_emotes_bundle().await {
+							info!(%platform, room=%room_for_assets.room_id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
 							let mut ingest = IngestEvent::new(
 								Platform::Twitch,
 								room_for_assets.room_id.clone(),
@@ -912,6 +973,7 @@ impl TwitchEventSubAdapter {
 						}
 
 						if let Ok(bundle) = fetch_bttv_global_emotes_bundle().await {
+							info!(%platform, room=%room_for_assets.room_id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
 							let mut ingest = IngestEvent::new(
 								Platform::Twitch,
 								room_for_assets.room_id.clone(),
@@ -922,6 +984,7 @@ impl TwitchEventSubAdapter {
 						}
 
 						if let Ok(bundle) = fetch_bttv_badges_bundle("twitch").await {
+							info!(%platform, room=%room_for_assets.room_id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
 							let mut ingest = IngestEvent::new(
 								Platform::Twitch,
 								room_for_assets.room_id.clone(),
@@ -932,6 +995,7 @@ impl TwitchEventSubAdapter {
 						}
 
 						if let Ok(bundle) = fetch_ffz_badges_bundle().await {
+							info!(%platform, room=%room_for_assets.room_id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
 							let mut ingest = IngestEvent::new(
 								Platform::Twitch,
 								room_for_assets.room_id.clone(),
@@ -942,6 +1006,7 @@ impl TwitchEventSubAdapter {
 						}
 
 						if let Ok(bundle) = fetch_7tv_badges_bundle().await {
+							info!(%platform, room=%room_for_assets.room_id, cache_key=%bundle.cache_key, etag=?bundle.etag, "fetched 7tv global badges bundle");
 							let mut ingest = IngestEvent::new(
 								Platform::Twitch,
 								room_for_assets.room_id.clone(),
@@ -953,6 +1018,18 @@ impl TwitchEventSubAdapter {
 
 						if let Some(id) = broadcaster_id {
 							if let Ok(bundle) = fetch_twitch_channel_badges_bundle(&client_id, &bearer_token, &id).await {
+								info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
+								let mut ingest = IngestEvent::new(
+									Platform::Twitch,
+									room_for_assets.room_id.clone(),
+									IngestPayload::AssetBundle(bundle),
+								);
+								ingest.trace.session_id = session_id.clone();
+								let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+							}
+
+							if let Ok(bundle) = fetch_twitch_channel_emotes_bundle(&client_id, &bearer_token, &id).await {
+								info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
 								let mut ingest = IngestEvent::new(
 									Platform::Twitch,
 									room_for_assets.room_id.clone(),
@@ -963,6 +1040,7 @@ impl TwitchEventSubAdapter {
 							}
 
 							if let Ok(bundle) = fetch_bttv_bundle("twitch", &id).await {
+								info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
 								let mut ingest = IngestEvent::new(
 									Platform::Twitch,
 									room_for_assets.room_id.clone(),
@@ -972,24 +1050,38 @@ impl TwitchEventSubAdapter {
 								let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
 							}
 
-							if let Ok(bundle) = fetch_7tv_channel_badges_bundle(SevenTvPlatform::Twitch, &id).await {
-								let mut ingest = IngestEvent::new(
-									Platform::Twitch,
-									room_for_assets.room_id.clone(),
-									IngestPayload::AssetBundle(bundle),
-								);
-								ingest.trace.session_id = session_id.clone();
-								let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+							info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, "fetching 7tv channel badges bundle");
+							match fetch_7tv_channel_badges_bundle(SevenTvPlatform::Twitch, &id).await {
+								Ok(bundle) => {
+									info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
+									let mut ingest = IngestEvent::new(
+										Platform::Twitch,
+										room_for_assets.room_id.clone(),
+										IngestPayload::AssetBundle(bundle),
+									);
+									ingest.trace.session_id = session_id.clone();
+									let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+								}
+								Err(error) => {
+									warn!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, error=?error, "failed to fetch 7tv channel badges bundle");
+								}
 							}
 
-							if let Ok(bundle) = fetch_7tv_bundle(SevenTvPlatform::Twitch, &id).await {
-								let mut ingest = IngestEvent::new(
-									Platform::Twitch,
-									room_for_assets.room_id.clone(),
-									IngestPayload::AssetBundle(bundle),
-								);
-								ingest.trace.session_id = session_id.clone();
-								let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+							info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, "fetching 7tv emote set bundle");
+							match fetch_7tv_bundle(SevenTvPlatform::Twitch, &id).await {
+								Ok(bundle) => {
+									info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
+									let mut ingest = IngestEvent::new(
+										Platform::Twitch,
+										room_for_assets.room_id.clone(),
+										IngestPayload::AssetBundle(bundle),
+									);
+									ingest.trace.session_id = session_id.clone();
+									let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+								}
+								Err(error) => {
+									warn!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, error=?error, "failed to fetch 7tv emote set bundle");
+								}
 							}
 						}
 					});
@@ -1079,6 +1171,7 @@ impl TwitchEventSubAdapter {
 				},
 				text: n.text,
 				badges: n.badge_ids,
+				emotes: n.emotes.clone(),
 			}),
 		);
 
@@ -1137,6 +1230,30 @@ impl TwitchEventSubAdapter {
 					None => return Ok(()),
 				}
 			}
+
+			if self.joined_rooms.is_empty() {
+				let _ = events_tx.try_send(status(
+					platform,
+					false,
+					"no joined rooms; deferring eventsub connect".to_string(),
+				));
+
+				match tokio::time::timeout(Duration::from_secs(15), control_rx.recv()).await {
+					Ok(Some(cmd)) => {
+						if matches!(cmd, AdapterControl::Shutdown) {
+							info!(%platform, "twitch adapter received Shutdown");
+							break 'outer;
+						}
+						self.handle_control_message(cmd, None, &events_tx).await;
+						continue;
+					}
+					Ok(None) => return Ok(()),
+					Err(_) => {
+						continue;
+					}
+				}
+			}
+
 			let ws_url = match self.ws_url_from_string(&current_ws_url) {
 				Ok(u) => u,
 				Err(e) => {
@@ -1223,6 +1340,13 @@ impl TwitchEventSubAdapter {
 							break 'outer;
 						}
 						self.handle_control_message(cmd, Some(&session_id), &events_tx).await;
+
+						if self.joined_rooms.is_empty() {
+							let _ = events_tx.try_send(status(platform, false, "no joined rooms; closing eventsub socket".to_string()));
+							let _ = ws.close(None).await;
+							current_ws_url = self.cfg.eventsub_ws_url.clone();
+							break;
+						}
 					}
 
 					msg = ws.next() => {

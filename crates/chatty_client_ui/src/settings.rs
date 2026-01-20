@@ -1,17 +1,14 @@
-use std::fs;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
-
-use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
-use toml;
+use std::{env, fs};
 
 use chatty_client_core::ClientConfigV1;
 use chatty_domain::{Platform, RoomKey};
 use chatty_util::endpoint::validate_quic_endpoint;
-
-use keyring;
-use serde_json;
+use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
+use tracing::{error, info};
+use {keyring, serde_json, toml};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ShortcutKey {
@@ -45,7 +42,7 @@ impl Default for Keybinds {
 			close_key: "q".to_string(),
 			new_key: "n".to_string(),
 			reconnect_key: "r".to_string(),
-			vim_nav: true,
+			vim_nav: false,
 			vim_left_key: "h".to_string(),
 			vim_down_key: "j".to_string(),
 			vim_up_key: "k".to_string(),
@@ -181,7 +178,7 @@ impl Default for GuiSettings {
 			kick_oauth_blob: String::new(),
 			kick_user_id: String::new(),
 			kick_username: String::new(),
-			auto_connect_on_startup: false,
+			auto_connect_on_startup: true,
 			locale: "en-US".to_string(),
 			keybinds: Keybinds::default(),
 		}
@@ -324,7 +321,19 @@ pub fn build_client_config(settings: &GuiSettings) -> Result<ClientConfigV1, Str
 }
 
 fn settings_dir() -> PathBuf {
-	let mut dir = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
+	if let Some(cfg) = dirs::config_dir() {
+		let mut dir = cfg;
+		dir.push("chatty");
+		return dir;
+	}
+
+	if let Some(home) = dirs::home_dir() {
+		let mut dir = home.join(".config");
+		dir.push("chatty");
+		return dir;
+	}
+
+	let mut dir = PathBuf::from(".");
 	dir.push("chatty");
 	dir
 }
@@ -357,11 +366,75 @@ fn migrate_settings_toml(mut v: toml::Value) -> toml::Value {
 
 fn load_from_disk() -> Option<GuiSettings> {
 	let path = settings_path();
-	let data = fs::read_to_string(path).ok()?;
+	info!("loading settings from {}", path.display());
+	let data = match fs::read_to_string(&path) {
+		Ok(d) => d,
+		Err(e) => {
+			info!("no settings file at {}: {}", path.display(), e);
+			return None;
+		}
+	};
 
-	let v = toml::from_str::<toml::Value>(&data).ok()?;
-	let v = migrate_settings_toml(v);
-	let mut settings = toml::from_str::<GuiSettings>(&v.to_string()).ok()?;
+	let mut settings: GuiSettings;
+	if let Ok(s) = toml::from_str::<GuiSettings>(&data) {
+		settings = s;
+	} else if data.trim_start().starts_with('{') {
+		match serde_json::from_str::<GuiSettings>(&data) {
+			Ok(s) => {
+				info!("loaded settings as JSON");
+				settings = s;
+
+				if let Ok(pretty) = toml::to_string_pretty(&settings) {
+					let path = settings_path();
+					if let Some(parent) = path.parent() {
+						let _ = fs::create_dir_all(parent);
+					}
+					match fs::write(&path, pretty) {
+						Ok(()) => info!("migrated JSON settings to TOML at {}", path.display()),
+						Err(e) => error!("failed to write migrated TOML settings {}: {}", path.display(), e),
+					}
+				} else {
+					error!("failed to serialize JSON settings to TOML");
+				}
+			}
+			Err(e) => {
+				error!("failed to parse settings JSON: {}", e);
+				let snippet = if data.len() > 200 { &data[..200] } else { &data };
+				info!("settings file snippet: {}", snippet);
+				return None;
+			}
+		}
+	} else {
+		let v = match toml::from_str::<toml::Value>(&data) {
+			Ok(v) => v,
+			Err(e) => {
+				error!("failed to parse settings TOML: {}", e);
+				let snippet = if data.len() > 200 { &data[..200] } else { &data };
+				info!("settings file snippet: {}", snippet);
+				return None;
+			}
+		};
+
+		let v = migrate_settings_toml(v);
+
+		let pretty = match toml::to_string_pretty(&v) {
+			Ok(s) => s,
+			Err(e) => {
+				error!("failed to serialize migrated toml::Value to TOML: {}", e);
+				return None;
+			}
+		};
+
+		settings = match toml::from_str::<GuiSettings>(&pretty) {
+			Ok(s) => s,
+			Err(e) => {
+				error!("failed to deserialize migrated settings into GuiSettings: {}", e);
+				let snippet = if pretty.len() > 200 { &pretty[..200] } else { &pretty };
+				info!("migrated settings snippet: {}", snippet);
+				return None;
+			}
+		};
+	}
 
 	if ClientConfigV1::server_endpoint_locked() {
 		settings.server_endpoint_quic = String::new();
@@ -416,11 +489,24 @@ fn persist_to_disk(cfg: &GuiSettings) {
 	}
 
 	let path = settings_path();
-	if let Some(parent) = path.parent() {
-		let _ = fs::create_dir_all(parent);
+	info!("persisting settings to {}", path.display());
+	if let Some(parent) = path.parent()
+		&& let Err(e) = fs::create_dir_all(parent)
+	{
+		error!("failed to create settings dir {}: {}", parent.display(), e);
 	}
-	if let Ok(data) = toml::to_string_pretty(&to_persist) {
-		let _ = fs::write(path, data);
+
+	match toml::to_string_pretty(&to_persist) {
+		Ok(data) => {
+			let len = data.len();
+			match fs::write(&path, data) {
+				Ok(()) => info!("wrote settings file {} ({} bytes)", path.display(), len),
+				Err(e) => error!("failed to write settings file {}: {}", path.display(), e),
+			}
+		}
+		Err(e) => {
+			error!("failed to serialize settings for writing: {}", e);
+		}
 	}
 }
 
@@ -449,8 +535,38 @@ fn persist_to_disk_at(cfg: &GuiSettings, base: &std::path::Path) {
 static SETTINGS: OnceLock<Mutex<GuiSettings>> = OnceLock::new();
 
 pub fn get_cloned() -> GuiSettings {
-	let lock = SETTINGS.get_or_init(|| Mutex::new(load_from_disk().unwrap_or_default()));
-	lock.lock().expect("settings lock").clone()
+	let lock = SETTINGS.get_or_init(|| {
+		let initial = load_from_disk().unwrap_or_default();
+		info!(
+			"initialized settings: auto_connect={} identities={}",
+			initial.auto_connect_on_startup,
+			initial.identities.len()
+		);
+
+		let mut initial = initial;
+		if !ClientConfigV1::server_endpoint_locked()
+			&& let Ok(ep) = env::var("CHATTY_SERVER_ENDPOINT")
+		{
+			let ep = ep.trim().to_string();
+			if !ep.is_empty() {
+				if validate_quic_endpoint(&ep).is_ok() {
+					info!(endpoint = %ep, "overriding server endpoint from CHATTY_SERVER_ENDPOINT env var");
+					initial.server_endpoint_quic = ep;
+				} else {
+					info!(endpoint = %ep, "CHATTY_SERVER_ENDPOINT present but invalid; ignoring");
+				}
+			}
+		}
+
+		Mutex::new(initial)
+	});
+	let s = lock.lock().expect("settings lock").clone();
+	info!(
+		"get_cloned -> auto_connect={} identities={}",
+		s.auto_connect_on_startup,
+		s.identities.len()
+	);
+	s
 }
 
 pub fn set_and_persist(cfg: GuiSettings) {
@@ -466,13 +582,23 @@ fn secrets_path() -> PathBuf {
 }
 
 fn store_secret(name: &str, value: &str) -> Result<(), String> {
-	if let Ok(entry) = keyring::Entry::new("chatty", name)
-		&& entry.set_password(value).is_ok()
-	{
-		return Ok(());
+	let path = secrets_path();
+	info!("storing secret '{}' (secrets path={})", name, path.display());
+
+	if let Ok(entry) = keyring::Entry::new("chatty", name) {
+		match entry.set_password(value) {
+			Ok(()) => {
+				info!("stored secret '{}' in system keyring", name);
+				return Ok(());
+			}
+			Err(e) => {
+				info!("keyring set_password failed for '{}': {}", name, e);
+			}
+		}
+	} else {
+		info!("keyring entry creation failed for '{}', falling back to file", name);
 	}
 
-	let path = secrets_path();
 	let mut map: std::collections::HashMap<String, String> = if let Ok(data) = std::fs::read_to_string(&path) {
 		serde_json::from_str(&data).unwrap_or_default()
 	} else {
@@ -482,34 +608,49 @@ fn store_secret(name: &str, value: &str) -> Result<(), String> {
 	if let Some(parent) = path.parent() {
 		let _ = std::fs::create_dir_all(parent);
 	}
-	if let Ok(s) = serde_json::to_string_pretty(&map)
-		&& let Err(e) = std::fs::write(&path, s)
-	{
-		return Err(format!("failed to write secrets file: {}", e));
+	match serde_json::to_string_pretty(&map) {
+		Ok(s) => match std::fs::write(&path, s) {
+			Ok(()) => {
+				info!("wrote secrets file {}", path.display());
+			}
+			Err(e) => {
+				return Err(format!("failed to write secrets file: {}", e));
+			}
+		},
+		Err(e) => return Err(format!("failed to serialize secrets: {}", e)),
 	}
 	Ok(())
 }
 
 fn read_secret(name: &str) -> Option<String> {
-	if let Ok(entry) = keyring::Entry::new("chatty", name)
-		&& let Ok(val) = entry.get_password()
-	{
-		return Some(val);
+	let path = secrets_path();
+	if let Ok(entry) = keyring::Entry::new("chatty", name) {
+		match entry.get_password() {
+			Ok(val) => {
+				info!("read secret '{}' from keyring", name);
+				return Some(val);
+			}
+			Err(e) => {
+				info!("keyring get_password failed for '{}': {}", name, e);
+			}
+		}
 	}
 
-	let path = secrets_path();
 	if let Ok(data) = std::fs::read_to_string(&path)
 		&& let Ok(map) = serde_json::from_str::<std::collections::HashMap<String, String>>(&data)
+		&& let Some(v) = map.get(name)
 	{
-		return map.get(name).cloned();
+		info!("read secret '{}' from file {}", name, path.display());
+		return Some(v.clone());
 	}
 	None
 }
 
 #[cfg(test)]
 mod tests {
-	use super::*;
 	use tempfile::tempdir;
+
+	use super::*;
 
 	#[test]
 	fn it_parses_twitch_blob() {

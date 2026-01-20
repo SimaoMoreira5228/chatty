@@ -228,6 +228,9 @@ message EventEnvelope {
 
     // Asset metadata for this topic (emotes/badges).
     AssetBundleEvent asset_bundle = 40;
+
+    // Room-level chat restrictions/settings (slow/sub/follow/etc).
+    RoomStateEvent room_state = 50;
   }
 }
 
@@ -269,6 +272,9 @@ message ChatMessage {
 
   // Badge ids attached to the author (provider-specific).
   repeated string badge_ids = 6;
+
+  // Emotes present in the message (provider-specific).
+  repeated AssetRef emotes = 7;
 }
 
 message ReplyRef {
@@ -309,6 +315,23 @@ message AssetBundleEvent {
   string etag = 5;
   repeated AssetRef emotes = 10;
   repeated AssetRef badges = 11;
+}
+
+message RoomStateEvent {
+  Origin origin = 1;
+  RoomChatSettings settings = 2;
+  map<string, string> flags = 3;
+  string notes = 4;
+}
+
+message RoomChatSettings {
+  optional bool emote_only = 1;
+  optional bool subscribers_only = 2;
+  optional bool unique_chat = 3;
+  optional bool slow_mode = 4;
+  optional uint64 slow_mode_wait_time_seconds = 5;
+  optional bool followers_only = 6;
+  optional uint64 followers_only_duration_minutes = 7;
 }
 
 message Ping {

@@ -7,17 +7,19 @@ use std::time::Duration;
 use anyhow::{Context, anyhow};
 use parking_lot::Mutex;
 use serde::Deserialize;
-
-use crate::{AssetBundle, AssetProvider, AssetRef, AssetScope};
+use tracing::info;
 
 use super::common::{CachedBundle, compute_bundle_etag, guess_format, prune_map_cache, prune_optional_cache};
+use crate::{AssetBundle, AssetProvider, AssetRef, AssetScope};
 
 const FFZ_BASE_URL: &str = "https://api.frankerfacez.com";
 const FFZ_EMOTES_TTL: Duration = Duration::from_secs(300);
 const FFZ_BADGES_TTL: Duration = Duration::from_secs(600);
+const FFZ_GLOBAL_EMOTES_TTL: Duration = Duration::from_secs(600);
 
 static FFZ_EMOTES_CACHE: OnceLock<Mutex<HashMap<String, CachedBundle>>> = OnceLock::new();
 static FFZ_BADGES_CACHE: OnceLock<Mutex<Option<CachedBundle>>> = OnceLock::new();
+static FFZ_GLOBAL_EMOTES_CACHE: OnceLock<Mutex<Option<CachedBundle>>> = OnceLock::new();
 
 pub async fn fetch_ffz_bundle(room_login: &str) -> anyhow::Result<AssetBundle> {
 	if let Some(bundle) = get_cached_ffz_emotes(room_login) {
@@ -53,6 +55,8 @@ pub async fn fetch_ffz_bundle(room_login: &str) -> anyhow::Result<AssetBundle> {
 		badges,
 	};
 
+	info!(room=%room_login, cache_key=%bundle.cache_key, emote_count=bundle.emotes.len(), badge_count=bundle.badges.len(), "ffz channel bundle fetched");
+
 	set_cached_ffz_emotes(room_login, bundle.clone());
 	Ok(bundle)
 }
@@ -84,7 +88,57 @@ pub async fn fetch_ffz_badges_bundle() -> anyhow::Result<AssetBundle> {
 		badges,
 	};
 
+	info!(cache_key=%bundle.cache_key, badge_count=bundle.badges.len(), "ffz global badges bundle fetched");
+
 	set_cached_ffz_badges(bundle.clone());
+	Ok(bundle)
+}
+
+pub async fn fetch_ffz_global_emotes_bundle() -> anyhow::Result<AssetBundle> {
+	if let Some(bundle) = get_cached_ffz_global_emotes() {
+		return Ok(bundle);
+	}
+
+	let ids_url = format!("{FFZ_BASE_URL}/v1/set/global/ids");
+	let resp = reqwest::Client::new()
+		.get(ids_url)
+		.send()
+		.await
+		.context("ffz global emotes ids request")?
+		.error_for_status()
+		.context("ffz global emotes ids status")?;
+	let ids_body: FfzGlobalSetIdsResponse = resp.json().await.context("ffz global emotes ids json")?;
+
+	let global_id = ids_body
+		.default_sets
+		.first()
+		.ok_or_else(|| anyhow!("ffz global emote set ids missing"))?;
+
+	let set_url = format!("{FFZ_BASE_URL}/v1/set/{global_id}");
+	let resp = reqwest::Client::new()
+		.get(set_url)
+		.send()
+		.await
+		.context("ffz global emote set request")?
+		.error_for_status()
+		.context("ffz global emote set status")?;
+	let set_body: FfzGlobalSetResponse = resp.json().await.context("ffz global emote set json")?;
+
+	let emotes: Vec<AssetRef> = set_body.set.emoticons.iter().filter_map(ffz_emote_to_asset).collect();
+	let etag = compute_bundle_etag(&emotes, &[]);
+
+	let bundle = AssetBundle {
+		provider: AssetProvider::Ffz,
+		scope: AssetScope::Global,
+		cache_key: format!("ffz:emotes:global:{global_id}"),
+		etag: Some(etag),
+		emotes,
+		badges: Vec::new(),
+	};
+
+	info!(cache_key=%bundle.cache_key, emote_count=bundle.emotes.len(), "ffz global emotes bundle fetched");
+
+	set_cached_ffz_global_emotes(bundle.clone());
 	Ok(bundle)
 }
 
@@ -95,6 +149,10 @@ pub(crate) fn prune_caches() {
 
 	if let Some(cache) = FFZ_BADGES_CACHE.get() {
 		prune_optional_cache(cache, FFZ_BADGES_TTL);
+	}
+
+	if let Some(cache) = FFZ_GLOBAL_EMOTES_CACHE.get() {
+		prune_optional_cache(cache, FFZ_GLOBAL_EMOTES_TTL);
 	}
 }
 
@@ -182,6 +240,27 @@ fn set_cached_ffz_badges(bundle: AssetBundle) {
 	});
 }
 
+fn get_cached_ffz_global_emotes() -> Option<AssetBundle> {
+	let cache = FFZ_GLOBAL_EMOTES_CACHE.get_or_init(|| Mutex::new(None));
+	let mut guard = cache.lock();
+	let entry = guard.as_ref()?;
+	if entry.fetched_at.elapsed() <= FFZ_GLOBAL_EMOTES_TTL {
+		Some(entry.bundle.clone())
+	} else {
+		*guard = None;
+		None
+	}
+}
+
+fn set_cached_ffz_global_emotes(bundle: AssetBundle) {
+	let cache = FFZ_GLOBAL_EMOTES_CACHE.get_or_init(|| Mutex::new(None));
+	let mut guard = cache.lock();
+	*guard = Some(CachedBundle {
+		fetched_at: std::time::Instant::now(),
+		bundle,
+	});
+}
+
 fn get_cached_ffz_emotes(room_login: &str) -> Option<AssetBundle> {
 	let cache = FFZ_EMOTES_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
 	let mut guard = cache.lock();
@@ -243,6 +322,17 @@ struct FfzEmote {
 #[derive(Debug, Deserialize)]
 struct FfzBadgesResponse {
 	badges: Vec<FfzBadge>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FfzGlobalSetIdsResponse {
+	#[serde(default)]
+	default_sets: Vec<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FfzGlobalSetResponse {
+	set: FfzEmoteSet,
 }
 
 #[derive(Debug, Deserialize)]

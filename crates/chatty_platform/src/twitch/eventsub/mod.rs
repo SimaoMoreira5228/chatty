@@ -254,8 +254,21 @@ pub(crate) struct ChannelSubscribeEvent {
 pub(crate) struct ChannelChatMessageContent {
 	pub(crate) text: String,
 	#[serde(default)]
-	#[allow(dead_code)]
-	pub(crate) fragments: Vec<serde_json::Value>,
+	pub(crate) fragments: Vec<ChannelChatMessageFragment>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ChannelChatMessageFragment {
+	#[serde(rename = "type")]
+	pub(crate) kind: String,
+	pub(crate) text: String,
+	#[serde(default)]
+	pub(crate) emote: Option<ChannelChatMessageFragmentEmote>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ChannelChatMessageFragmentEmote {
+	pub(crate) id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -363,6 +376,7 @@ pub(crate) struct NormalizedChatNotification {
 
 	pub(crate) text: String,
 	pub(crate) badge_ids: Vec<String>,
+	pub(crate) emotes: Vec<crate::AssetRef>,
 }
 
 #[derive(Debug, Clone)]
@@ -511,7 +525,37 @@ pub(crate) fn try_normalize_channel_chat_message(raw_json: &str) -> anyhow::Resu
 			.into_iter()
 			.map(|badge| format!("twitch:{}:{}", badge.set_id, badge.id))
 			.collect(),
+		emotes: twitch_emotes_from_fragments(&msg.payload.event.message.fragments),
 	}))
+}
+
+fn twitch_emotes_from_fragments(fragments: &[ChannelChatMessageFragment]) -> Vec<crate::AssetRef> {
+	let mut seen = std::collections::HashSet::new();
+	let mut emotes = Vec::new();
+	for fragment in fragments {
+		if fragment.kind != "emote" {
+			continue;
+		}
+
+		let Some(emote) = fragment.emote.as_ref() else {
+			continue;
+		};
+
+		if !seen.insert(emote.id.clone()) {
+			continue;
+		}
+
+		emotes.push(crate::AssetRef {
+			id: emote.id.clone(),
+			name: fragment.text.clone(),
+			image_url: format!("https://static-cdn.jtvnw.net/emoticons/v2/{}/default/dark/1.0", emote.id),
+			image_format: "png".to_string(),
+			width: 28,
+			height: 28,
+		});
+	}
+
+	emotes
 }
 
 pub(crate) fn try_normalize_channel_chat_message_delete(

@@ -1,10 +1,10 @@
 #![forbid(unsafe_code)]
 
-use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
 use chatty_domain::RoomKey;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
@@ -28,6 +28,8 @@ impl Default for UiNode {
 pub struct UiPane {
 	pub join_raw: String,
 	pub composer: String,
+	#[serde(default)]
+	pub tab_room: Option<RoomKey>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,7 +54,15 @@ pub enum UiAxis {
 }
 
 fn ui_layout_path() -> Option<PathBuf> {
-	dirs::home_dir().map(|home| home.join(".chatty").join("ui_layout.json"))
+	if let Some(cfg) = dirs::config_dir() {
+		return Some(cfg.join("chatty").join("ui_layout.json"));
+	}
+
+	if let Some(home) = dirs::home_dir() {
+		return Some(home.join(".chatty").join("ui_layout.json"));
+	}
+
+	None
 }
 
 pub fn load_ui_layout() -> Option<UiRootState> {
@@ -78,6 +88,7 @@ impl UiPane {
 		Self {
 			join_raw: String::new(),
 			composer: String::new(),
+			tab_room: None,
 		}
 	}
 }

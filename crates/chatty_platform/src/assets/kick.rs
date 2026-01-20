@@ -4,9 +4,8 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 
-use crate::{AssetBundle, AssetProvider, AssetRef, AssetScope};
-
 use super::common::{CachedBundle, compute_bundle_etag, prune_map_cache};
+use crate::{AssetBundle, AssetProvider, AssetRef, AssetScope};
 
 const KICK_BADGES_TTL: Duration = Duration::from_secs(600);
 const KICK_EMOTES_TTL: Duration = Duration::from_secs(300);

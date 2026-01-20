@@ -328,6 +328,9 @@ pub struct ChatMessage {
 
 	/// Provider-specific badge ids attached to the author.
 	pub badges: Vec<String>,
+
+	/// Provider-specific emotes present in the message.
+	pub emotes: Vec<AssetRef>,
 }
 
 impl ChatMessage {
@@ -340,6 +343,7 @@ impl ChatMessage {
 			author,
 			text: text.into(),
 			badges: Vec::new(),
+			emotes: Vec::new(),
 		}
 	}
 }

@@ -68,6 +68,7 @@ pub enum UiEvent {
 		server_message_id: Option<String>,
 		platform_message_id: Option<String>,
 		badge_ids: Vec<String>,
+		emotes: Vec<AssetRefUi>,
 	},
 	TopicLagged {
 		topic: String,
@@ -84,6 +85,16 @@ pub enum UiEvent {
 		can_ban: bool,
 		is_moderator: bool,
 		is_broadcaster: bool,
+	},
+	RoomState {
+		topic: String,
+		emote_only: Option<bool>,
+		subscribers_only: Option<bool>,
+		unique_chat: Option<bool>,
+		slow_mode: Option<bool>,
+		slow_mode_wait_time_seconds: Option<u64>,
+		followers_only: Option<bool>,
+		followers_only_duration_minutes: Option<u64>,
 	},
 	AssetBundle {
 		topic: String,
@@ -670,10 +681,15 @@ fn spawn_events_loop(
 					Some(pb::event_envelope::Event::ChatMessage(_)) => "chat_message",
 					Some(pb::event_envelope::Event::TopicLagged(_)) => "topic_lagged",
 					Some(pb::event_envelope::Event::Permissions(_)) => "permissions",
-					Some(pb::event_envelope::Event::AssetBundle(_)) => "asset_bundle",
+						Some(pb::event_envelope::Event::AssetBundle(_)) => "asset_bundle",
+						Some(pb::event_envelope::Event::RoomState(_)) => "room_state",
 					None => "empty",
 				};
 				debug!(%topic, cursor, %event_kind, "events stream received");
+				if let Some(pb::event_envelope::Event::AssetBundle(bundle)) = ev.event.as_ref() {
+					info!(%topic, cache_key = %bundle.cache_key, emote_count = bundle.emotes.len(), badge_count = bundle.badges.len(), "events stream asset bundle received");
+				}
+
 				{
 					let mut cursors = cursor_by_topic.lock().unwrap();
 					let entry = cursors.entry(topic.clone()).or_insert(0);
@@ -682,7 +698,9 @@ fn spawn_events_loop(
 					}
 				}
 				if let Some(ui_ev) = map_event_envelope_to_ui_event(ev) {
-					let _ = ui_tx.send(ui_ev);
+					if let Err(e) = ui_tx.send(ui_ev) {
+						warn!(error = ?e, %topic, cursor, "failed to send UiEvent from events loop — UI receiver may be dropped");
+					}
 				} else {
 					debug!(%topic, cursor, %event_kind, "event not mapped to UiEvent");
 				}
@@ -704,15 +722,13 @@ fn spawn_events_loop(
 }
 
 async fn connect_session(cfg: ClientConfigV1, ui_tx: mpsc::UnboundedSender<UiEvent>) -> Option<BoxedSessionControl> {
-	info!(
-		server_host = %cfg.server_host,
-		server_port = cfg.server_port,
-		"connecting..."
-	);
+	info!(server_host = %cfg.server_host, server_port = cfg.server_port, "connecting...");
+	info!(client_instance_id = %cfg.client_instance_id, "calling SessionControl::connect");
 
 	let (session, welcome) = match SessionControl::connect(cfg.clone()).await {
 		Ok((s, w)) => (s, w),
 		Err(e) => {
+			debug!(error = ?e, "SessionControl::connect returned error");
 			let msg = map_core_err(e);
 			ui_send_error(&ui_tx, msg.clone(), Some(&cfg));
 			let _ = ui_tx.send(UiEvent::Disconnected { reason: msg });
@@ -720,10 +736,17 @@ async fn connect_session(cfg: ClientConfigV1, ui_tx: mpsc::UnboundedSender<UiEve
 		}
 	};
 
-	let _ = ui_tx.send(UiEvent::Connected {
+	info!(server_name=%welcome.server_name, server_instance=%welcome.server_instance_id, "SessionControl::connect succeeded (welcome received)");
+
+	match ui_tx.send(UiEvent::Connected {
 		server_name: welcome.server_name.clone(),
 		server_instance_id: welcome.server_instance_id.clone(),
-	});
+	}) {
+		Ok(()) => {
+			info!(server=%welcome.server_name, instance=%welcome.server_instance_id, "sent UiEvent::Connected to UI thread")
+		}
+		Err(e) => warn!(error = ?e, "failed to send UiEvent::Connected — UI receiver may be dropped"),
+	}
 
 	Some(Box::new(session))
 }
@@ -831,7 +854,7 @@ fn map_event_envelope_to_ui_event(ev: pb::EventEnvelope) -> Option<UiEvent> {
 
 	match ev.event {
 		Some(pb::event_envelope::Event::ChatMessage(cm)) => {
-			let (author_login, author_display, text, badge_ids) = cm
+			let (author_login, author_display, text, badge_ids, emotes) = cm
 				.message
 				.as_ref()
 				.map(|m| {
@@ -847,9 +870,21 @@ fn map_event_envelope_to_ui_event(ev: pb::EventEnvelope) -> Option<UiEvent> {
 					};
 					let text = m.text.clone();
 					let badges = m.badge_ids.clone();
-					(login, display, text, badges)
+					let emotes = m
+						.emotes
+						.iter()
+						.map(|emote| AssetRefUi {
+							id: emote.id.clone(),
+							name: emote.name.clone(),
+							image_url: emote.image_url.clone(),
+							image_format: emote.image_format.clone(),
+							width: emote.width,
+							height: emote.height,
+						})
+						.collect();
+					(login, display, text, badges, emotes)
 				})
-				.unwrap_or_else(|| ("unknown".to_string(), None, "".to_string(), Vec::new()));
+				.unwrap_or_else(|| ("unknown".to_string(), None, "".to_string(), Vec::new(), Vec::new()));
 
 			Some(UiEvent::ChatMessage {
 				topic,
@@ -875,6 +910,7 @@ fn map_event_envelope_to_ui_event(ev: pb::EventEnvelope) -> Option<UiEvent> {
 					Some(cm.platform_message_id)
 				},
 				badge_ids,
+				emotes,
 			})
 		}
 		Some(pb::event_envelope::Event::TopicLagged(lag)) => Some(UiEvent::TopicLagged {
@@ -897,6 +933,19 @@ fn map_event_envelope_to_ui_event(ev: pb::EventEnvelope) -> Option<UiEvent> {
 			is_moderator: perms.is_moderator,
 			is_broadcaster: perms.is_broadcaster,
 		}),
+		Some(pb::event_envelope::Event::RoomState(state)) => {
+			let settings = state.settings.unwrap_or_default();
+			Some(UiEvent::RoomState {
+				topic,
+				emote_only: settings.emote_only,
+				subscribers_only: settings.subscribers_only,
+				unique_chat: settings.unique_chat,
+				slow_mode: settings.slow_mode,
+				slow_mode_wait_time_seconds: settings.slow_mode_wait_time_seconds,
+				followers_only: settings.followers_only,
+				followers_only_duration_minutes: settings.followers_only_duration_minutes,
+			})
+		}
 		Some(pb::event_envelope::Event::AssetBundle(bundle)) => {
 			let cache_key = if bundle.cache_key.is_empty() {
 				format!("provider:{}:origin:{}", bundle.provider, topic)
@@ -945,9 +994,11 @@ fn map_event_envelope_to_ui_event(ev: pb::EventEnvelope) -> Option<UiEvent> {
 
 #[cfg(test)]
 mod tests {
-	use super::*;
 	use std::sync::{Arc, Mutex};
+
 	use tokio::sync::oneshot;
+
+	use super::*;
 
 	#[derive(Default)]
 	struct MockState {

@@ -1,21 +1,20 @@
 #![forbid(unsafe_code)]
 
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use chatty_client_ui::app_state::{ConnectionStatus, JoinRequest, UiNotificationKind};
 use chatty_client_ui::net::UiEvent;
 use chatty_client_ui::settings::{self, SplitLayoutKind};
-use chatty_domain::RoomTopic;
+use chatty_domain::{Platform, RoomTopic};
 use chatty_protocol::pb;
-use iced::Task;
-use iced::clipboard;
 use iced::widget::pane_grid;
+use iced::{Task, clipboard};
+use tracing::info;
 
 use crate::app::model::{InsertTarget, first_char_lower};
 use crate::app::net::recv_next;
 use crate::app::subscription::shortcut_match;
 use crate::app::{Chatty, ClipboardTarget, Message};
-use chatty_domain::Platform;
 
 impl Chatty {
 	pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -24,8 +23,18 @@ impl Chatty {
 				self.window_size = Some((w, h));
 				Task::none()
 			}
+			Message::AnimationTick(instant) => {
+				self.animation_clock = instant;
+				Task::none()
+			}
 			Message::CursorMoved(x, y) => {
+				self.last_cursor_pos = Some((x, y));
 				self.set_focused_by_cursor(x, y);
+				Task::none()
+			}
+			Message::UserScrolled => {
+				self.follow_end = false;
+				self.pending_message_action = None;
 				Task::none()
 			}
 			Message::Navigate(p) => {
@@ -241,14 +250,24 @@ impl Chatty {
 			}
 			Message::MessageActionButtonPressed(room, server_msg_id, platform_msg_id, author_id) => {
 				if let Some(active) = &self.pending_message_action
-					&& active.0 == room
-					&& active.1 == server_msg_id
-					&& active.2 == platform_msg_id
+					&& active.room == room
+					&& active.server_message_id == server_msg_id
+					&& active.platform_message_id == platform_msg_id
 				{
 					self.pending_message_action = None;
 					return Task::none();
 				}
-				self.pending_message_action = Some((room, server_msg_id, platform_msg_id, author_id));
+				self.pending_message_action = Some(crate::app::model::PendingMessageAction {
+					room,
+					server_message_id: server_msg_id,
+					platform_message_id: platform_msg_id,
+					author_id,
+					cursor_pos: self.last_cursor_pos,
+				});
+				Task::none()
+			}
+			Message::DismissMessageAction => {
+				self.pending_message_action = None;
 				Task::none()
 			}
 			Message::ReplyToMessage(_room, server_msg_id, platform_msg_id) => {
@@ -256,12 +275,17 @@ impl Chatty {
 				if let Some(p) = self.panes.get_mut(pane) {
 					p.reply_to_server_message_id = server_msg_id.clone().unwrap_or_default();
 					p.reply_to_platform_message_id = platform_msg_id.clone().unwrap_or_default();
-
-					self.insert_mode = true;
-					self.insert_target = Some(InsertTarget::Composer);
+					if self.state.gui_settings().keybinds.vim_nav {
+						self.insert_mode = true;
+						self.insert_target = Some(InsertTarget::Composer);
+					} else {
+						self.insert_mode = false;
+						self.insert_target = None;
+					}
 				}
 				self.pending_message_action = None;
-				Task::none()
+				let focus_cmd = iced::widget::operation::focus(format!("composer-{:?}", pane));
+				Task::batch(vec![focus_cmd])
 			}
 			Message::DeleteMessage(room, server_msg_id, platform_msg_id) => {
 				let topic = chatty_domain::RoomTopic::format(&room);
@@ -365,7 +389,8 @@ impl Chatty {
 					// unsubscribed successfully; nothing else to do
 				}
 
-				Task::none()
+				info!("TabUnsubscribed handled; resuming network event polling");
+				Task::perform(recv_next(self.net_rx.clone()), Message::NetPolled)
 			}
 			Message::PaneComposerChanged(pane, v) => {
 				if let Some(p) = self.panes.get_mut(pane) {
@@ -622,9 +647,34 @@ impl Chatty {
 				Task::none()
 			}
 			Message::NetPolled(ev) => self.update_net_polled(ev),
+			Message::MessageTextEdit(key, action) => {
+				if let Some(content) = self.message_text_editors.get_mut(&key)
+					&& !action.is_edit()
+				{
+					content.perform(action);
+				}
+				Task::none()
+			}
+			Message::AutoJoinCompleted(results) => {
+				for (room, res) in results {
+					if let Err(e) = res {
+						let msg = format!("{} {}: {}", t!("failed_to_subscribe"), RoomTopic::format(&room), e);
+						self.toast = Some(msg.clone());
+						self.state.push_notification(UiNotificationKind::Error, msg);
+					}
+				}
+				Task::none()
+			}
 			Message::PaneClicked(pane) => {
 				self.focused_pane = pane;
 				self.save_ui_layout();
+
+				if let (Some((_, h)), Some((_, y))) = (self.window_size, self.last_cursor_pos)
+					&& y >= h - 120.0
+				{
+					self.follow_end = true;
+				}
+
 				Task::none()
 			}
 			Message::OpenPlatformLogin(platform) => {
@@ -699,6 +749,8 @@ impl Chatty {
 				if let Some((_closed, sibling)) = self.panes.close(focused) {
 					self.focused_pane = sibling;
 
+					self.save_ui_layout();
+
 					if let (Some(tid), Some(room)) = (tab_id_opt, room_opt) {
 						let still_referenced = self.panes.iter().any(|(_, p)| p.tab_id == Some(tid));
 						if !still_referenced {
@@ -732,6 +784,8 @@ impl Chatty {
 						let room_opt = self.pane_room(focused);
 						if let Some((_closed, sibling)) = self.panes.close(focused) {
 							self.focused_pane = sibling;
+
+							self.save_ui_layout();
 							if let (Some(tid), Some(room)) = (tab_id_opt, room_opt) {
 								let still_referenced = self.panes.iter().any(|(_, p)| p.tab_id == Some(tid));
 								if !still_referenced {
@@ -798,7 +852,7 @@ impl Chatty {
 					}
 				}
 
-				if modifiers == iced::keyboard::Modifiers::default() && ch == 'i' {
+				if k.vim_nav && modifiers == iced::keyboard::Modifiers::default() && ch == 'i' {
 					let pane = self.focused_pane;
 					let mut use_composer = false;
 					if let Some(ps) = self.panes.get(pane)
@@ -834,7 +888,9 @@ impl Chatty {
 						format!("join-{:?}", pane)
 					};
 
-					return iced::widget::operation::focus(id);
+					let focus_cmd = iced::widget::operation::focus(id);
+					let recv_cmd = Task::perform(recv_next(self.net_rx.clone()), Message::NetPolled);
+					return Task::batch(vec![focus_cmd, recv_cmd]);
 				}
 
 				Task::none()
@@ -843,6 +899,10 @@ impl Chatty {
 				use iced::keyboard::key::Named;
 				match named {
 					Named::Escape => {
+						if self.pending_message_action.is_some() {
+							self.pending_message_action = None;
+							return Task::none();
+						}
 						if self.pending_import_root.is_some() {
 							self.pending_import_root = None;
 							self.toast = Some(t!("import_cancelled").to_string());
@@ -854,7 +914,11 @@ impl Chatty {
 							self.insert_mode = false;
 							self.insert_target = None;
 							self.toast = Some(t!("insert_mode_exited").to_string());
-							return iced::advanced::widget::operate(iced::advanced::widget::operation::focusable::unfocus());
+
+							let unfocus_cmd =
+								iced::advanced::widget::operate(iced::advanced::widget::operation::focusable::unfocus());
+							let recv_cmd = Task::perform(recv_next(self.net_rx.clone()), Message::NetPolled);
+							return Task::batch(vec![unfocus_cmd, recv_cmd]);
 						}
 						Task::none()
 					}
@@ -966,14 +1030,19 @@ impl Chatty {
 			return Task::none();
 		};
 
+		info!(?ev, "NetPolled event received in UI");
+
+		let mut pre_task: Option<Task<Message>> = None;
 		if let Some(room) = self.collect_orphaned_tab() {
+			info!(%room, "NetPolled: found orphaned tab; unsubscribing (continuing to process event)");
 			let net = self.net.clone();
-			return Task::perform(
+			pre_task = Some(Task::perform(
 				async move { (room.clone(), net.unsubscribe_room_key(room).await) },
 				|(room, res)| Message::TabUnsubscribed(room, res),
-			);
+			));
 		}
 
+		let mut ev_task_opt: Option<Task<Message>> = None;
 		match ev {
 			UiEvent::Connecting => {
 				self.state.set_connection_status(ConnectionStatus::Connecting);
@@ -997,6 +1066,31 @@ impl Chatty {
 					format!("{} ({})", server_name, server_instance_id)
 				};
 				self.state.set_connection_status(ConnectionStatus::Connected { server });
+
+				let mut rooms = Vec::new();
+				let mut seen = std::collections::HashSet::new();
+				for tab in self.state.tabs.values() {
+					if let chatty_client_ui::app_state::TabTarget::Room(room) = &tab.target
+						&& seen.insert(room.clone())
+					{
+						rooms.push(room.clone());
+					}
+				}
+
+				if !rooms.is_empty() {
+					let net = self.net.clone();
+					ev_task_opt = Some(Task::perform(
+						async move {
+							let mut results = Vec::new();
+							for room in rooms {
+								let res = net.subscribe_room_key(room.clone()).await;
+								results.push((room, res));
+							}
+							results
+						},
+						Message::AutoJoinCompleted,
+					));
+				}
 			}
 			UiEvent::Disconnected { reason } => {
 				if !reason.trim().is_empty() {
@@ -1036,6 +1130,7 @@ impl Chatty {
 				server_message_id,
 				platform_message_id,
 				badge_ids,
+				emotes,
 			} => {
 				if let Ok(room) = RoomTopic::parse(&topic) {
 					let _tid = self.ensure_tab_for_room(&room);
@@ -1049,9 +1144,47 @@ impl Chatty {
 						user_display: author_display,
 						text,
 						badge_ids,
+						emotes,
 						platform_message_id,
 					};
-					let _ = self.state.push_message(msg);
+					let key = Chatty::message_key(&msg);
+					let selection_text = Chatty::selection_text(&msg.text);
+					self.message_text_editors
+						.entry(key)
+						.or_insert_with(|| iced::widget::text_editor::Content::with_text(&selection_text));
+					let tabs = self.state.push_message(msg);
+
+					if self.follow_end {
+						for tid in tabs {
+							let panes_with_tab: Vec<pane_grid::Pane> = self
+								.panes
+								.iter()
+								.filter_map(|(pane, p)| if p.tab_id == Some(tid) { Some(*pane) } else { None })
+								.collect();
+
+							if !panes_with_tab.is_empty() {
+								let do_focus = match self.last_focus {
+									Some(ts) => ts.elapsed() >= Duration::from_millis(250),
+									None => true,
+								};
+
+								let recv_cmd = Task::perform(recv_next(self.net_rx.clone()), Message::NetPolled);
+
+								if do_focus {
+									self.last_focus = Some(Instant::now());
+									let mut cmds = Vec::new();
+									for pane in panes_with_tab {
+										let id = format!("log-{:?}", pane);
+										cmds.push(iced::widget::operation::snap_to_end(id));
+									}
+									cmds.push(recv_cmd);
+									ev_task_opt = Some(Task::batch(cmds));
+								} else {
+									ev_task_opt = Some(recv_cmd);
+								}
+							}
+						}
+					}
 				} else {
 					self.state
 						.push_notification(UiNotificationKind::Warning, format!("{}: {topic}", t!("unparseable_topic")));
@@ -1092,6 +1225,31 @@ impl Chatty {
 					);
 				}
 			}
+			UiEvent::RoomState {
+				topic,
+				emote_only,
+				subscribers_only,
+				unique_chat,
+				slow_mode,
+				slow_mode_wait_time_seconds,
+				followers_only,
+				followers_only_duration_minutes,
+			} => {
+				if let Ok(room) = RoomTopic::parse(&topic) {
+					self.state.room_states.insert(
+						room,
+						chatty_client_ui::app_state::RoomStateUi {
+							emote_only,
+							subscribers_only,
+							unique_chat,
+							slow_mode,
+							slow_mode_wait_time_seconds,
+							followers_only,
+							followers_only_duration_minutes,
+						},
+					);
+				}
+			}
 			UiEvent::AssetBundle {
 				topic,
 				cache_key,
@@ -1101,6 +1259,7 @@ impl Chatty {
 				emotes,
 				badges,
 			} => {
+				info!(topic = %topic, cache_key = %cache_key, emote_count = emotes.len(), badge_count = badges.len(), "received AssetBundle UiEvent");
 				let ck = cache_key.clone();
 				self.state.asset_bundles.insert(
 					ck.clone(),
@@ -1114,9 +1273,15 @@ impl Chatty {
 					},
 				);
 
-				if let Ok(room) = RoomTopic::parse(&topic) {
-					let keys = self.state.room_asset_cache_keys.entry(room).or_default();
+				if scope == pb::AssetScope::Global as i32 {
+					if !self.state.global_asset_cache_keys.contains(&ck) {
+						info!(cache_key = %ck, "registering global AssetBundle cache_key");
+						self.state.global_asset_cache_keys.push(ck.clone());
+					}
+				} else if let Ok(room) = RoomTopic::parse(&topic) {
+					let keys = self.state.room_asset_cache_keys.entry(room.clone()).or_default();
 					if !keys.contains(&ck) {
+						info!(cache_key = %ck, room = %room, "registering room AssetBundle cache_key");
 						keys.push(ck.clone());
 					}
 				}
@@ -1125,21 +1290,35 @@ impl Chatty {
 					let img_cache = self.image_cache.clone();
 					let sender = self.image_fetch_sender.clone();
 					if let Some(bundle) = self.state.asset_bundles.get(&ck) {
-						for em in &bundle.emotes {
+						let max_prefetch_emotes = 64usize;
+						let mut queued = 0usize;
+						for em in bundle.emotes.iter().take(max_prefetch_emotes) {
 							let url = em.image_url.clone();
 							let img_cache_cl = img_cache.clone();
 							if img_cache_cl.lock().unwrap().contains(&url) {
 								continue;
 							}
-							let _ = sender.try_send(url);
+
+							if sender.try_send(url).is_err() {
+								break;
+							}
+							queued += 1;
 						}
+
+						if queued > 0 {
+							tracing::debug!(cache_key = %ck, queued, "prefetched emote images");
+						}
+
 						for bd in &bundle.badges {
 							let url = bd.image_url.clone();
 							let img_cache_cl = img_cache.clone();
 							if img_cache_cl.lock().unwrap().contains(&url) {
 								continue;
 							}
-							let _ = sender.try_send(url);
+
+							if sender.try_send(url).is_err() {
+								break;
+							}
 						}
 					}
 				}
@@ -1177,6 +1356,15 @@ impl Chatty {
 			}
 		}
 
-		Task::perform(recv_next(self.net_rx.clone()), Message::NetPolled)
+		let ev_task = ev_task_opt.unwrap_or_else(Task::none);
+		let recv_task = Task::perform(recv_next(self.net_rx.clone()), Message::NetPolled);
+
+		if let Some(pre) = pre_task {
+			info!("scheduling recv_next and running pre-task");
+			Task::batch(vec![pre, ev_task, recv_task])
+		} else {
+			info!("scheduling recv_next again");
+			Task::batch(vec![ev_task, recv_task])
+		}
 	}
 }

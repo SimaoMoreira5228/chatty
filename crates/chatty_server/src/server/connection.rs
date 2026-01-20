@@ -445,6 +445,7 @@ pub async fn handle_connection(
 
 	let state_for_events = Arc::clone(&state);
 	let events_send_for_task = Arc::clone(&events_send);
+	let pending_replay_for_task = Arc::clone(&pending_replay);
 	let replay_service_for_task = Arc::clone(&replay_service);
 	let client_id_for_task = client_instance_id.clone();
 
@@ -535,13 +536,40 @@ pub async fn handle_connection(
 			}
 
 			let mut guard = events_send_for_task.lock().await;
-			let Some(events_send) = guard.as_mut() else {
-				continue;
-			};
+			let events_ready = guard.is_some();
+			if let Some(events_send) = guard.as_mut() {
+				let mut pending = pending_replay_for_task.lock().await;
+				if !pending.is_empty() {
+					for env in pending.drain(..) {
+						let frame = match encode_frame(
+							&pb::Envelope {
+								version: PROTOCOL_VERSION,
+								request_id: String::new(),
+								msg: Some(pb::envelope::Msg::Event(env)),
+							},
+							DEFAULT_MAX_FRAME_SIZE,
+						) {
+							Ok(f) => f,
+							Err(e) => {
+								error!(conn_id, error = %e, "failed to encode pending replay frame");
+								return Err::<(), anyhow::Error>(anyhow!(e));
+							}
+						};
+
+						if let Err(e) = events_send.write_all(&frame).await {
+							return Err(anyhow!(e).context("events stream write failed (pending replay)"));
+						}
+					}
+				}
+			}
 
 			match item {
 				RoomHubItem::Ingest(ingest) => match ingest.payload {
 					IngestPayload::ChatMessage(m) => {
+						let Some(events_send) = guard.as_mut() else {
+							continue;
+						};
+
 						let origin = pb::Origin {
 							platform: match ingest.room.platform {
 								Platform::Twitch => 1,
@@ -558,6 +586,19 @@ pub async fn handle_connection(
 							.map(|d| d.as_millis() as i64)
 							.unwrap_or(0);
 
+						let emotes: Vec<pb::AssetRef> = m
+							.emotes
+							.into_iter()
+							.map(|emote| pb::AssetRef {
+								id: emote.id,
+								name: emote.name,
+								image_url: emote.image_url,
+								image_format: emote.image_format,
+								width: emote.width,
+								height: emote.height,
+							})
+							.collect();
+
 						let message = pb::ChatMessage {
 							author_id: m.author.id,
 							author_login: m.author.login,
@@ -565,6 +606,7 @@ pub async fn handle_connection(
 							text: m.text,
 							platform_time_unix_ms,
 							badge_ids: m.badges,
+							emotes,
 						};
 
 						let chat_message_event = pb::ChatMessageEvent {
@@ -627,6 +669,99 @@ pub async fn handle_connection(
 						}
 					}
 					IngestPayload::AssetBundle(bundle) => {
+						if !events_ready {
+							let origin = pb::Origin {
+								platform: match ingest.room.platform {
+									Platform::Twitch => 1,
+									Platform::Kick => 2,
+									Platform::YouTube => 3,
+								},
+								channel: ingest.room.room_id.as_str().to_string(),
+								channel_display: ingest.room.room_id.as_str().to_string(),
+							};
+
+							let provider = match bundle.provider {
+								AssetProvider::Twitch => 1,
+								AssetProvider::Kick => 2,
+								AssetProvider::SevenTv => 3,
+								AssetProvider::Ffz => 4,
+								AssetProvider::Bttv => 5,
+							};
+
+							let scope = match bundle.scope {
+								AssetScope::Global => 1,
+								AssetScope::Channel => 2,
+							};
+
+							let etag = bundle.etag.clone().unwrap_or_else(|| compute_asset_bundle_etag(&bundle));
+							let emotes: Vec<pb::AssetRef> = bundle
+								.emotes
+								.into_iter()
+								.map(|emote| pb::AssetRef {
+									id: emote.id,
+									name: emote.name,
+									image_url: emote.image_url,
+									image_format: emote.image_format,
+									width: emote.width,
+									height: emote.height,
+								})
+								.collect();
+
+							let badges: Vec<pb::AssetRef> = bundle
+								.badges
+								.into_iter()
+								.map(|badge| pb::AssetRef {
+									id: badge.id,
+									name: badge.name,
+									image_url: badge.image_url,
+									image_format: badge.image_format,
+									width: badge.width,
+									height: badge.height,
+								})
+								.collect();
+
+							info!(
+								conn_id,
+								topic = %topic,
+								cache_key = %bundle.cache_key,
+								provider = ?bundle.provider,
+								scope = ?bundle.scope,
+								emote_count = emotes.len(),
+								badge_count = badges.len(),
+								"buffering AssetBundle event until events stream opens"
+							);
+
+							let assets = pb::AssetBundleEvent {
+								origin: Some(origin),
+								provider,
+								scope,
+								cache_key: bundle.cache_key,
+								etag,
+								emotes,
+								badges,
+							};
+
+							let env = pb::EventEnvelope {
+								topic: topic.clone(),
+								cursor: 0,
+								server_time_unix_ms: unix_ms_now(),
+								event: Some(pb::event_envelope::Event::AssetBundle(assets)),
+							};
+
+							let env = replay_service_for_task
+								.push_event(&client_id_for_task, &topic, env)
+								.await
+								.context("persist replay event")?;
+
+							let mut pending = pending_replay_for_task.lock().await;
+							pending.push(env);
+							continue;
+						}
+
+						let Some(events_send) = guard.as_mut() else {
+							continue;
+						};
+
 						let origin = pb::Origin {
 							platform: match ingest.room.platform {
 								Platform::Twitch => 1,
@@ -650,7 +785,7 @@ pub async fn handle_connection(
 						};
 
 						let etag = bundle.etag.clone().unwrap_or_else(|| compute_asset_bundle_etag(&bundle));
-						let emotes = bundle
+						let emotes: Vec<pb::AssetRef> = bundle
 							.emotes
 							.into_iter()
 							.map(|emote| pb::AssetRef {
@@ -662,7 +797,8 @@ pub async fn handle_connection(
 								height: emote.height,
 							})
 							.collect();
-						let badges = bundle
+
+						let badges: Vec<pb::AssetRef> = bundle
 							.badges
 							.into_iter()
 							.map(|badge| pb::AssetRef {
@@ -674,6 +810,17 @@ pub async fn handle_connection(
 								height: badge.height,
 							})
 							.collect();
+
+						info!(
+							conn_id,
+							topic = %topic,
+							cache_key = %bundle.cache_key,
+							provider = ?bundle.provider,
+							scope = ?bundle.scope,
+							emote_count = emotes.len(),
+							badge_count = badges.len(),
+							"emitting AssetBundle event"
+						);
 
 						let assets = pb::AssetBundleEvent {
 							origin: Some(origin),
@@ -716,9 +863,86 @@ pub async fn handle_connection(
 							return Err(anyhow!(e).context("events stream write failed"));
 						}
 					}
+					IngestPayload::RoomState(state) => {
+						let origin = pb::Origin {
+							platform: match ingest.room.platform {
+								Platform::Twitch => 1,
+								Platform::Kick => 2,
+								Platform::YouTube => 3,
+							},
+							channel: ingest.room.room_id.as_str().to_string(),
+							channel_display: ingest.room.room_id.as_str().to_string(),
+						};
+
+						let settings = pb::RoomChatSettings {
+							emote_only: state.settings.emote_only,
+							subscribers_only: state.settings.subscribers_only,
+							unique_chat: state.settings.unique_chat,
+							slow_mode: state.settings.slow_mode,
+							slow_mode_wait_time_seconds: state.settings.slow_mode_wait_time_seconds,
+							followers_only: state.settings.followers_only,
+							followers_only_duration_minutes: state.settings.followers_only_duration_minutes,
+						};
+
+						let room_state = pb::RoomStateEvent {
+							origin: Some(origin),
+							settings: Some(settings),
+							flags: state.flags.into_iter().collect(),
+							notes: state.notes.unwrap_or_default(),
+						};
+
+						let env = pb::EventEnvelope {
+							topic: topic.clone(),
+							cursor: 0,
+							server_time_unix_ms: unix_ms_now(),
+							event: Some(pb::event_envelope::Event::RoomState(room_state)),
+						};
+
+						if !events_ready {
+							let env = replay_service_for_task
+								.push_event(&client_id_for_task, &topic, env)
+								.await
+								.context("persist room state event")?;
+							let mut pending = pending_replay_for_task.lock().await;
+							pending.push(env);
+							continue;
+						}
+
+						let Some(events_send) = guard.as_mut() else {
+							continue;
+						};
+
+						let env = replay_service_for_task
+							.push_event(&client_id_for_task, &topic, env)
+							.await
+							.context("persist room state event")?;
+
+						let frame = match encode_frame(
+							&pb::Envelope {
+								version: PROTOCOL_VERSION,
+								request_id: String::new(),
+								msg: Some(pb::envelope::Msg::Event(env)),
+							},
+							DEFAULT_MAX_FRAME_SIZE,
+						) {
+							Ok(f) => f,
+							Err(e) => {
+								error!(conn_id, error = %e, "failed to encode room state frame");
+								return Err::<(), anyhow::Error>(anyhow!(e));
+							}
+						};
+
+						if let Err(e) = events_send.write_all(&frame).await {
+							return Err(anyhow!(e).context("events stream write failed"));
+						}
+					}
 					_ => {}
 				},
 				RoomHubItem::Lagged { dropped } => {
+					let Some(events_send) = guard.as_mut() else {
+						continue;
+					};
+
 					let lagged = pb::TopicLaggedEvent {
 						dropped,
 						detail: "room subscriber queue full".to_string(),

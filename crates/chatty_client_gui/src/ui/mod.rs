@@ -6,7 +6,7 @@ mod settings_view;
 mod topbar;
 mod users_view;
 
-use iced::widget::{column, container};
+use iced::widget::{column, container, stack};
 use iced::{Background, Border, Element, Length, Shadow};
 
 use crate::app::{Chatty, Message, Page};
@@ -42,30 +42,29 @@ pub fn view(app: &Chatty) -> Element<'_, Message> {
 	.width(Length::Fill)
 	.height(Length::Fill);
 
-	if let Some(modal) = settings_view::modal(app, palette) {
-		let stack = column![container(root).width(Length::Fill).height(Length::Fill), modal];
-		container(stack)
-			.width(Length::Fill)
-			.height(Length::Fill)
-			.style(move |_theme| container::Style {
-				text_color: Some(palette.text),
-				background: Some(Background::Color(palette.app_bg)),
-				border: Border::default(),
-				shadow: Shadow::default(),
-				snap: false,
-			})
-			.into()
-	} else {
-		container(root)
-			.width(Length::Fill)
-			.height(Length::Fill)
-			.style(move |_theme| container::Style {
-				text_color: Some(palette.text),
-				background: Some(Background::Color(palette.app_bg)),
-				border: Border::default(),
-				shadow: Shadow::default(),
-				snap: false,
-			})
-			.into()
+	let mut layers: Vec<Element<'_, Message>> = vec![container(root).width(Length::Fill).height(Length::Fill).into()];
+
+	if app.page == Page::Main
+		&& let Some(menu) = main_view::message_action_menu(app, palette)
+	{
+		layers.push(menu);
 	}
+
+	if let Some(modal) = settings_view::modal(app, palette) {
+		layers.push(modal);
+	}
+
+	let layered = stack(layers).width(Length::Fill).height(Length::Fill);
+
+	container(layered)
+		.width(Length::Fill)
+		.height(Length::Fill)
+		.style(move |_theme| container::Style {
+			text_color: Some(palette.text),
+			background: Some(Background::Color(palette.app_bg)),
+			border: Border::default(),
+			shadow: Shadow::default(),
+			snap: false,
+		})
+		.into()
 }
