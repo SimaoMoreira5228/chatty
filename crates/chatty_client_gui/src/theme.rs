@@ -1,72 +1,45 @@
 #![forbid(unsafe_code)]
-#![allow(unused)]
 
-use gpui::{App, Rgba, rgb};
-use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::PathBuf;
+use chatty_client_ui::settings::ThemeKind;
+use iced::Color;
 
-/// Logical theme kinds you can choose from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ThemeKind {
-	Dark,
-	Light,
-	Solarized,
-	HighContrast,
-	Ocean,
-	Dracula,
-	Gruvbox,
-	Nord,
-	Synthwave,
-	DarkAmethyst,
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy)]
+pub struct Palette {
+	pub app_bg: Color,
+	pub panel_bg: Color,
+	pub panel_bg_2: Color,
+	pub surface_bg: Color,
+	pub surface_hover_bg: Color,
+	pub border: Color,
+	pub text: Color,
+	pub text_dim: Color,
+	pub text_muted: Color,
+	pub accent_green: Color,
+	pub accent_blue: Color,
+	pub chat_bg: Color,
+	pub chat_row_bg: Color,
+	pub chat_row_hover_bg: Color,
+	pub chat_nick: Color,
+	pub system_text: Color,
+	pub tooltip_bg: Color,
+	pub button_bg: Color,
+	pub button_hover_bg: Color,
+	pub button_text: Color,
+	pub icon_button_bg: Color,
+	pub icon_button_hover_bg: Color,
 }
 
-/// Chatty UI theme.
-#[derive(Debug, Clone)]
-pub struct Theme {
-	// Core surfaces
-	pub app_bg: Rgba,
-	pub panel_bg: Rgba,
-	pub panel_bg_2: Rgba,
-	pub surface_bg: Rgba,
-	pub surface_hover_bg: Rgba,
-
-	// Borders
-	pub border: Rgba,
-
-	// Text
-	pub text: Rgba,
-	pub text_dim: Rgba,
-	pub text_muted: Rgba,
-
-	// Accents / status
-	pub accent_green: Rgba,
-	pub accent_blue: Rgba,
-
-	// Chat-specific
-	pub chat_bg: Rgba,
-	pub chat_row_bg: Rgba,
-	pub chat_row_hover_bg: Rgba,
-	pub chat_nick: Rgba,
-	pub system_text: Rgba,
-
-	// Tooltip / popover
-	pub tooltip_bg: Rgba,
-
-	// Buttons
-	pub button_bg: Rgba,
-	pub button_hover_bg: Rgba,
-	pub button_text: Rgba,
-
-	// Icon-style buttons (used for small glyphs / compact controls)
-	pub icon_button_bg: Rgba,
-	pub icon_button_hover_bg: Rgba,
+fn rgb(hex: u32) -> Color {
+	let r = ((hex >> 16) & 0xff) as f32 / 255.0;
+	let g = ((hex >> 8) & 0xff) as f32 / 255.0;
+	let b = (hex & 0xff) as f32 / 255.0;
+	Color::from_rgb(r, g, b)
 }
 
-impl Theme {
-	/// Default dark theme (matches the current hard-coded colors in `main_window.rs`).
-	pub fn dark() -> Self {
-		Self {
+pub fn palette(kind: ThemeKind) -> Palette {
+	match kind {
+		ThemeKind::Dark => Palette {
 			app_bg: rgb(0x1e1f22),
 			panel_bg: rgb(0x232428),
 			panel_bg_2: rgb(0x2b2d31),
@@ -89,12 +62,8 @@ impl Theme {
 			button_text: rgb(0xe3e5e8),
 			icon_button_bg: rgb(0x2b2d31),
 			icon_button_hover_bg: rgb(0x35373c),
-		}
-	}
-
-	/// Light / day theme suitable for bright UIs.
-	pub fn light() -> Self {
-		Self {
+		},
+		ThemeKind::Light => Palette {
 			app_bg: rgb(0xf6f7f8),
 			panel_bg: rgb(0xffffff),
 			panel_bg_2: rgb(0xf0f2f4),
@@ -117,12 +86,8 @@ impl Theme {
 			button_text: rgb(0x0b0c0d),
 			icon_button_bg: rgb(0xe9eef5),
 			icon_button_hover_bg: rgb(0xd6e2ff),
-		}
-	}
-
-	/// Solarized-inspired theme.
-	pub fn solarized() -> Self {
-		Self {
+		},
+		ThemeKind::Solarized => Palette {
 			app_bg: rgb(0x002b36),
 			panel_bg: rgb(0x073642),
 			panel_bg_2: rgb(0x002b36),
@@ -145,12 +110,8 @@ impl Theme {
 			button_text: rgb(0x93a1a1),
 			icon_button_bg: rgb(0x073642),
 			icon_button_hover_bg: rgb(0x0b3b46),
-		}
-	}
-
-	/// High-contrast theme for accessibility.
-	pub fn high_contrast() -> Self {
-		Self {
+		},
+		ThemeKind::HighContrast => Palette {
 			app_bg: rgb(0x000000),
 			panel_bg: rgb(0x0a0a0a),
 			panel_bg_2: rgb(0x111111),
@@ -173,12 +134,8 @@ impl Theme {
 			button_text: rgb(0xffffff),
 			icon_button_bg: rgb(0x111111),
 			icon_button_hover_bg: rgb(0x222222),
-		}
-	}
-
-	/// A cool "ocean" palette with teal accents.
-	pub fn ocean() -> Self {
-		Self {
+		},
+		ThemeKind::Ocean => Palette {
 			app_bg: rgb(0x071528),
 			panel_bg: rgb(0x08263b),
 			panel_bg_2: rgb(0x0b2f45),
@@ -201,12 +158,8 @@ impl Theme {
 			button_text: rgb(0xdbeefc),
 			icon_button_bg: rgb(0x123244),
 			icon_button_hover_bg: rgb(0x16485a),
-		}
-	}
-
-	/// Dracula: Famous dark theme with vibrant purple/pink accents.
-	pub fn dracula() -> Self {
-		Self {
+		},
+		ThemeKind::Dracula => Palette {
 			app_bg: rgb(0x282a36),
 			panel_bg: rgb(0x21222c),
 			panel_bg_2: rgb(0x44475a),
@@ -229,12 +182,8 @@ impl Theme {
 			button_text: rgb(0xf8f8f2),
 			icon_button_bg: rgb(0x44475a),
 			icon_button_hover_bg: rgb(0x6272a4),
-		}
-	}
-
-	/// Gruvbox (Dark): Retro groove color scheme.
-	pub fn gruvbox() -> Self {
-		Self {
+		},
+		ThemeKind::Gruvbox => Palette {
 			app_bg: rgb(0x282828),
 			panel_bg: rgb(0x1d2021),
 			panel_bg_2: rgb(0x32302f),
@@ -257,46 +206,38 @@ impl Theme {
 			button_text: rgb(0xebdbb2),
 			icon_button_bg: rgb(0x3c3836),
 			icon_button_hover_bg: rgb(0x504945),
-		}
-	}
-
-	/// Nord: An arctic, north-bluish color palette.
-	pub fn nord() -> Self {
-		Self {
+		},
+		ThemeKind::Nord => Palette {
 			app_bg: rgb(0x2e3440),
 			panel_bg: rgb(0x3b4252),
 			panel_bg_2: rgb(0x434c5e),
 			surface_bg: rgb(0x2e3440),
-			surface_hover_bg: rgb(0x3b4252),
+			surface_hover_bg: rgb(0x434c5e),
 			border: rgb(0x4c566a),
-			text: rgb(0xd8dee9),
-			text_dim: rgb(0xe5e9f0),
-			text_muted: rgb(0x4c566a),
+			text: rgb(0xeceff4),
+			text_dim: rgb(0xd8dee9),
+			text_muted: rgb(0x81a1c1),
 			accent_green: rgb(0xa3be8c),
 			accent_blue: rgb(0x88c0d0),
 			chat_bg: rgb(0x2e3440),
 			chat_row_bg: rgb(0x2e3440),
 			chat_row_hover_bg: rgb(0x3b4252),
-			chat_nick: rgb(0x81a1c1),
-			system_text: rgb(0x4c566a),
-			tooltip_bg: rgb(0x242933),
-			button_bg: rgb(0x434c5e),
+			chat_nick: rgb(0x88c0d0),
+			system_text: rgb(0x81a1c1),
+			tooltip_bg: rgb(0x2e3440),
+			button_bg: rgb(0x3b4252),
 			button_hover_bg: rgb(0x4c566a),
-			button_text: rgb(0xd8dee9),
-			icon_button_bg: rgb(0x434c5e),
+			button_text: rgb(0xeceff4),
+			icon_button_bg: rgb(0x3b4252),
 			icon_button_hover_bg: rgb(0x4c566a),
-		}
-	}
-
-	/// Synthwave: Neon colors on a deep purple background.
-	pub fn synthwave() -> Self {
-		Self {
+		},
+		ThemeKind::Synthwave => Palette {
 			app_bg: rgb(0x241b2f),
-			panel_bg: rgb(0x2a2139),
-			panel_bg_2: rgb(0x362c49),
+			panel_bg: rgb(0x1e1627),
+			panel_bg_2: rgb(0x2d243a),
 			surface_bg: rgb(0x241b2f),
-			surface_hover_bg: rgb(0x2a2139),
-			border: rgb(0x49365e),
+			surface_hover_bg: rgb(0x362c49),
+			border: rgb(0x3a2f4f),
 			text: rgb(0xf0f0f0),
 			text_dim: rgb(0xb45bcf),
 			text_muted: rgb(0x6b5382),
@@ -313,12 +254,8 @@ impl Theme {
 			button_text: rgb(0xff00cc),
 			icon_button_bg: rgb(0x362c49),
 			icon_button_hover_bg: rgb(0x49365e),
-		}
-	}
-
-	/// Dark Amethyst: Dark neutral surfaces with purple accents.
-	pub fn dark_amethyst() -> Self {
-		Self {
+		},
+		ThemeKind::DarkAmethyst => Palette {
 			app_bg: rgb(0x030712),
 			panel_bg: rgb(0x1f2937),
 			panel_bg_2: rgb(0x161d27),
@@ -341,69 +278,6 @@ impl Theme {
 			chat_row_bg: rgb(0x030712),
 			chat_row_hover_bg: rgb(0x1f2937),
 			tooltip_bg: rgb(0x1f2937),
-		}
+		},
 	}
-
-	/// Construct a theme from a `ThemeKind`.
-	pub fn from_kind(kind: ThemeKind) -> Self {
-		match kind {
-			ThemeKind::Dark => Self::dark(),
-			ThemeKind::Light => Self::light(),
-			ThemeKind::Solarized => Self::solarized(),
-			ThemeKind::HighContrast => Self::high_contrast(),
-			ThemeKind::Ocean => Self::ocean(),
-			ThemeKind::Dracula => Self::dracula(),
-			ThemeKind::Gruvbox => Self::gruvbox(),
-			ThemeKind::Nord => Self::nord(),
-			ThemeKind::Synthwave => Self::synthwave(),
-			ThemeKind::DarkAmethyst => Self::dark_amethyst(),
-		}
-	}
-}
-
-use crate::ui::settings;
-
-/// Shorthand accessor used by most UI modules.
-pub fn theme() -> Theme {
-	let kind = settings::theme_kind();
-	Theme::from_kind(kind)
-}
-
-/// Convenience: pick a theme by kind without persisting.
-pub fn theme_with_kind(kind: ThemeKind) -> Theme {
-	Theme::from_kind(kind)
-}
-
-/// Set the current theme kind and persist it via the centralized settings module.
-pub fn set_theme_kind(kind: ThemeKind) {
-	settings::set_theme(kind);
-}
-
-/// Sync gpui-component theme colors to the active Chatty theme.
-pub fn sync_component_theme(cx: &mut App, kind: ThemeKind) {
-	let t = Theme::from_kind(kind);
-	let comp = gpui_component::Theme::global_mut(cx);
-
-	comp.colors.background = t.app_bg.into();
-	comp.colors.foreground = t.text.into();
-	comp.colors.border = t.border.into();
-	comp.colors.input = t.border.into();
-	comp.colors.muted = t.panel_bg_2.into();
-	comp.colors.muted_foreground = t.text_dim.into();
-	comp.colors.popover = t.panel_bg.into();
-	comp.colors.popover_foreground = t.text.into();
-	comp.colors.list = t.panel_bg.into();
-	comp.colors.list_hover = t.panel_bg_2.into();
-	comp.colors.list_active = t.panel_bg_2.into();
-	comp.colors.list_active_border = t.border.into();
-	comp.colors.accent = t.button_bg.into();
-	comp.colors.accent_foreground = t.button_text.into();
-	comp.colors.secondary = t.panel_bg_2.into();
-	comp.colors.secondary_foreground = t.text.into();
-	comp.colors.primary = t.button_bg.into();
-	comp.colors.primary_foreground = t.button_text.into();
-	comp.colors.ring = t.border.into();
-	comp.colors.scrollbar = t.border.into();
-	comp.colors.scrollbar_thumb = t.border.into();
-	comp.colors.scrollbar_thumb_hover = t.button_hover_bg.into();
 }

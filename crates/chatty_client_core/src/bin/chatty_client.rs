@@ -159,7 +159,7 @@ async fn main() -> anyhow::Result<()> {
 	let resolved = cfg.server_addr.map(|a| a.to_string()).unwrap_or_else(|| "<dns>".to_string());
 	info!(server = %resolved, sni = %cfg.server_host, "connecting");
 
-	let mut control = SessionControl::connect(cfg).await?;
+	let (mut control, _welcome) = SessionControl::connect(cfg).await?;
 	let subscribed = control.subscribe(topics.clone()).await?;
 
 	let ok_count = subscribed

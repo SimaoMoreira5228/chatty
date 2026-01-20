@@ -21,6 +21,14 @@ pub const DEFAULT_SERVER_ENDPOINT_QUIC: &str = server_endpoint::DEFAULT_SERVER_E
 /// True when the server endpoint is locked (release builds of the standalone client).
 pub const SERVER_ENDPOINT_LOCKED: bool = server_endpoint::SERVER_ENDPOINT_LOCKED;
 
+/// Build-time HMAC configuration and keys.
+pub const HMAC_ENABLED: bool = server_endpoint::HMAC_ENABLED;
+pub const HMAC_KEY: &str = server_endpoint::HMAC_KEY;
+
+/// Build-time external login URLs (may be empty).
+pub const TWITCH_LOGIN_URL: &str = server_endpoint::TWITCH_LOGIN_URL;
+pub const KICK_LOGIN_URL: &str = server_endpoint::KICK_LOGIN_URL;
+
 /// Current protocol version used in `pb::Envelope.version`.
 pub const PROTOCOL_VERSION: u32 = 1;
 
@@ -179,7 +187,7 @@ pub struct SessionEvents {
 
 impl SessionControl {
 	/// Connect and perform the v1 handshake.
-	pub async fn connect(cfg: ClientConfigV1) -> Result<Self, ClientCoreError> {
+	pub async fn connect(cfg: ClientConfigV1) -> Result<(Self, pb::Welcome), ClientCoreError> {
 		let endpoint = make_client_endpoint().map_err(|e| ClientCoreError::Endpoint(format!("{e:#}")))?;
 
 		let quinn_cfg = make_insecure_client_config().map_err(|e| ClientCoreError::Endpoint(format!("{e:#}")))?;
@@ -291,13 +299,15 @@ impl SessionControl {
 			"received Welcome"
 		);
 
-		Ok(Self {
+		let control = Self {
 			conn,
 			control_send,
 			control_recv,
 			max_frame_bytes: (welcome.max_frame_bytes as usize).min(cfg.max_frame_bytes),
 			events_opened: false,
-		})
+		};
+
+		Ok((control, welcome))
 	}
 
 	/// Subscribe to topics with optional resume cursors.

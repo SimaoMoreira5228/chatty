@@ -319,15 +319,13 @@ fn pick_seventv_image(images: &[SevenTvImage]) -> Option<&SevenTvImage> {
 		return None;
 	}
 
-	let preferred_mimes = [
-		"image/png",
-		"image/gif",
-		"image/webp",
-		"image/avif",
-	];
+	let preferred_mimes = ["image/png", "image/gif", "image/webp", "image/avif"];
 
 	for mime in preferred_mimes {
-		if let Some(img) = images.iter().find(|img| img.scale == 1 && img.mime.eq_ignore_ascii_case(mime)) {
+		if let Some(img) = images
+			.iter()
+			.find(|img| img.scale == 1 && img.mime.eq_ignore_ascii_case(mime))
+		{
 			return Some(img);
 		}
 	}

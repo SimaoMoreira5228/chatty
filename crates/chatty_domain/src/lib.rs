@@ -12,6 +12,7 @@ use thiserror::Error;
 pub enum Platform {
 	Twitch,
 	Kick,
+	#[serde(rename = "youtube")]
 	YouTube,
 }
 

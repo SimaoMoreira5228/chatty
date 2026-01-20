@@ -14,7 +14,16 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, MissedTickBehavior};
 use tracing::{debug, info, warn};
 
-use crate::ui::app_state::AssetRefUi;
+fn ui_send_error(ui_tx: &mpsc::UnboundedSender<UiEvent>, message: String, cfg: Option<&ClientConfigV1>) {
+	let server = cfg.map(|c| format!("{}:{}", c.server_host, c.server_port));
+	let _ = ui_tx.send(UiEvent::ErrorWithServer {
+		message,
+		server,
+		server_instance: None,
+	});
+}
+
+use crate::app_state::AssetRefUi;
 
 /// Dev auto-connect env flag.
 pub const CHATTY_UI_AUTO_CONNECT_ENV: &str = "CHATTY_UI_AUTO_CONNECT";
@@ -35,7 +44,6 @@ pub enum UiEvent {
 		next_retry_in_ms: u64,
 	},
 	Connected {
-		/// Best-effort; not always provided by the core.
 		server_name: String,
 		server_instance_id: String,
 	},
@@ -45,7 +53,11 @@ pub enum UiEvent {
 	Error {
 		message: String,
 	},
-
+	ErrorWithServer {
+		message: String,
+		server: Option<String>,
+		server_instance: Option<String>,
+	},
 	ChatMessage {
 		topic: String,
 		cursor: u64,
@@ -179,7 +191,6 @@ impl SessionEventsApi for SessionEvents {
 	}
 }
 
-/// UI -> networking commands.
 #[derive(Debug)]
 pub enum NetCommand {
 	Connect {
@@ -202,7 +213,6 @@ pub enum NetCommand {
 	},
 }
 
-/// UI command handle for the networking task.
 #[derive(Clone)]
 pub struct NetController {
 	cmd_tx: mpsc::Sender<NetCommand>,
@@ -252,7 +262,6 @@ impl NetController {
 	}
 }
 
-/// Shutdown handle for the networking task.
 pub struct ShutdownHandle {
 	shutdown_tx: oneshot::Sender<()>,
 }
@@ -263,7 +272,6 @@ impl ShutdownHandle {
 	}
 }
 
-/// Start networking runtime.
 pub fn start_networking() -> (NetController, mpsc::UnboundedReceiver<UiEvent>, ShutdownHandle) {
 	let (cmd_tx, cmd_rx) = mpsc::channel::<NetCommand>(128);
 	let (ui_tx, ui_rx) = mpsc::unbounded_channel::<UiEvent>();
@@ -364,150 +372,166 @@ async fn run_network_task_with_session_factory<F>(
 	let mut reconnect_attempt: u32 = 0;
 	let mut reconnect_deadline: Option<Instant> = None;
 	let mut keepalive_failures: u32 = 0;
+	let mut last_successful_connect_time: Option<Instant> = None;
 
 	let mut keepalive_tick = tokio::time::interval(KEEPALIVE_INTERVAL);
 	keepalive_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+	fn bump_reconnect_attempt(reconnect_attempt: &mut u32, last_successful: Option<Instant>) -> u32 {
+		if let Some(last) = last_successful {
+			if Instant::now().duration_since(last) > RECONNECT_RESET_AFTER {
+				*reconnect_attempt = 1;
+			} else {
+				*reconnect_attempt = reconnect_attempt.saturating_add(1).max(1);
+			}
+		} else {
+			*reconnect_attempt = reconnect_attempt.saturating_add(1).max(1);
+		}
+		*reconnect_attempt
+	}
 
 	let mut dev_auto_connect_fired = false;
 
 	loop {
 		tokio::select! {
-			_ = &mut shutdown_rx => {
-				let _ = ui_tx.send(UiEvent::Disconnected { reason: "shutdown".to_string() });
-				if let Some(s) = session.as_ref() {
-					s.close(0, "shutdown");
-				}
-				if let Some(t) = events_task.take() {
-					t.abort();
-				}
-				break;
-			}
-
-			_ = keepalive_tick.tick(), if session.is_some() => {
-				if let Some(s) = session.as_mut() {
-					let client_time_unix_ms = SystemTime::now()
-						.duration_since(SystemTime::UNIX_EPOCH)
-						.map(|d| d.as_millis() as i64)
-						.unwrap_or(0);
-
-					let ping_res = tokio::time::timeout(KEEPALIVE_TIMEOUT, s.ping(client_time_unix_ms)).await;
-					match ping_res {
-						Ok(Ok(_)) => {
-							keepalive_failures = 0;
+					_ = &mut shutdown_rx => {
+						let _ = ui_tx.send(UiEvent::Disconnected { reason: "shutdown".to_string() });
+						if let Some(s) = session.as_ref() {
+							s.close(0, "shutdown");
 						}
-						Ok(Err(e)) => {
-							keepalive_failures = keepalive_failures.saturating_add(1);
-							warn!(failure = keepalive_failures, error = %map_core_err(e), "keepalive failed");
-						}
-						Err(_) => {
-							keepalive_failures = keepalive_failures.saturating_add(1);
-							warn!(failure = keepalive_failures, "keepalive timeout");
-						}
-					}
-
-					if keepalive_failures >= KEEPALIVE_MAX_FAILURES {
-						let _ = ui_tx.send(UiEvent::Disconnected {
-							reason: "keepalive failed; reconnecting".to_string(),
-						});
-
 						if let Some(t) = events_task.take() {
 							t.abort();
 						}
-
-						if let Some(s) = session.as_ref() {
-							s.close(0, "keepalive failed");
-						}
-
-						session = None;
-						keepalive_failures = 0;
-
-						if let Some(cfg) = last_connect_cfg.clone() {
-							reconnect_attempt = reconnect_attempt.saturating_add(1).max(1);
-							let (deadline, ms) = schedule_reconnect(reconnect_attempt);
-							reconnect_deadline = Some(deadline);
-							let _ = ui_tx
-								.send(UiEvent::Reconnecting {
-									attempt: reconnect_attempt,
-									next_retry_in_ms: ms,
-								});
-							let _ = cfg;
-						}
+						break;
 					}
-				}
-			}
 
-			cmd = cmd_rx.recv() => {
-				let Some(cmd) = cmd else {
-					let _ = ui_tx.send(UiEvent::Disconnected { reason: "ui dropped controller".to_string() });
-					if let Some(s) = session.as_ref() {
-						s.close(0, "ui dropped controller");
-					}
-					if let Some(t) = events_task.take() {
-						t.abort();
-					}
-					break;
-				};
-
-				match cmd {
-					NetCommand::Connect { cfg } => {
-						last_connect_cfg = Some(*cfg.clone());
-						reconnect_attempt = 0;
-						reconnect_deadline = None;
-						let _ = ui_tx.send(UiEvent::Connecting);
-						if let Some(t) = events_task.take() { t.abort(); }
-						if let Some(s) = session.as_ref() { s.close(0, "reconnect"); }
-						session = connect_fn(cfg.clone(), ui_tx.clone()).await;
-
+					_ = keepalive_tick.tick(), if session.is_some() => {
 						if let Some(s) = session.as_mut() {
-							if cfg!(debug_assertions) {
-								for topic in dev_default_topics() {
-									*topics_refcounts.entry(topic).or_insert(0) += 1;
+							let client_time_unix_ms = SystemTime::now()
+								.duration_since(SystemTime::UNIX_EPOCH)
+								.map(|d| d.as_millis() as i64)
+								.unwrap_or(0);
+
+							let ping_res = tokio::time::timeout(KEEPALIVE_TIMEOUT, s.ping(client_time_unix_ms)).await;
+							match ping_res {
+								Ok(Ok(_)) => {
+									keepalive_failures = 0;
+								}
+								Ok(Err(e)) => {
+									keepalive_failures = keepalive_failures.saturating_add(1);
+									warn!(failure = keepalive_failures, error = %map_core_err(e), "keepalive failed");
+								}
+								Err(_) => {
+									keepalive_failures = keepalive_failures.saturating_add(1);
+									warn!(failure = keepalive_failures, "keepalive timeout");
 								}
 							}
-							if let Err(e) =
-								reconcile_subscriptions_on_connect(s, &topics_refcounts, &cursor_by_topic, &ui_tx, &mut events_task)
-								.await
-							{
-								let _ = ui_tx.send(UiEvent::Error { message: e });
-								s.close(0, "subscribe failed");
+
+							if keepalive_failures >= KEEPALIVE_MAX_FAILURES {
+								let _ = ui_tx.send(UiEvent::Disconnected {
+									reason: "keepalive failed; reconnecting".to_string(),
+								});
+
+								if let Some(t) = events_task.take() {
+									t.abort();
+								}
+
+								if let Some(s) = session.as_ref() {
+									s.close(0, "keepalive failed");
+								}
+
 								session = None;
+								keepalive_failures = 0;
+
+								if let Some(cfg) = last_connect_cfg.clone() {
+									let attempt = bump_reconnect_attempt(&mut reconnect_attempt, last_successful_connect_time);
+									let (deadline, ms) = schedule_reconnect(attempt);
+									reconnect_deadline = Some(deadline);
+									let _ = ui_tx.send(UiEvent::Reconnecting {
+										attempt: reconnect_attempt,
+										next_retry_in_ms: ms,
+									});
+									let _ = cfg;
+								}
 							}
+						}
+					}
+
+					cmd = cmd_rx.recv() => {
+						let Some(cmd) = cmd else {
+							let _ = ui_tx.send(UiEvent::Disconnected { reason: "ui dropped controller".to_string() });
+							if let Some(s) = session.as_ref() {
+								s.close(0, "ui dropped controller");
+							}
+							if let Some(t) = events_task.take() {
+								t.abort();
+							}
+							break;
+						};
+
+						match cmd {
+							NetCommand::Connect { cfg } => {
+								last_connect_cfg = Some(*cfg.clone());
+								reconnect_attempt = 0;
+								reconnect_deadline = None;
+								let _ = ui_tx.send(UiEvent::Connecting);
+								if let Some(t) = events_task.take() { t.abort(); }
+								if let Some(s) = session.as_ref() { s.close(0, "reconnect"); }
+								session = connect_fn(cfg.clone(), ui_tx.clone()).await;
+
+								if let Some(s) = session.as_mut() {
+									if cfg!(debug_assertions) {
+										for topic in dev_default_topics() {
+											*topics_refcounts.entry(topic).or_insert(0) += 1;
+										}
+									}
+
+									if let Err(e) = reconcile_subscriptions_on_connect(
+										s,
+										&topics_refcounts,
+										&cursor_by_topic,
+										&ui_tx,
+										&mut events_task,
+									)
+									.await {
+										ui_send_error(&ui_tx, e, last_connect_cfg.as_ref());
+										s.close(0, "subscribe failed");
+										session = None;
+		}
+							last_successful_connect_time = Some(Instant::now());
 							reconnect_attempt = 0;
 							reconnect_deadline = None;
 						} else if let Some(cfg) = last_connect_cfg.clone() {
-							reconnect_attempt = 1;
-							let (deadline, ms) = schedule_reconnect(reconnect_attempt);
+							let attempt = bump_reconnect_attempt(&mut reconnect_attempt, last_successful_connect_time);
+							let (deadline, ms) = schedule_reconnect(attempt);
 							reconnect_deadline = Some(deadline);
-							let _ = ui_tx
-								.send(UiEvent::Reconnecting {
-									attempt: reconnect_attempt,
-									next_retry_in_ms: ms,
-								})
-								;
-							let _ = cfg;
-						}
-					}
-
-					NetCommand::Disconnect { reason } => {
-						if let Some(t) = events_task.take() { t.abort(); }
-						if let Some(s) = session.as_ref() { s.close(0, &reason); }
-						session = None;
-						last_connect_cfg = None;
-						reconnect_attempt = 0;
-						reconnect_deadline = None;
-						let _ = ui_tx.send(UiEvent::Disconnected { reason });
-					}
-
-					NetCommand::SubscribeTopic { topic } => {
-						if let Some(s) = session.as_mut() {
-							if let Err(e) = subscribe_topics(s, vec![topic], &cursor_by_topic, &ui_tx, &mut events_task).await {
-								let _ = ui_tx.send(UiEvent::Error { message: e });
+							let _ = ui_tx.send(UiEvent::Reconnecting {
+								attempt,
+										next_retry_in_ms: ms,
+									});
+									let _ = cfg;
+								}
 							}
+
+							NetCommand::Disconnect { reason } => {
+								if let Some(t) = events_task.take() { t.abort(); }
+								if let Some(s) = session.as_ref() { s.close(0, &reason); }
+								session = None;
+								last_connect_cfg = None;
+								reconnect_attempt = 0;
+								reconnect_deadline = None;
+								let _ = ui_tx.send(UiEvent::Disconnected { reason });
+							}
+
+							NetCommand::SubscribeTopic { topic } => {
+								if let Some(s) = session.as_mut() {
+									if let Err(e) = subscribe_topics(s, vec![topic], &cursor_by_topic, &ui_tx, &mut events_task).await {
+							ui_send_error(&ui_tx, e, last_connect_cfg.as_ref());
+						}
 						} else {
-							let _ = ui_tx.send(UiEvent::Error { message: "not connected".to_string() });
+							ui_send_error(&ui_tx, "not connected".to_string(), last_connect_cfg.as_ref());
 						}
 					}
-
 					NetCommand::SubscribeRoomKey { room } => {
 						let topic = topic_for_room(&room);
 
@@ -517,14 +541,13 @@ async fn run_network_task_with_session_factory<F>(
 
 						if was_zero
 							&& let Some(s) = session.as_mut()
-								&& let Err(e) = subscribe_topics(s, vec![topic], &cursor_by_topic, &ui_tx, &mut events_task).await {
-									let _ = ui_tx.send(UiEvent::Error { message: e });
+								&& let Err(e) = subscribe_topics(s, vec![topic.clone()], &cursor_by_topic, &ui_tx, &mut events_task).await {
+									ui_send_error(&ui_tx, e, last_connect_cfg.as_ref());
 								}
 					}
 
 					NetCommand::UnsubscribeRoomKey { room } => {
 						let topic = topic_for_room(&room);
-
 						let mut became_zero = false;
 						if let Some(count) = topics_refcounts.get_mut(&topic) {
 							if *count > 1 {
@@ -538,100 +561,99 @@ async fn run_network_task_with_session_factory<F>(
 						if became_zero
 							&& let Some(s) = session.as_mut()
 								&& let Err(e) = unsubscribe_topics(s, vec![topic], &ui_tx).await {
-									let _ = ui_tx.send(UiEvent::Error { message: e });
+									ui_send_error(&ui_tx, e, last_connect_cfg.as_ref());
 								}
 					}
-
-					NetCommand::SendCommand { command } => {
+							NetCommand::SendCommand { command } => {
 						if let Some(s) = session.as_mut() {
 							match s.send_command(command).await {
 								Ok(result) => {
-									let _ = ui_tx
-										.send(UiEvent::CommandResult {
-											status: result.status,
-											detail: result.detail,
-										})
-										;
-								}
-								Err(e) => {
-									let _ = ui_tx.send(UiEvent::Error { message: map_core_err(e) });
+											let _ = ui_tx.send(UiEvent::CommandResult {
+												status: result.status,
+												detail: result.detail,
+											});
+										}
+										Err(e) => {
+											ui_send_error(&ui_tx, map_core_err(e), last_connect_cfg.as_ref());
+										}
+									}
+								} else {
+									ui_send_error(&ui_tx, "not connected".to_string(), last_connect_cfg.as_ref());
 								}
 							}
-						} else {
-							let _ = ui_tx.send(UiEvent::Error { message: "not connected".to_string() });
+						}
+					}
+
+					_ = tokio::time::sleep(Duration::from_millis(200)), if cfg!(debug_assertions) && !dev_auto_connect_fired && should_dev_auto_connect() => {
+						dev_auto_connect_fired = true;
+						let _ = ui_tx.send(UiEvent::Connecting);
+						if let Some(t) = events_task.take() { t.abort(); }
+						if let Some(s) = session.as_ref() { s.close(0, "dev auto-connect"); }
+						session = connect_fn(Box::default(), ui_tx.clone()).await;
+
+						if let Some(s) = session.as_mut() {
+							if cfg!(debug_assertions) {
+								for topic in dev_default_topics() {
+									*topics_refcounts.entry(topic).or_insert(0) += 1;
+								}
+							}
+							if let Err(e) = reconcile_subscriptions_on_connect(s, &topics_refcounts, &cursor_by_topic, &ui_tx, &mut events_task).await {
+								ui_send_error(&ui_tx, e, last_connect_cfg.as_ref());
+								s.close(0, "subscribe failed");
+								session = None;
+							}
+						}
+					}
+
+					_ = async {
+						if let Some(deadline) = reconnect_deadline {
+							tokio::time::sleep_until(deadline).await;
+						}
+					}, if reconnect_deadline.is_some() => {
+						if let Some(cfg) = last_connect_cfg.clone() {
+							let _ = ui_tx.send(UiEvent::Connecting);
+							if let Some(t) = events_task.take() { t.abort(); }
+							if let Some(s) = session.as_ref() { s.close(0, "reconnect"); }
+							session = connect_fn(Box::new(cfg), ui_tx.clone()).await;
+							if let Some(s) = session.as_mut() {
+								if let Err(e) = reconcile_subscriptions_on_connect(s, &topics_refcounts, &cursor_by_topic, &ui_tx, &mut events_task).await {
+									ui_send_error(&ui_tx, e, last_connect_cfg.as_ref());
+									s.close(0, "subscribe failed");
+									session = None;
+								}
+
+								last_successful_connect_time = Some(Instant::now());
+								reconnect_attempt = 0;
+								reconnect_deadline = None;
+							} else {
+								let attempt = bump_reconnect_attempt(&mut reconnect_attempt, last_successful_connect_time);
+								let (deadline, ms) = schedule_reconnect(attempt);
+								reconnect_deadline = Some(deadline);
+								let _ = ui_tx.send(UiEvent::Reconnecting {
+									attempt,
+									next_retry_in_ms: ms,
+								});
+							}
 						}
 					}
 				}
-			}
-
-			_ = tokio::time::sleep(Duration::from_millis(200)), if cfg!(debug_assertions) && !dev_auto_connect_fired && should_dev_auto_connect() => {
-				dev_auto_connect_fired = true;
-				let _ = ui_tx.send(UiEvent::Connecting);
-				if let Some(t) = events_task.take() { t.abort(); }
-				if let Some(s) = session.as_ref() { s.close(0, "dev auto-connect"); }
-				session = connect_fn(Box::default(), ui_tx.clone()).await;
-
-				if let Some(s) = session.as_mut() {
-					if cfg!(debug_assertions) {
-						for topic in dev_default_topics() {
-							*topics_refcounts.entry(topic).or_insert(0) += 1;
-						}
-					}
-					if let Err(e) =
-						reconcile_subscriptions_on_connect(s, &topics_refcounts, &cursor_by_topic, &ui_tx, &mut events_task)
-						.await
-					{
-						let _ = ui_tx.send(UiEvent::Error { message: e });
-						s.close(0, "subscribe failed");
-						session = None;
-					}
-				}
-			}
-
-			_ = async {
-				if let Some(deadline) = reconnect_deadline {
-					tokio::time::sleep_until(deadline).await;
-				}
-			}, if reconnect_deadline.is_some() => {
-				if let Some(cfg) = last_connect_cfg.clone() {
-					let _ = ui_tx.send(UiEvent::Connecting);
-					if let Some(t) = events_task.take() { t.abort(); }
-					if let Some(s) = session.as_ref() { s.close(0, "reconnect"); }
-					session = connect_fn(Box::new(cfg), ui_tx.clone()).await;
-					if let Some(s) = session.as_mut() {
-						if let Err(e) =
-							reconcile_subscriptions_on_connect(s, &topics_refcounts, &cursor_by_topic, &ui_tx, &mut events_task)
-							.await
-						{
-							let _ = ui_tx.send(UiEvent::Error { message: e });
-							s.close(0, "subscribe failed");
-							session = None;
-						}
-						reconnect_attempt = 0;
-						reconnect_deadline = None;
-					} else {
-						reconnect_attempt = reconnect_attempt.saturating_add(1).max(1);
-						let (deadline, ms) = schedule_reconnect(reconnect_attempt);
-						reconnect_deadline = Some(deadline);
-						let _ = ui_tx
-							.send(UiEvent::Reconnecting {
-								attempt: reconnect_attempt,
-								next_retry_in_ms: ms,
-							})
-							;
-					}
-				}
-			}
-		}
 	}
 }
+
+use rand::Rng;
+
+const RECONNECT_RESET_AFTER: Duration = Duration::from_secs(60 * 5);
 
 fn schedule_reconnect(attempt: u32) -> (Instant, u64) {
 	let base_ms = 500u64;
 	let max_ms = 30_000u64;
 	let pow = 2u64.saturating_pow(attempt.saturating_sub(1).min(6));
 	let delay_ms = (base_ms.saturating_mul(pow)).min(max_ms);
-	(Instant::now() + Duration::from_millis(delay_ms), delay_ms)
+	let jitter_window = (delay_ms / 10).max(1);
+	let mut rng = rand::rng();
+	let jitter_offset = rng.random_range(0..=(jitter_window * 2));
+	let final_ms = delay_ms.saturating_sub(jitter_window).saturating_add(jitter_offset);
+	(Instant::now() + Duration::from_millis(final_ms), final_ms)
 }
 
 fn spawn_events_loop(
@@ -688,19 +710,19 @@ async fn connect_session(cfg: ClientConfigV1, ui_tx: mpsc::UnboundedSender<UiEve
 		"connecting..."
 	);
 
-	let session = match SessionControl::connect(cfg).await {
-		Ok(s) => s,
+	let (session, welcome) = match SessionControl::connect(cfg.clone()).await {
+		Ok((s, w)) => (s, w),
 		Err(e) => {
 			let msg = map_core_err(e);
-			let _ = ui_tx.send(UiEvent::Error { message: msg.clone() });
+			ui_send_error(&ui_tx, msg.clone(), Some(&cfg));
 			let _ = ui_tx.send(UiEvent::Disconnected { reason: msg });
 			return None;
 		}
 	};
 
 	let _ = ui_tx.send(UiEvent::Connected {
-		server_name: "chatty_server".to_string(),
-		server_instance_id: "unknown".to_string(),
+		server_name: welcome.server_name.clone(),
+		server_instance_id: welcome.server_instance_id.clone(),
 	});
 
 	Some(Box::new(session))
@@ -921,7 +943,7 @@ fn map_event_envelope_to_ui_event(ev: pb::EventEnvelope) -> Option<UiEvent> {
 	}
 }
 
-#[cfg(all(test, feature = "gpui"))]
+#[cfg(test)]
 mod tests {
 	use super::*;
 	use std::sync::{Arc, Mutex};
@@ -1026,5 +1048,101 @@ mod tests {
 				Ok(())
 			})
 		}
+	}
+
+	#[tokio::test]
+	async fn test_reconcile_subscriptions_uses_cursors() {
+		let state = Arc::new(Mutex::new(MockState::default()));
+		let mut session: BoxedSessionControl = Box::new(MockSessionControl::new(state.clone()));
+
+		let mut topics_refcounts = HashMap::new();
+		topics_refcounts.insert("room:test/1".to_string(), 1usize);
+		let cursor_by_topic = Arc::new(Mutex::new(HashMap::new()));
+		{
+			let mut m = cursor_by_topic.lock().unwrap();
+			m.insert("room:test/1".to_string(), 42u64);
+		}
+
+		let (ui_tx, _ui_rx) = mpsc::unbounded_channel::<UiEvent>();
+		let mut events_task: Option<tokio::task::JoinHandle<()>> = None;
+
+		let res =
+			reconcile_subscriptions_on_connect(&mut session, &topics_refcounts, &cursor_by_topic, &ui_tx, &mut events_task)
+				.await;
+		assert!(res.is_ok());
+
+		let st = state.lock().unwrap();
+		assert_eq!(st.subscribe_calls.len(), 1);
+		let called = &st.subscribe_calls[0];
+		assert_eq!(called.len(), 1);
+		assert_eq!(called[0].0, "room:test/1");
+		assert_eq!(called[0].1, 42u64);
+	}
+
+	#[test]
+	fn test_schedule_reconnect_backoff() {
+		let mut last = 0u64;
+		for attempt in 1..7 {
+			let (_t, ms) = schedule_reconnect(attempt);
+
+			let base_ms = 500u64.saturating_mul(2u64.saturating_pow(attempt.saturating_sub(1).min(6)));
+			let expected = base_ms.min(30_000u64);
+			let jitter = (expected / 10).max(1);
+			assert!(ms >= expected.saturating_sub(jitter) && ms <= expected.saturating_add(jitter));
+			assert!(ms >= last);
+			last = ms;
+		}
+	}
+
+	#[tokio::test]
+	async fn test_unsubscribe_roomkey_refcounting_triggers_unsubscribe() {
+		use tokio::time::{Duration, sleep};
+		let (cmd_tx, cmd_rx) = mpsc::channel::<NetCommand>(32);
+		let (ui_tx, _ui_rx) = mpsc::unbounded_channel::<UiEvent>();
+		let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+
+		let state = Arc::new(Mutex::new(MockState::default()));
+		let state_for_factory = Arc::clone(&state);
+		let connect_fn = move |_: Box<ClientConfigV1>, _ui_tx: mpsc::UnboundedSender<UiEvent>| {
+			let state = Arc::clone(&state_for_factory);
+			let fut = async move { Some(Box::new(MockSessionControl::new(state)) as BoxedSessionControl) };
+			Box::pin(fut) as Pin<Box<dyn Future<Output = Option<BoxedSessionControl>> + Send>>
+		};
+
+		tokio::spawn(async move { run_network_task_with_session_factory(cmd_rx, ui_tx, shutdown_rx, connect_fn).await });
+
+		let _ = cmd_tx
+			.send(NetCommand::Connect {
+				cfg: Box::new(ClientConfigV1::default()),
+			})
+			.await;
+
+		let room = chatty_domain::RoomKey::new(chatty_domain::Platform::Twitch, chatty_domain::RoomId::new("1").unwrap());
+		let _ = cmd_tx.send(NetCommand::SubscribeRoomKey { room: room.clone() }).await;
+		let _ = cmd_tx.send(NetCommand::SubscribeRoomKey { room: room.clone() }).await;
+
+		let _ = cmd_tx.send(NetCommand::UnsubscribeRoomKey { room: room.clone() }).await;
+		sleep(Duration::from_millis(100)).await;
+		{
+			let st = state.lock().unwrap();
+			assert_eq!(st.unsubscribe_calls.len(), 0, "unsubscribe should not have been called yet");
+		}
+
+		let _ = cmd_tx.send(NetCommand::UnsubscribeRoomKey { room: room.clone() }).await;
+		sleep(Duration::from_millis(200)).await;
+		{
+			let st = state.lock().unwrap();
+			assert!(
+				!st.unsubscribe_calls.is_empty(),
+				"unsubscribe should have been called after refcount reached zero"
+			);
+			let called = &st.unsubscribe_calls[0];
+			assert_eq!(
+				called[0],
+				format!("room:{}/{}", room.platform.as_str(), room.room_id.as_str())
+			);
+		}
+
+		let _ = shutdown_tx.send(());
 	}
 }

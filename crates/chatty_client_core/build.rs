@@ -36,6 +36,44 @@ fn main() {
 		(_, None) => "quic://127.0.0.1:18203".to_string(),
 	};
 
+	let env_hmac_enabled = env::var("CHATTY_HMAC_ENABLED").ok();
+	let env_hmac_key = env::var("CHATTY_HMAC_KEY").ok();
+	let env_twitch_login = env::var("CHATTY_TWITCH_LOGIN_URL").ok();
+	let env_kick_login = env::var("CHATTY_KICK_LOGIN_URL").ok();
+
+	if profile.as_str() == "release" {
+		if env_hmac_enabled
+			.as_ref()
+			.map(|s| s.trim())
+			.filter(|s| !s.is_empty())
+			.is_none()
+		{
+			panic!("CHATTY_HMAC_ENABLED must be set for release builds (true/false)");
+		}
+
+		let he = env_hmac_enabled.as_deref().unwrap_or("false");
+		let he_bool = he == "true" || he == "1" || he.eq_ignore_ascii_case("yes");
+		if he_bool && env_hmac_key.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()).is_none() {
+			panic!("CHATTY_HMAC_KEY must be set for release builds when CHATTY_HMAC_ENABLED=true");
+		}
+
+		if env_twitch_login.is_none() {
+			panic!("CHATTY_TWITCH_LOGIN_URL must be set for release builds (empty string is allowed)");
+		}
+
+		if env_kick_login.is_none() {
+			panic!("CHATTY_KICK_LOGIN_URL must be set for release builds (empty string is allowed)");
+		}
+	}
+
+	let hmac_enabled_val = env_hmac_enabled
+		.unwrap_or_else(|| "false".to_string())
+		.trim()
+		.eq_ignore_ascii_case("true");
+	let hmac_key_val = env_hmac_key.unwrap_or_default();
+	let twitch_login_val = env_twitch_login.unwrap_or_default();
+	let kick_login_val = env_kick_login.unwrap_or_default();
+
 	let out_dir = env::var("OUT_DIR").expect("OUT_DIR is set by Cargo");
 	let dest_path = Path::new(&out_dir).join("server_endpoint.rs");
 
@@ -44,8 +82,18 @@ fn main() {
 		 // Default server endpoint baked into this build.\n\
 		 pub const DEFAULT_SERVER_ENDPOINT: &str = {endpoint:?};\n\
 		 // Whether the server endpoint is locked (release builds only).\n\
-		 pub const SERVER_ENDPOINT_LOCKED: bool = {locked};\n",
-		locked = profile.as_str() == "release"
+		 pub const SERVER_ENDPOINT_LOCKED: bool = {locked};\n\
+		 // HMAC configured at build time.\n\
+		 pub const HMAC_ENABLED: bool = {hmac_enabled};\n\
+		 pub const HMAC_KEY: &str = {hmac_key:?};\n\
+		 // Optional login URLs for external auth flows.\n\
+		 pub const TWITCH_LOGIN_URL: &str = {twitch:?};\n\
+		 pub const KICK_LOGIN_URL: &str = {kick:?};\n",
+		locked = profile.as_str() == "release",
+		hmac_enabled = hmac_enabled_val,
+		hmac_key = hmac_key_val,
+		twitch = twitch_login_val,
+		kick = kick_login_val,
 	);
 
 	fs::write(&dest_path, contents).expect("write generated server endpoint file");

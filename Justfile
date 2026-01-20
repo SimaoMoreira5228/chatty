@@ -10,7 +10,7 @@ build *args:
     cargo build {{ args }}
 
 test *args:
-    cargo test {{ args }}
+    cargo test --all-features --all-targets {{ args }}
 
 run-server *args:
     cargo run -p chatty_server {{ args }}

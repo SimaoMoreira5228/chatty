@@ -181,6 +181,25 @@ impl fmt::Display for SecretString {
 	}
 }
 
+impl serde::Serialize for SecretString {
+	fn serialize<S>(&self, serializer: S) -> Result<<S as serde::Serializer>::Ok, <S as serde::Serializer>::Error>
+	where
+		S: serde::Serializer,
+	{
+		serializer.serialize_str("")
+	}
+}
+
+impl<'de> serde::Deserialize<'de> for SecretString {
+	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+	where
+		D: serde::Deserializer<'de>,
+	{
+		let s = String::deserialize(deserializer)?;
+		Ok(SecretString::new(s))
+	}
+}
+
 /// Adapter → server event message.
 #[derive(Debug, Clone)]
 pub enum AdapterEvent {

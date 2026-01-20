@@ -148,7 +148,7 @@ async fn demo_adapter_end_to_end_event_flow() -> anyhow::Result<()> {
 
 	let cfg = client_cfg(server_addr, "demo-adapter-test");
 
-	let mut control = SessionControl::connect(cfg).await.context("client connect")?;
+	let (mut control, _welcome) = SessionControl::connect(cfg).await.context("client connect")?;
 	let topic = "room:twitch/demo".to_string();
 	let _ = control.subscribe(vec![topic.clone()]).await.context("subscribe")?;
 
@@ -209,7 +209,7 @@ async fn reconnect_resumes_with_replay() -> anyhow::Result<()> {
 	let cfg = client_cfg(server_addr, "resume-test");
 	let topic = "room:twitch/demo".to_string();
 
-	let mut control = SessionControl::connect(cfg.clone()).await.context("client connect")?;
+	let (mut control, _welcome) = SessionControl::connect(cfg.clone()).await.context("client connect")?;
 	let _ = control.subscribe(vec![topic.clone()]).await.context("subscribe")?;
 	let mut events = control.open_events_stream().await.context("open events stream")?;
 
@@ -239,7 +239,7 @@ async fn reconnect_resumes_with_replay() -> anyhow::Result<()> {
 
 	tokio::time::sleep(Duration::from_millis(50)).await;
 
-	let mut control = SessionControl::connect(cfg).await.context("client reconnect")?;
+	let (mut control, _welcome) = SessionControl::connect(cfg).await.context("client reconnect")?;
 	let replay_from = last_cursor.saturating_sub(2);
 	let _ = control
 		.subscribe_with_cursors(vec![(topic.clone(), replay_from)])
@@ -298,7 +298,7 @@ async fn reconnect_reports_lagged_when_replay_exhausted() -> anyhow::Result<()> 
 	let cfg = client_cfg(server_addr, "lag-test");
 	let topic = "room:twitch/demo".to_string();
 
-	let mut control = SessionControl::connect(cfg.clone()).await.context("client connect")?;
+	let (mut control, _welcome) = SessionControl::connect(cfg.clone()).await.context("client connect")?;
 	let _ = control.subscribe(vec![topic.clone()]).await.context("subscribe")?;
 	let mut events = control.open_events_stream().await.context("open events stream")?;
 
@@ -325,7 +325,7 @@ async fn reconnect_reports_lagged_when_replay_exhausted() -> anyhow::Result<()> 
 
 	tokio::time::sleep(Duration::from_millis(50)).await;
 
-	let mut control = SessionControl::connect(cfg).await.context("client reconnect")?;
+	let (mut control, _welcome) = SessionControl::connect(cfg).await.context("client reconnect")?;
 	let subscribed = control
 		.subscribe_with_cursors(vec![(topic.clone(), 1)])
 		.await

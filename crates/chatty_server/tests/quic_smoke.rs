@@ -300,7 +300,7 @@ async fn quic_smoke_client_receives_synthetic_event() -> anyhow::Result<()> {
 	};
 
 	tracing::debug!("client(test): Session::connect()");
-	let mut control = SessionControl::connect(cfg).await.context("client connect")?;
+	let (mut control, _welcome) = SessionControl::connect(cfg).await.context("client connect")?;
 	tracing::info!("client(test): connected");
 
 	let topic = "room:twitch/demo".to_string();
