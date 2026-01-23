@@ -108,6 +108,21 @@ def main() -> int:
     print_list("Missing in ALL locales", missing_all)
     any_missing = True
 
+  unused_by_locale: dict[str, list[str]] = {}
+  for name, keys in locale_keys.items():
+    unused = sorted([k for k in keys if k not in used_keys])
+    unused_by_locale[name] = unused
+
+  any_unused = False
+  for name in sorted(unused_by_locale.keys()):
+    unused = unused_by_locale.get(name, [])
+    print_list(f"Unused in {name}", unused)
+    if unused:
+      any_unused = True
+
+  if any_unused:
+    print("\nNote: 'Unused' lists keys present in the locale file but not referenced in code.")
+
   return 2 if any_missing else 0
 
 

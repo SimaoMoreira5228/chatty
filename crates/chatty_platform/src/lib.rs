@@ -35,12 +35,14 @@ pub enum AdapterControl {
 	/// Execute a platform command (send/moderation).
 	Command {
 		request: CommandRequest,
+		auth: Option<AdapterAuth>,
 		resp: oneshot::Sender<Result<(), CommandError>>,
 	},
 
 	/// Query permission snapshot for a room.
 	QueryPermissions {
 		room: RoomKey,
+		auth: Option<AdapterAuth>,
 		resp: oneshot::Sender<PermissionsInfo>,
 	},
 

@@ -38,61 +38,75 @@ use crate::{
 #[derive(Clone)]
 pub struct KickConfig {
 	pub base_url: String,
-	pub access_token: SecretString,
-	pub user_id: Option<String>,
+	pub system_access_token: Option<SecretString>,
 	pub broadcaster_id_overrides: HashMap<String, String>,
 	pub resolve_cache_ttl: Duration,
 	pub webhook_bind: Option<SocketAddr>,
 	pub webhook_path: String,
 	pub webhook_public_key_path: Option<PathBuf>,
 	pub webhook_verify_signatures: bool,
-	pub webhook_auto_subscribe: bool,
-	pub webhook_events: Vec<String>,
+}
+
+impl Default for KickConfig {
+	fn default() -> Self {
+		Self::new()
+	}
 }
 
 impl KickConfig {
-	pub fn new(access_token: SecretString) -> Self {
+	pub fn new() -> Self {
 		Self {
 			base_url: "https://api.kick.com".to_string(),
-			access_token,
-			user_id: None,
+			system_access_token: None,
 			broadcaster_id_overrides: HashMap::new(),
 			resolve_cache_ttl: Duration::from_secs(300),
 			webhook_bind: None,
 			webhook_path: "/kick/events".to_string(),
 			webhook_public_key_path: None,
 			webhook_verify_signatures: true,
-			webhook_auto_subscribe: false,
-			webhook_events: vec!["chat.message.sent".to_string()],
 		}
 	}
 }
 
+const KICK_BASE_EVENTS: [&str; 1] = ["chat.message.sent"];
+const KICK_MODERATOR_EVENTS: [&str; 1] = ["moderation.banned"];
+const KICK_WEBHOOK_RECONCILE_INTERVAL_SECS: u64 = 120;
+
 pub struct KickEventAdapter {
 	cfg: KickConfig,
-	client: KickClient,
 	joined_rooms: Arc<RwLock<HashSet<RoomKey>>>,
-	moderator_rooms: Arc<RwLock<HashSet<RoomKey>>>,
-	auth_user_id: Arc<RwLock<Option<u64>>>,
+	moderator_rooms: Arc<RwLock<HashMap<u64, HashSet<RoomKey>>>>,
+	auth_user_ids: Arc<RwLock<HashSet<u64>>>,
+	user_scopes: Arc<RwLock<HashMap<u64, HashSet<String>>>>,
 	broadcaster_id_by_room: HashMap<RoomKey, (u64, std::time::Instant)>,
 	#[allow(dead_code)]
 	emote_ids_by_room: Arc<RwLock<HashMap<RoomKey, HashSet<String>>>>,
+	user_tokens: Arc<RwLock<HashMap<String, SecretString>>>,
 	last_auth_error_notice: Option<String>,
 }
 
 impl KickEventAdapter {
 	pub fn new(cfg: KickConfig) -> Self {
-		let client = KickClient::new(cfg.base_url.clone(), cfg.access_token.expose().to_string());
 		Self {
 			cfg,
-			client,
 			joined_rooms: Arc::new(RwLock::new(HashSet::new())),
-			moderator_rooms: Arc::new(RwLock::new(HashSet::new())),
-			auth_user_id: Arc::new(RwLock::new(None)),
+			moderator_rooms: Arc::new(RwLock::new(HashMap::new())),
+			auth_user_ids: Arc::new(RwLock::new(HashSet::new())),
+			user_scopes: Arc::new(RwLock::new(HashMap::new())),
 			broadcaster_id_by_room: HashMap::new(),
 			emote_ids_by_room: Arc::new(RwLock::new(HashMap::new())),
+			user_tokens: Arc::new(RwLock::new(HashMap::new())),
 			last_auth_error_notice: None,
 		}
+	}
+
+	fn normalize_public_key_pem(raw_key: &str) -> String {
+		let trimmed = raw_key.trim();
+		if trimmed.contains("BEGIN PUBLIC KEY") {
+			return trimmed.to_string();
+		}
+
+		format!("-----BEGIN PUBLIC KEY-----\n{}\n-----END PUBLIC KEY-----", trimmed)
 	}
 
 	fn platform(&self) -> Platform {
@@ -106,26 +120,93 @@ impl KickEventAdapter {
 		}
 	}
 
+	fn client_for_token(&self, token: &SecretString) -> KickClient {
+		KickClient::new(self.cfg.base_url.clone(), token.expose().to_string())
+	}
+
+	async fn room_has_moderator(&self, room: &RoomKey) -> bool {
+		let guard = self.moderator_rooms.read().await;
+		guard.values().any(|rooms| rooms.contains(room))
+	}
+
+	async fn desired_webhook_events(&self, room: &RoomKey) -> Vec<super::client::KickEventSpec> {
+		let mut events: Vec<super::client::KickEventSpec> = KICK_BASE_EVENTS
+			.iter()
+			.map(|name| super::client::KickEventSpec::new(*name, 1))
+			.collect();
+
+		if self.room_has_moderator(room).await {
+			events.extend(
+				KICK_MODERATOR_EVENTS
+					.iter()
+					.map(|name| super::client::KickEventSpec::new(*name, 1)),
+			);
+		}
+
+		events
+	}
+
+	async fn pick_any_token(&self) -> Option<SecretString> {
+		let guard = self.user_tokens.read().await;
+		guard.values().next().cloned()
+	}
+
+	async fn pick_subscription_token(&self) -> Option<SecretString> {
+		if let Some(token) = self.cfg.system_access_token.clone() {
+			return Some(token);
+		}
+		self.pick_any_token().await
+	}
+
 	async fn apply_auth_update(&mut self, auth: AdapterAuth) {
 		if let AdapterAuth::UserAccessToken {
 			access_token, user_id, ..
 		} = auth
 		{
-			self.cfg.access_token = access_token.clone();
-			self.cfg.user_id = user_id;
-			self.client.set_access_token(access_token.expose().to_string());
 			self.last_auth_error_notice = None;
 
-			let parsed_user_id = self.cfg.user_id.as_deref().and_then(|id| id.trim().parse::<u64>().ok());
+			let token_key = user_id
+				.clone()
+				.filter(|id| !id.trim().is_empty())
+				.unwrap_or_else(|| access_token.expose().to_string());
+			let mut tokens = self.user_tokens.write().await;
+			tokens.insert(token_key, access_token.clone());
+
+			let parsed_user_id = user_id.as_deref().and_then(|id| id.trim().parse::<u64>().ok());
 			{
-				let mut guard = self.auth_user_id.write().await;
-				*guard = parsed_user_id;
+				let mut guard = self.auth_user_ids.write().await;
+				if let Some(uid) = parsed_user_id {
+					guard.insert(uid);
+				}
 			}
+
+			if let Some(uid) = parsed_user_id {
+				let client = self.client_for_token(&access_token);
+				match client.introspect_token(access_token.expose()).await {
+					Ok(info) => {
+						if let Some(scope) = info.scope {
+							let scopes: HashSet<String> = scope
+								.split_whitespace()
+								.filter(|s| !s.trim().is_empty())
+								.map(|s| s.to_string())
+								.collect();
+							self.user_scopes.write().await.insert(uid, scopes.clone());
+							info!(user_id = uid, scopes = %scope, "kick token introspect scopes");
+						}
+					}
+					Err(err) => {
+						warn!(error = %err, user_id = uid, "kick token introspect failed");
+					}
+				}
+			} else {
+				warn!("kick auth update missing user_id; scope visibility unavailable");
+			}
+
 			self.moderator_rooms.write().await.clear();
 		}
 	}
 
-	async fn resolve_broadcaster_id(&mut self, room: &RoomKey) -> Result<u64, CommandError> {
+	async fn resolve_broadcaster_id(&mut self, room: &RoomKey, token: &SecretString) -> Result<u64, CommandError> {
 		if room.platform != Platform::Kick {
 			return Err(CommandError::InvalidTopic(None));
 		}
@@ -147,8 +228,8 @@ impl KickEventAdapter {
 			return Ok(id);
 		}
 
-		let resolved = self
-			.client
+		let client = self.client_for_token(token);
+		let resolved = client
 			.resolve_broadcaster_id(slug)
 			.await
 			.map_err(|e| CommandError::Internal(e.to_string()))?;
@@ -162,16 +243,16 @@ impl KickEventAdapter {
 		Ok(id)
 	}
 
-	fn ensure_auth(&self) -> Result<(), CommandError> {
-		if self.cfg.access_token.expose().trim().is_empty() {
-			return Err(CommandError::NotAuthorized(Some(
-				"kick auth missing access token".to_string(),
-			)));
+	fn command_auth(auth: Option<AdapterAuth>) -> Option<(SecretString, Option<String>)> {
+		match auth {
+			Some(AdapterAuth::UserAccessToken {
+				access_token, user_id, ..
+			}) => Some((access_token, user_id)),
+			_ => None,
 		}
-		Ok(())
 	}
 
-	async fn execute_command(&mut self, request: CommandRequest) -> Result<(), CommandError> {
+	async fn execute_command(&mut self, request: CommandRequest, auth: Option<AdapterAuth>) -> Result<(), CommandError> {
 		let room = match &request {
 			CommandRequest::SendChat { room, .. }
 			| CommandRequest::DeleteMessage { room, .. }
@@ -183,26 +264,32 @@ impl KickEventAdapter {
 			return Err(CommandError::InvalidTopic(None));
 		}
 
-		self.ensure_auth()?;
-		let broadcaster_id = self.resolve_broadcaster_id(room).await?;
-		let is_broadcaster = self
-			.cfg
-			.user_id
+		let Some((token, auth_user_id)) = Self::command_auth(auth) else {
+			return Err(CommandError::NotAuthorized(Some(
+				"kick auth missing access token".to_string(),
+			)));
+		};
+		let broadcaster_id = self.resolve_broadcaster_id(room, &token).await?;
+		let is_broadcaster = auth_user_id
 			.as_deref()
 			.and_then(|id| if id.trim().is_empty() { None } else { Some(id) })
 			.and_then(|id| parse_numeric_id(id).ok())
 			.map(|id| id == broadcaster_id)
 			.unwrap_or(false);
-		let is_moderator = self.is_moderator_for_room(room).await;
+		let auth_user_id_num = auth_user_id
+			.as_deref()
+			.and_then(|id| if id.trim().is_empty() { None } else { Some(id) })
+			.and_then(|id| parse_numeric_id(id).ok());
+		let is_moderator = self.is_moderator_for_room(room, auth_user_id_num).await;
 		let can_moderate = is_moderator || is_broadcaster;
+		let client = self.client_for_token(&token);
 
 		match request {
 			CommandRequest::SendChat {
 				text,
 				reply_to_platform_message_id,
 				..
-			} => self
-				.client
+			} => client
 				.send_chat_message(broadcaster_id, &text, reply_to_platform_message_id.as_deref())
 				.await
 				.map_err(map_kick_error)?,
@@ -210,7 +297,7 @@ impl KickEventAdapter {
 				if !can_moderate {
 					return Err(CommandError::NotAuthorized(None));
 				}
-				self.client
+				client
 					.delete_chat_message(&platform_message_id)
 					.await
 					.map_err(map_kick_error)?
@@ -225,7 +312,7 @@ impl KickEventAdapter {
 					return Err(CommandError::NotAuthorized(None));
 				}
 				let parsed_user_id = parse_numeric_id(&user_id)?;
-				self.client
+				client
 					.ban_user(broadcaster_id, parsed_user_id, Some(duration_seconds), reason.as_deref())
 					.await
 					.map_err(map_kick_error)?
@@ -235,7 +322,7 @@ impl KickEventAdapter {
 					return Err(CommandError::NotAuthorized(None));
 				}
 				let parsed_user_id = parse_numeric_id(&user_id)?;
-				self.client
+				client
 					.ban_user(broadcaster_id, parsed_user_id, None, reason.as_deref())
 					.await
 					.map_err(map_kick_error)?
@@ -245,26 +332,23 @@ impl KickEventAdapter {
 		Ok(())
 	}
 
-	async fn permissions_for_room(&mut self, room: &RoomKey) -> PermissionsInfo {
+	async fn permissions_for_room(&mut self, room: &RoomKey, auth: Option<AdapterAuth>) -> PermissionsInfo {
 		if room.platform != Platform::Kick {
 			return PermissionsInfo::default();
 		}
-		if self.ensure_auth().is_err() {
+		let Some((token, auth_user_id)) = Self::command_auth(auth) else {
 			return PermissionsInfo::default();
-		}
-		let broadcaster_id = match self.resolve_broadcaster_id(room).await {
+		};
+		let broadcaster_id = match self.resolve_broadcaster_id(room, &token).await {
 			Ok(id) => id,
 			Err(_) => return PermissionsInfo::default(),
 		};
-		let is_broadcaster = self
-			.cfg
-			.user_id
+		let auth_user_id_num = auth_user_id
 			.as_deref()
 			.and_then(|id| if id.trim().is_empty() { None } else { Some(id) })
-			.and_then(|id| parse_numeric_id(id).ok())
-			.map(|id| id == broadcaster_id)
-			.unwrap_or(false);
-		let is_moderator = self.is_moderator_for_room(room).await;
+			.and_then(|id| parse_numeric_id(id).ok());
+		let is_broadcaster = auth_user_id_num.map(|id| id == broadcaster_id).unwrap_or(false);
+		let is_moderator = self.is_moderator_for_room(room, auth_user_id_num).await;
 		let can_moderate = is_moderator || is_broadcaster;
 
 		PermissionsInfo {
@@ -278,25 +362,27 @@ impl KickEventAdapter {
 		}
 	}
 
-	async fn is_moderator_for_room(&self, room: &RoomKey) -> bool {
+	async fn is_moderator_for_room(&self, room: &RoomKey, user_id: Option<u64>) -> bool {
+		let Some(uid) = user_id else {
+			return false;
+		};
+
 		let guard = self.moderator_rooms.read().await;
-		guard.contains(room)
+		guard.get(&uid).map(|rooms| rooms.contains(room)).unwrap_or(false)
 	}
 
 	async fn ensure_webhook_subscription(&mut self, room: &RoomKey) -> Result<(), CommandError> {
-		if !self.cfg.webhook_auto_subscribe {
-			return Ok(());
-		}
-		let broadcaster_id = self.resolve_broadcaster_id(room).await?;
-		let desired_events: Vec<super::client::KickEventSpec> = self
-			.cfg
-			.webhook_events
-			.iter()
-			.map(|name| super::client::KickEventSpec::new(name.clone(), 1))
-			.collect();
+		let Some(token) = self.pick_subscription_token().await else {
+			return Err(CommandError::NotAuthorized(Some(
+				"kick auth missing access token".to_string(),
+			)));
+		};
 
-		let existing = self
-			.client
+		let broadcaster_id = self.resolve_broadcaster_id(room, &token).await?;
+		let desired_events = self.desired_webhook_events(room).await;
+		let client = self.client_for_token(&token);
+
+		let existing = client
 			.list_event_subscriptions(Some(broadcaster_id))
 			.await
 			.map_err(|e| CommandError::Internal(e.to_string()))?;
@@ -306,6 +392,7 @@ impl KickEventAdapter {
 			let found = existing
 				.iter()
 				.any(|s| s.event == desired.name && s.version == desired.version);
+
 			if !found {
 				missing.push(desired);
 			}
@@ -316,7 +403,7 @@ impl KickEventAdapter {
 		}
 
 		metrics::counter!("chatty_kick_webhook_subscribe_requests_total").increment(1);
-		self.client
+		client
 			.create_event_subscriptions(Some(broadcaster_id), missing)
 			.await
 			.map_err(|e| CommandError::Internal(e.to_string()))?;
@@ -396,8 +483,8 @@ struct KickWebhookState {
 	verify_signatures: bool,
 	public_key: Option<RsaPublicKey>,
 	joined_rooms: Arc<RwLock<HashSet<RoomKey>>>,
-	moderator_rooms: Arc<RwLock<HashSet<RoomKey>>>,
-	auth_user_id: Arc<RwLock<Option<u64>>>,
+	moderator_rooms: Arc<RwLock<HashMap<u64, HashSet<RoomKey>>>>,
+	auth_user_ids: Arc<RwLock<HashSet<u64>>>,
 	emote_ids_by_room: Arc<RwLock<HashMap<RoomKey, HashSet<String>>>>,
 	events_tx: AdapterEventTx,
 }
@@ -612,9 +699,7 @@ async fn handle_kick_webhook(
 			.unwrap());
 	}
 
-	if let Some(auth_user_id) = *state.auth_user_id.read().await
-		&& auth_user_id == payload.sender.user_id
-	{
+	if state.auth_user_ids.read().await.contains(&payload.sender.user_id) {
 		let has_mod_badge = payload
 			.sender
 			.identity
@@ -627,10 +712,12 @@ async fn handle_kick_webhook(
 			})
 			.unwrap_or(false);
 		let mut guard = state.moderator_rooms.write().await;
+		let entry = guard.entry(payload.sender.user_id).or_insert_with(HashSet::new);
+
 		if has_mod_badge {
-			guard.insert(room.clone());
+			entry.insert(room.clone());
 		} else {
-			guard.remove(&room);
+			entry.remove(&room);
 		}
 	}
 
@@ -716,6 +803,12 @@ impl PlatformAdapter for KickEventAdapter {
 		let session_id = new_session_id();
 		let platform = this.platform();
 
+		if this.pick_subscription_token().await.is_none() {
+			warn!(
+				"kick webhook auto-subscribe enabled but no user access token is available yet; webhooks will not be registered until a user signs in"
+			);
+		}
+
 		let mut webhook_shutdown_tx: Option<tokio::sync::watch::Sender<bool>> = None;
 
 		if let Some(bind) = this.cfg.webhook_bind {
@@ -728,16 +821,25 @@ impl PlatformAdapter for KickEventAdapter {
 					}
 				}
 			} else {
-				KICK_PUBLIC_KEY_PEM.to_string()
+				let client = KickClient::new(this.cfg.base_url.clone(), "");
+				match client.fetch_public_key().await {
+					Ok(key) => Self::normalize_public_key_pem(&key),
+					Err(err) => {
+						warn!(error = %err, "failed to fetch kick webhook public key; using bundled key");
+						KICK_PUBLIC_KEY_PEM.to_string()
+					}
+				}
 			};
-			let public_key = RsaPublicKey::from_public_key_pem(&public_key_pem).ok();
+			let public_key = RsaPublicKey::from_public_key_pem(&public_key_pem)
+				.or_else(|_| RsaPublicKey::from_public_key_pem(KICK_PUBLIC_KEY_PEM))
+				.ok();
 			let state = KickWebhookState {
 				path: this.cfg.webhook_path.clone(),
 				verify_signatures: this.cfg.webhook_verify_signatures,
 				public_key,
 				joined_rooms: Arc::clone(&this.joined_rooms),
 				moderator_rooms: Arc::clone(&this.moderator_rooms),
-				auth_user_id: Arc::clone(&this.auth_user_id),
+				auth_user_ids: Arc::clone(&this.auth_user_ids),
 				emote_ids_by_room: Arc::new(RwLock::new(HashMap::new())),
 				events_tx: events_tx.clone(),
 			};
@@ -763,130 +865,153 @@ impl PlatformAdapter for KickEventAdapter {
 			format!("kick adapter online (session_id={session_id})"),
 		));
 
+		let mut reconcile_interval = tokio::time::interval(Duration::from_secs(KICK_WEBHOOK_RECONCILE_INTERVAL_SECS));
+
 		loop {
-			let cmd = control_rx.recv().await;
-			let Some(cmd) = cmd else {
-				info!(%platform, "kick adapter control channel closed; shutting down");
-				break;
-			};
-
-			match cmd {
-				AdapterControl::Join { room } => {
-					if room.platform != platform {
-						debug!(%platform, room=%room, "ignoring Join for non-matching platform");
-						continue;
-					}
-					let mut guard = this.joined_rooms.write().await;
-					if guard.insert(room.clone()) {
-						let detail = format!("joined kick room:{}", room.room_id.as_str());
-						let _ = events_tx.try_send(status(platform, true, detail));
-						let cache_key = format!("kick:channel:{}:native", room.room_id.as_str());
-						info!(%platform, room=%room.room_id, cache_key=%cache_key, "emitting AssetBundle ingest");
-						let ingest = IngestEvent::new(
-							platform,
-							room.room_id.clone(),
-							IngestPayload::AssetBundle(AssetBundle {
-								provider: AssetProvider::Kick,
-								scope: AssetScope::Channel,
-								cache_key: cache_key.clone(),
-								etag: Some("empty".to_string()),
-								emotes: Vec::new(),
-								badges: Vec::new(),
-							}),
-						);
-						let _ = events_tx.try_send(AdapterEvent::Ingest(Box::new(ingest)));
-						drop(guard);
-						let room_for_assets = room.clone();
-						let events_tx = events_tx.clone();
-						let broadcaster_id = this.resolve_broadcaster_id(&room).await.ok();
-						tokio::spawn(async move {
-							if let Some(id) = broadcaster_id {
-								info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, "fetching 7tv channel badges bundle (kick)");
-								if let Ok(bundle) =
-									fetch_7tv_channel_badges_bundle(SevenTvPlatform::Kick, &id.to_string()).await
-								{
-									info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
-									let ingest = IngestEvent::new(
-										Platform::Kick,
-										room_for_assets.room_id.clone(),
-										IngestPayload::AssetBundle(bundle),
-									);
-									let _ = events_tx.try_send(AdapterEvent::Ingest(Box::new(ingest)));
-								}
-
-								info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, "fetching 7tv emote set bundle (kick)");
-								if let Ok(bundle) = fetch_7tv_bundle(SevenTvPlatform::Kick, &id.to_string()).await {
-									info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
-									let ingest = IngestEvent::new(
-										Platform::Kick,
-										room_for_assets.room_id.clone(),
-										IngestPayload::AssetBundle(bundle),
-									);
-									let _ = events_tx.try_send(AdapterEvent::Ingest(Box::new(ingest)));
-								}
-							}
-
-							if let Ok(bundle) = fetch_7tv_badges_bundle().await {
-								info!(%platform, room=%room_for_assets.room_id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
-								let ingest = IngestEvent::new(
-									Platform::Kick,
-									room_for_assets.room_id.clone(),
-									IngestPayload::AssetBundle(bundle),
-								);
-								let _ = events_tx.try_send(AdapterEvent::Ingest(Box::new(ingest)));
-							}
-
-							if let Some(bundle) = fetch_kick_badge_bundle(room_for_assets.room_id.as_str()).await {
-								info!(%platform, room=%room_for_assets.room_id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
-								let ingest = IngestEvent::new(
-									Platform::Kick,
-									room_for_assets.room_id.clone(),
-									IngestPayload::AssetBundle(bundle),
-								);
-								let _ = events_tx.try_send(AdapterEvent::Ingest(Box::new(ingest)));
-							}
-						});
+			tokio::select! {
+				_ = reconcile_interval.tick() => {
+					let rooms: Vec<RoomKey> = {
+						let guard = this.joined_rooms.read().await;
+						guard.iter().cloned().collect()
+					};
+					for room in rooms {
 						if let Err(err) = this.ensure_webhook_subscription(&room).await {
-							warn!(error = %err, room=%room, "kick webhook subscription failed");
+							warn!(error = %err, room=%room, "kick webhook subscription reconcile failed");
 							metrics::counter!("chatty_kick_webhook_subscribe_errors_total").increment(1);
 						}
 					}
 				}
-				AdapterControl::Leave { room } => {
-					if room.platform != platform {
-						debug!(%platform, room=%room, "ignoring Leave for non-matching platform");
-						continue;
-					}
-					let mut guard = this.joined_rooms.write().await;
-					if guard.remove(&room) {
-						let detail = format!("left kick room:{}", room.room_id.as_str());
-						let _ = events_tx.try_send(status(platform, true, detail));
-					}
-				}
-				AdapterControl::UpdateAuth { auth } => {
-					this.apply_auth_update(auth).await;
-					if this.cfg.access_token.expose().trim().is_empty() {
-						this.maybe_notice_auth_issue("kick auth missing access token", &events_tx);
-					} else {
-						let _ = events_tx.try_send(status(platform, true, "kick auth updated"));
-					}
-				}
-				AdapterControl::Command { request, resp } => {
-					let result = this.execute_command(request).await;
-					let _ = resp.send(result);
-				}
+				cmd = control_rx.recv() => {
+					let Some(cmd) = cmd else {
+						info!(%platform, "kick adapter control channel closed; shutting down");
+						break;
+					};
 
-				AdapterControl::QueryPermissions { room, resp } => {
-					let result = this.permissions_for_room(&room).await;
-					let _ = resp.send(result);
-				}
-				AdapterControl::Shutdown => {
-					info!(%platform, "kick adapter received Shutdown");
+					match cmd {
+						AdapterControl::Join { room } => {
+							if room.platform != platform {
+								debug!(%platform, room=%room, "ignoring Join for non-matching platform");
+								continue;
+							}
+							let mut guard = this.joined_rooms.write().await;
+							if guard.insert(room.clone()) {
+								let detail = format!("joined kick room:{}", room.room_id.as_str());
+								let _ = events_tx.try_send(status(platform, true, detail));
+								let cache_key = format!("kick:channel:{}:native", room.room_id.as_str());
+								info!(%platform, room=%room.room_id, cache_key=%cache_key, "emitting AssetBundle ingest");
+								let ingest = IngestEvent::new(
+									platform,
+									room.room_id.clone(),
+									IngestPayload::AssetBundle(AssetBundle {
+										provider: AssetProvider::Kick,
+										scope: AssetScope::Channel,
+										cache_key: cache_key.clone(),
+										etag: Some("empty".to_string()),
+										emotes: Vec::new(),
+										badges: Vec::new(),
+									}),
+								);
+								let _ = events_tx.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+								drop(guard);
+								let room_for_assets = room.clone();
+								let events_tx = events_tx.clone();
+								let token_for_assets = this.pick_subscription_token().await;
+								let broadcaster_id = match token_for_assets.as_ref() {
+									Some(token) => this.resolve_broadcaster_id(&room, token).await.ok(),
+									None => None,
+								};
+								tokio::spawn(async move {
+									if let Some(id) = broadcaster_id {
+										info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, "fetching 7tv channel badges bundle (kick)");
+										if let Ok(bundle) =
+											fetch_7tv_channel_badges_bundle(SevenTvPlatform::Kick, &id.to_string()).await
+										{
+											info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
+											let ingest = IngestEvent::new(
+												Platform::Kick,
+												room_for_assets.room_id.clone(),
+												IngestPayload::AssetBundle(bundle),
+											);
+											let _ = events_tx.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+										}
 
-					if let Some(tx) = webhook_shutdown_tx.take() {
-						let _ = tx.send(true);
+										info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, "fetching 7tv emote set bundle (kick)");
+										if let Ok(bundle) = fetch_7tv_bundle(SevenTvPlatform::Kick, &id.to_string()).await {
+											info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
+											let ingest = IngestEvent::new(
+												Platform::Kick,
+												room_for_assets.room_id.clone(),
+												IngestPayload::AssetBundle(bundle),
+											);
+											let _ = events_tx.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+										}
+									} else {
+										warn!(%platform, room=%room_for_assets.room_id, "kick broadcaster id unresolved; skipping 7tv/kick asset fetches (check Kick OAuth token or broadcaster overrides)");
+									}
+
+									if let Ok(bundle) = fetch_7tv_badges_bundle().await {
+										info!(%platform, room=%room_for_assets.room_id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
+										let ingest = IngestEvent::new(
+											Platform::Kick,
+											room_for_assets.room_id.clone(),
+											IngestPayload::AssetBundle(bundle),
+										);
+										let _ = events_tx.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+									}
+
+									if let Some(bundle) = fetch_kick_badge_bundle(room_for_assets.room_id.as_str()).await {
+										info!(%platform, room=%room_for_assets.room_id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
+										let ingest = IngestEvent::new(
+											Platform::Kick,
+											room_for_assets.room_id.clone(),
+											IngestPayload::AssetBundle(bundle),
+										);
+										let _ = events_tx.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+									}
+								});
+								if let Err(err) = this.ensure_webhook_subscription(&room).await {
+									warn!(error = %err, room=%room, "kick webhook subscription failed");
+									metrics::counter!("chatty_kick_webhook_subscribe_errors_total").increment(1);
+								}
+							}
+						}
+						AdapterControl::Leave { room } => {
+							if room.platform != platform {
+								debug!(%platform, room=%room, "ignoring Leave for non-matching platform");
+								continue;
+							}
+							let mut guard = this.joined_rooms.write().await;
+							if guard.remove(&room) {
+								let detail = format!("left kick room:{}", room.room_id.as_str());
+								let _ = events_tx.try_send(status(platform, true, detail));
+							}
+						}
+						AdapterControl::UpdateAuth { auth } => {
+							this.apply_auth_update(auth).await;
+							let has_tokens = !this.user_tokens.read().await.is_empty();
+							if !has_tokens {
+								this.maybe_notice_auth_issue("kick auth missing access token", &events_tx);
+							} else {
+								let _ = events_tx.try_send(status(platform, true, "kick auth updated"));
+							}
+						}
+						AdapterControl::Command { request, auth, resp } => {
+							let result = this.execute_command(request, auth).await;
+							let _ = resp.send(result);
+						}
+						AdapterControl::QueryPermissions { room, auth, resp } => {
+							let result = this.permissions_for_room(&room, auth).await;
+							let _ = resp.send(result);
+						}
+						AdapterControl::Shutdown => {
+							info!(%platform, "kick adapter received Shutdown");
+
+							if let Some(tx) = webhook_shutdown_tx.take() {
+								let _ = tx.send(true);
+							}
+							break;
+						}
 					}
-					break;
 				}
 			}
 		}

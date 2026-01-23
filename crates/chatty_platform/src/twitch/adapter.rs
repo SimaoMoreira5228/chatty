@@ -440,7 +440,7 @@ impl TwitchEventSubAdapter {
 		(self.ws_connector())(url).await
 	}
 
-	async fn execute_command(&mut self, request: CommandRequest) -> Result<(), CommandError> {
+	async fn execute_command(&mut self, request: CommandRequest, _auth: Option<AdapterAuth>) -> Result<(), CommandError> {
 		let room = match &request {
 			CommandRequest::SendChat { room, .. }
 			| CommandRequest::DeleteMessage { room, .. }
@@ -1137,12 +1137,12 @@ impl TwitchEventSubAdapter {
 				let _ = events_tx.try_send(status(platform, true, "updated auth (bearer token)"));
 			}
 
-			AdapterControl::Command { request, resp } => {
-				let result = self.execute_command(request).await;
+			AdapterControl::Command { request, auth, resp } => {
+				let result = self.execute_command(request, auth).await;
 				let _ = resp.send(result);
 			}
 
-			AdapterControl::QueryPermissions { room, resp } => {
+			AdapterControl::QueryPermissions { room, auth: _, resp } => {
 				let result = self.permissions_for_room(&room).await;
 				let _ = resp.send(result);
 			}

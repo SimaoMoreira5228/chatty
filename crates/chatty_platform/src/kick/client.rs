@@ -207,6 +207,18 @@ impl KickClient {
 		Ok(body.data)
 	}
 
+	pub async fn fetch_public_key(&self) -> anyhow::Result<String> {
+		let url = format!("{}/public/v1/public-key", self.base_url.trim_end_matches('/'));
+		let resp = self.client.get(url).send().await.context("kick public key")?;
+
+		if !resp.status().is_success() {
+			return Err(anyhow!("kick public key failed: status={}", resp.status()));
+		}
+
+		let body: KickPublicKeyResponse = resp.json().await.context("parse kick public key")?;
+		Ok(body.data.public_key)
+	}
+
 	pub async fn get_current_user(&self, token: &str) -> anyhow::Result<Option<KickUserInfo>> {
 		let url = format!("{}/public/v1/users", self.base_url.trim_end_matches('/'));
 		let resp = self
@@ -309,6 +321,16 @@ pub struct KickTokenIntrospection {
 	pub exp: Option<u64>,
 	pub scope: Option<String>,
 	pub token_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct KickPublicKeyResponse {
+	data: KickPublicKeyData,
+}
+
+#[derive(Debug, Deserialize)]
+struct KickPublicKeyData {
+	public_key: String,
 }
 
 #[derive(Debug, Deserialize)]

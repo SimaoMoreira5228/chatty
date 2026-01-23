@@ -28,5 +28,3 @@ command_rate_limit_per_topic_per_minute = 60
 webhook_bind = "0.0.0.0:18206"
 webhook_path = "/kick/events"
 webhook_verify_signatures = true
-webhook_auto_subscribe = false
-webhook_events = "chat.message.sent"

@@ -296,14 +296,12 @@ async fn main() -> anyhow::Result<()> {
 
 					platform_adapters.push(Box::new(TwitchEventSubAdapter::new(twitch_cfg)));
 
-					let kick_token = server_cfg
-						.kick
-						.user_access_token
-						.clone()
-						.unwrap_or_else(|| SecretString::new(String::new()));
-					let mut kick_cfg = KickConfig::new(kick_token);
+					let mut kick_cfg = KickConfig::new();
 					if let Some(base_url) = server_cfg.kick.base_url.clone() {
 						kick_cfg.base_url = base_url;
+					}
+					if let Some(token) = server_cfg.kick.system_access_token.clone() {
+						kick_cfg.system_access_token = Some(token);
 					}
 					if let Some(path) = server_cfg.kick.webhook_path.clone() {
 						kick_cfg.webhook_path = path;
@@ -313,12 +311,6 @@ async fn main() -> anyhow::Result<()> {
 					}
 					if let Some(verify) = server_cfg.kick.webhook_verify_signatures {
 						kick_cfg.webhook_verify_signatures = verify;
-					}
-					if let Some(enabled) = server_cfg.kick.webhook_auto_subscribe {
-						kick_cfg.webhook_auto_subscribe = enabled;
-					}
-					if !server_cfg.kick.webhook_events.is_empty() {
-						kick_cfg.webhook_events = server_cfg.kick.webhook_events.clone();
 					}
 					if let Some(bind) = server_cfg.kick.webhook_bind.clone() {
 						match bind.parse::<std::net::SocketAddr>() {

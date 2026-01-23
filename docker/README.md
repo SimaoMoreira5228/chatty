@@ -19,6 +19,7 @@ You can start from the example in `crates/chatty_server/config/chatty_server.tom
 Make sure the Kick webhook settings match your external URL:
 
 - `kick.webhook_path = "/kick/events"`
+- Optional: `kick.system_access_token = "..."` to manage webhook subscriptions without using the first user token.
 
 ## Environment
 
@@ -34,6 +35,10 @@ Create `docker/.env` based on the example:
 - `KICK_CLIENT_SECRET`
 - `KICK_REDIRECT_URI`
 - `KICK_SCOPES`
+
+Optional:
+
+- `CHATTY_KICK_SYSTEM_ACCESS_TOKEN`
 
 ## Ports
 

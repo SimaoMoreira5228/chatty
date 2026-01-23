@@ -119,8 +119,8 @@ pub struct TwitchSettings {
 pub struct KickSettings {
 	/// Kick API base URL.
 	pub base_url: Option<String>,
-	/// Kick user access token (bearer).
-	pub user_access_token: Option<SecretString>,
+	/// Kick system access token (bearer) used for webhook subscription management.
+	pub system_access_token: Option<SecretString>,
 	/// Webhook bind address for Kick events (host:port).
 	pub webhook_bind: Option<String>,
 	/// Webhook path for Kick events (e.g. /kick/events).
@@ -129,10 +129,6 @@ pub struct KickSettings {
 	pub webhook_public_key_path: Option<String>,
 	/// Whether to verify Kick webhook signatures.
 	pub webhook_verify_signatures: Option<bool>,
-	/// Whether to auto-subscribe to Kick webhook events on join.
-	pub webhook_auto_subscribe: Option<bool>,
-	/// Event names to subscribe to (comma-separated in config).
-	pub webhook_events: Vec<String>,
 	/// Optional overrides: channel slug -> broadcaster id.
 	pub broadcaster_id_overrides: BTreeMap<String, String>,
 }
@@ -204,13 +200,11 @@ struct FileTwitchSettings {
 #[derive(Debug, Clone, Default, Deserialize)]
 struct FileKickSettings {
 	base_url: Option<String>,
-	user_access_token: Option<String>,
+	system_access_token: Option<String>,
 	webhook_bind: Option<String>,
 	webhook_path: Option<String>,
 	webhook_public_key_path: Option<String>,
 	webhook_verify_signatures: Option<bool>,
-	webhook_auto_subscribe: Option<bool>,
-	webhook_events: Option<String>,
 
 	#[serde(default)]
 	broadcaster_id_overrides: BTreeMap<String, String>,
@@ -245,24 +239,15 @@ impl ServerConfig {
 
 		let kick = KickSettings {
 			base_url: file.kick.base_url.filter(|s| !s.trim().is_empty()),
-			user_access_token: file
+			system_access_token: file
 				.kick
-				.user_access_token
+				.system_access_token
 				.filter(|s| !s.trim().is_empty())
 				.map(SecretString::new),
 			webhook_bind: file.kick.webhook_bind.filter(|s| !s.trim().is_empty()),
 			webhook_path: file.kick.webhook_path.filter(|s| !s.trim().is_empty()),
 			webhook_public_key_path: file.kick.webhook_public_key_path.filter(|s| !s.trim().is_empty()),
 			webhook_verify_signatures: file.kick.webhook_verify_signatures,
-			webhook_auto_subscribe: file.kick.webhook_auto_subscribe,
-			webhook_events: file
-				.kick
-				.webhook_events
-				.unwrap_or_default()
-				.split(',')
-				.map(|v| v.trim().to_string())
-				.filter(|v| !v.is_empty())
-				.collect(),
 			broadcaster_id_overrides: file.kick.broadcaster_id_overrides,
 		};
 
@@ -390,11 +375,11 @@ fn apply_env_overrides(cfg: &mut ServerConfig) {
 		}
 	}
 
-	if let Ok(v) = std::env::var("CHATTY_KICK_USER_ACCESS_TOKEN") {
+	if let Ok(v) = std::env::var("CHATTY_KICK_SYSTEM_ACCESS_TOKEN") {
 		let v = v.trim().to_string();
 		if !v.is_empty() {
-			cfg.kick.user_access_token = Some(SecretString::new(v));
-			info!("kick config: user_access_token overridden by env");
+			cfg.kick.system_access_token = Some(SecretString::new(v));
+			info!("kick config: system_access_token overridden by env");
 		}
 	}
 
@@ -427,21 +412,6 @@ fn apply_env_overrides(cfg: &mut ServerConfig) {
 	{
 		cfg.kick.webhook_verify_signatures = Some(enabled);
 		info!(enabled, "kick config: webhook_verify_signatures overridden by env");
-	}
-
-	if let Ok(v) = std::env::var("CHATTY_KICK_WEBHOOK_AUTO_SUBSCRIBE")
-		&& let Some(enabled) = parse_env_bool(&v)
-	{
-		cfg.kick.webhook_auto_subscribe = Some(enabled);
-		info!(enabled, "kick config: webhook_auto_subscribe overridden by env");
-	}
-
-	if let Ok(v) = std::env::var("CHATTY_KICK_WEBHOOK_EVENTS") {
-		let v = v.trim();
-		if !v.is_empty() {
-			cfg.kick.webhook_events = v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
-			info!("kick config: webhook_events overridden by env");
-		}
 	}
 
 	if let Ok(v) = std::env::var("CHATTY_METRICS_BIND") {

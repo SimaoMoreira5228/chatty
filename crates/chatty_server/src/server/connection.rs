@@ -374,6 +374,7 @@ pub async fn handle_connection(
 		}
 	}
 
+	let mut kick_auth: Option<AdapterAuth> = None;
 	let kick_oauth = hello.kick_user_oauth_token.trim();
 	if !kick_oauth.is_empty() {
 		let kick_user_id = hello.kick_user_id.trim();
@@ -397,20 +398,18 @@ pub async fn handle_connection(
 			return Ok(());
 		}
 
-		let updated = adapter_manager
-			.update_auth(
-				Platform::Kick,
-				AdapterAuth::UserAccessToken {
-					access_token: SecretString::new(kick_oauth.to_string()),
-					user_id: if kick_user_id.is_empty() {
-						None
-					} else {
-						Some(kick_user_id.to_string())
-					},
-					expires_in: None,
-				},
-			)
-			.await;
+		let auth = AdapterAuth::UserAccessToken {
+			access_token: SecretString::new(kick_oauth.to_string()),
+			user_id: if kick_user_id.is_empty() {
+				None
+			} else {
+				Some(kick_user_id.to_string())
+			},
+			expires_in: None,
+		};
+		kick_auth = Some(auth.clone());
+
+		let updated = adapter_manager.update_auth(Platform::Kick, auth).await;
 
 		if updated {
 			info!(conn_id, "applied user OAuth token to kick adapter");
@@ -1079,10 +1078,18 @@ pub async fn handle_connection(
 						if result.status != pb::subscription_result::Status::Ok as i32 {
 							continue;
 						}
+
 						let Ok(room) = RoomTopic::parse(&result.topic) else {
 							continue;
 						};
-						if let Some(perms) = adapter_manager.query_permissions(&room).await {
+
+						let perms_auth = if room.platform == Platform::Kick {
+							kick_auth.clone()
+						} else {
+							None
+						};
+
+						if let Some(perms) = adapter_manager.query_permissions(&room, perms_auth).await {
 							let env = pb::EventEnvelope {
 								topic: result.topic.clone(),
 								cursor: 0,
@@ -1164,6 +1171,7 @@ pub async fn handle_connection(
 						&cmd,
 						&adapter_manager,
 						&audit_service,
+						kick_auth.clone(),
 					)
 					.await;
 					send_envelope(
@@ -1254,6 +1262,7 @@ async fn handle_command(
 	cmd: &pb::Command,
 	adapter_manager: &AdapterManager,
 	audit_service: &AuditService,
+	kick_auth: Option<AdapterAuth>,
 ) -> pb::CommandResult {
 	if let Some(expected) = settings.auth_token.as_ref()
 		&& (client_auth_token.trim().is_empty() || client_auth_token != expected.expose())
@@ -1426,7 +1435,8 @@ async fn handle_command(
 
 	metrics::counter!("chatty_server_commands_total").increment(1);
 
-	match adapter_manager.execute_command(request).await {
+	let command_auth = if room.platform == Platform::Kick { kick_auth } else { None };
+	match adapter_manager.execute_command(request, command_auth).await {
 		Ok(()) => {
 			metrics::counter!("chatty_server_commands_ok_total").increment(1);
 			pb::CommandResult {

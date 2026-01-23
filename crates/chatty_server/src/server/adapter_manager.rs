@@ -164,7 +164,7 @@ impl AdapterManager {
 	}
 
 	/// Execute a command against a specific platform adapter.
-	pub async fn execute_command(&self, request: CommandRequest) -> Result<(), CommandError> {
+	pub async fn execute_command(&self, request: CommandRequest, auth: Option<AdapterAuth>) -> Result<(), CommandError> {
 		let platform = request.platform();
 		let Some(ctrl) = self.control_by_platform.get(&platform) else {
 			return Err(CommandError::NotSupported(Some(format!(
@@ -172,9 +172,10 @@ impl AdapterManager {
 			))));
 		};
 		let (tx, rx) = oneshot::channel();
-		if ctrl.send(AdapterControl::Command { request, resp: tx }).await.is_err() {
+		if ctrl.send(AdapterControl::Command { request, auth, resp: tx }).await.is_err() {
 			return Err(CommandError::Internal("adapter control channel closed".to_string()));
 		}
+
 		match tokio::time::timeout(std::time::Duration::from_secs(5), rx).await {
 			Ok(Ok(result)) => result,
 			Ok(Err(_)) => Err(CommandError::Internal("adapter response dropped".to_string())),
@@ -183,12 +184,13 @@ impl AdapterManager {
 	}
 
 	/// Query permission snapshot for a room.
-	pub async fn query_permissions(&self, room: &RoomKey) -> Option<PermissionsInfo> {
+	pub async fn query_permissions(&self, room: &RoomKey, auth: Option<AdapterAuth>) -> Option<PermissionsInfo> {
 		let ctrl = self.control_by_platform.get(&room.platform)?;
 		let (tx, rx) = oneshot::channel();
 		if ctrl
 			.send(AdapterControl::QueryPermissions {
 				room: room.clone(),
+				auth,
 				resp: tx,
 			})
 			.await

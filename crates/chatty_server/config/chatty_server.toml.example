@@ -108,9 +108,9 @@ refresh_buffer_secs = 60
 # Env override: CHATTY_KICK_BASE_URL
 base_url = "https://api.kick.com"
 
-# Kick user access token (bearer).
-# Env override: CHATTY_KICK_USER_ACCESS_TOKEN
-user_access_token = ""
+# Kick system access token (bearer) used for webhook subscriptions.
+# Env override: CHATTY_KICK_SYSTEM_ACCESS_TOKEN
+system_access_token = ""
 
 # Webhook bind for Kick events (host:port).
 # Env override: CHATTY_KICK_WEBHOOK_BIND
@@ -127,14 +127,6 @@ webhook_public_key_path = ""
 # Verify webhook signatures.
 # Env override: CHATTY_KICK_WEBHOOK_VERIFY_SIGNATURES
 webhook_verify_signatures = true
-
-# Auto-subscribe to webhook events on room join.
-# Env override: CHATTY_KICK_WEBHOOK_AUTO_SUBSCRIBE
-webhook_auto_subscribe = false
-
-# Comma-separated list of events to subscribe to.
-# Env override: CHATTY_KICK_WEBHOOK_EVENTS
-webhook_events = "chat.message.sent"
 
 # Optional overrides: channel slug -> broadcaster id.
 [kick.broadcaster_id_overrides]

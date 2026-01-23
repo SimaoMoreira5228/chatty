@@ -7,7 +7,6 @@ from pathlib import Path
 
 BINARY_CRATES = {
   "crates/chatty_client_gui/Cargo.toml": "chatty",
-  "crates/chatty_server/Cargo.toml": "chatty-server",
 }
 
 
