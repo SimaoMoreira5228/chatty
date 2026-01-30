@@ -233,6 +233,99 @@ async fn main() -> anyhow::Result<()> {
 
 	health_state.mark_ready();
 
+	let state = Arc::new(RwLock::new(GlobalState::default()));
+	let mut platform_adapters: Vec<Box<dyn chatty_platform::PlatformAdapter>> = Vec::new();
+
+	{
+		let client_id = server_cfg.twitch.client_id.clone().unwrap_or_default();
+		if server_cfg.twitch.user_access_token.is_some() {
+			warn!("twitch config: user_access_token ignored; user OAuth is required per-connection");
+		}
+		let mut twitch_cfg = TwitchConfig::new(client_id, SecretString::new(String::new()));
+		if let Some(secret) = server_cfg.twitch.client_secret.clone() {
+			twitch_cfg.client_secret = Some(secret);
+		}
+		if let Some(refresh_token) = server_cfg.twitch.refresh_token.clone() {
+			twitch_cfg.refresh_token = Some(refresh_token);
+		}
+		if let Some(buffer) = server_cfg.twitch.refresh_buffer {
+			twitch_cfg.refresh_buffer = buffer;
+		}
+		twitch_cfg.disable_refresh = server_cfg.twitch.disable_refresh;
+		if let Some(ws_url) = server_cfg.twitch.eventsub_ws_url.clone() {
+			twitch_cfg.eventsub_ws_url = ws_url;
+		}
+		if let Some(min) = server_cfg.twitch.reconnect_min_delay {
+			twitch_cfg.reconnect_min_delay = min;
+		}
+		if let Some(max) = server_cfg.twitch.reconnect_max_delay {
+			twitch_cfg.reconnect_max_delay = max;
+		}
+		if !server_cfg.twitch.broadcaster_id_overrides.is_empty() {
+			twitch_cfg.broadcaster_id_overrides = server_cfg
+				.twitch
+				.broadcaster_id_overrides
+				.iter()
+				.map(|(k, v)| (k.clone(), v.clone()))
+				.collect();
+		}
+		platform_adapters.push(Box::new(TwitchEventSubAdapter::new(twitch_cfg)));
+
+		let mut kick_cfg = KickConfig::new();
+		if let Some(base_url) = server_cfg.kick.base_url.clone() {
+			kick_cfg.base_url = base_url;
+		}
+		if let Some(token) = server_cfg.kick.system_access_token.clone() {
+			kick_cfg.system_access_token = Some(token);
+		}
+		if let Some(path) = server_cfg.kick.webhook_path.clone() {
+			kick_cfg.webhook_path = path;
+		}
+		if let Some(path) = server_cfg.kick.webhook_public_key_path.clone() {
+			kick_cfg.webhook_public_key_path = Some(std::path::PathBuf::from(path));
+		}
+		if let Some(verify) = server_cfg.kick.webhook_verify_signatures {
+			kick_cfg.webhook_verify_signatures = verify;
+		}
+		if let Some(bind) = server_cfg.kick.webhook_bind.clone() {
+			match bind.parse::<std::net::SocketAddr>() {
+				Ok(addr) => kick_cfg.webhook_bind = Some(addr),
+				Err(e) => warn!(error = %e, bind = %bind, "kick webhook bind is invalid"),
+			}
+		}
+		if !server_cfg.kick.broadcaster_id_overrides.is_empty() {
+			kick_cfg.broadcaster_id_overrides = server_cfg
+				.kick
+				.broadcaster_id_overrides
+				.iter()
+				.map(|(k, v)| (k.clone(), v.clone()))
+				.collect();
+		}
+		platform_adapters.push(Box::new(KickEventAdapter::new(kick_cfg)));
+
+		platform_adapters.push(Box::new(crate::adapters::NullAdapter::new(chatty_domain::Platform::YouTube)));
+
+		let fake_enabled = cfg!(debug_assertions)
+			&& std::env::var(CHATTY_ENABLE_FAKE_ADAPTER_ENV)
+				.map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+				.unwrap_or(false);
+		if fake_enabled {
+			info!(
+				env = CHATTY_ENABLE_FAKE_ADAPTER_ENV,
+				"starting dev-only fake adapter (enabled by env)"
+			);
+			platform_adapters.push(Box::new(crate::adapters::DemoAdapter::new()));
+		}
+	}
+
+	let adapter_manager = Arc::new(start_global_adapter_manager(
+		Arc::clone(&state),
+		AdapterManagerConfig::default(),
+		platform_adapters,
+	));
+	let room_hub = RoomHub::new(RoomHubConfig::default());
+	let _router = spawn_ingest_router(Arc::clone(&adapter_manager), room_hub.clone(), RouterConfig::default());
+
 	let mut next_conn_id: u64 = 1;
 
 	loop {
@@ -244,115 +337,17 @@ async fn main() -> anyhow::Result<()> {
 		next_conn_id += 1;
 		metrics::counter!("chatty_server_connections_total").increment(1);
 
-		let server_cfg = server_cfg.clone();
 		let conn_settings = conn_settings.clone();
-
 		let replay_service = Arc::clone(&replay_service);
 		let audit_service = Arc::clone(&audit_service);
+		let state = Arc::clone(&state);
+		let adapter_manager = Arc::clone(&adapter_manager);
+		let room_hub = room_hub.clone();
+
 		tokio::spawn(async move {
 			match connecting.await {
 				Ok(connection) => {
 					tracing::info!(conn_id, remote = %connection.remote_address(), "accepted connection");
-
-					let state = Arc::new(RwLock::new(GlobalState::default()));
-					let mut platform_adapters: Vec<Box<dyn chatty_platform::PlatformAdapter>> = Vec::new();
-
-					let client_id = server_cfg.twitch.client_id.clone().unwrap_or_default();
-					if server_cfg.twitch.user_access_token.is_some() {
-						warn!("twitch config: user_access_token ignored; user OAuth is required per-connection");
-					}
-
-					let mut twitch_cfg = TwitchConfig::new(client_id, SecretString::new(String::new()));
-
-					if let Some(secret) = server_cfg.twitch.client_secret.clone() {
-						twitch_cfg.client_secret = Some(secret);
-					}
-					if let Some(refresh_token) = server_cfg.twitch.refresh_token.clone() {
-						twitch_cfg.refresh_token = Some(refresh_token);
-					}
-					if let Some(buffer) = server_cfg.twitch.refresh_buffer {
-						twitch_cfg.refresh_buffer = buffer;
-					}
-
-					twitch_cfg.disable_refresh = server_cfg.twitch.disable_refresh;
-
-					if let Some(ws_url) = server_cfg.twitch.eventsub_ws_url.clone() {
-						twitch_cfg.eventsub_ws_url = ws_url;
-					}
-					if let Some(min) = server_cfg.twitch.reconnect_min_delay {
-						twitch_cfg.reconnect_min_delay = min;
-					}
-					if let Some(max) = server_cfg.twitch.reconnect_max_delay {
-						twitch_cfg.reconnect_max_delay = max;
-					}
-					if !server_cfg.twitch.broadcaster_id_overrides.is_empty() {
-						twitch_cfg.broadcaster_id_overrides = server_cfg
-							.twitch
-							.broadcaster_id_overrides
-							.iter()
-							.map(|(k, v)| (k.clone(), v.clone()))
-							.collect();
-					}
-
-					platform_adapters.push(Box::new(TwitchEventSubAdapter::new(twitch_cfg)));
-
-					let mut kick_cfg = KickConfig::new();
-					if let Some(base_url) = server_cfg.kick.base_url.clone() {
-						kick_cfg.base_url = base_url;
-					}
-					if let Some(token) = server_cfg.kick.system_access_token.clone() {
-						kick_cfg.system_access_token = Some(token);
-					}
-					if let Some(path) = server_cfg.kick.webhook_path.clone() {
-						kick_cfg.webhook_path = path;
-					}
-					if let Some(path) = server_cfg.kick.webhook_public_key_path.clone() {
-						kick_cfg.webhook_public_key_path = Some(std::path::PathBuf::from(path));
-					}
-					if let Some(verify) = server_cfg.kick.webhook_verify_signatures {
-						kick_cfg.webhook_verify_signatures = verify;
-					}
-					if let Some(bind) = server_cfg.kick.webhook_bind.clone() {
-						match bind.parse::<std::net::SocketAddr>() {
-							Ok(addr) => kick_cfg.webhook_bind = Some(addr),
-							Err(e) => warn!(error = %e, bind = %bind, "kick webhook bind is invalid"),
-						}
-					}
-
-					if !server_cfg.kick.broadcaster_id_overrides.is_empty() {
-						kick_cfg.broadcaster_id_overrides = server_cfg
-							.kick
-							.broadcaster_id_overrides
-							.iter()
-							.map(|(k, v)| (k.clone(), v.clone()))
-							.collect();
-					}
-
-					platform_adapters.push(Box::new(KickEventAdapter::new(kick_cfg)));
-
-					platform_adapters.push(Box::new(crate::adapters::NullAdapter::new(chatty_domain::Platform::YouTube)));
-
-					let fake_enabled = cfg!(debug_assertions)
-						&& std::env::var(CHATTY_ENABLE_FAKE_ADAPTER_ENV)
-							.map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
-							.unwrap_or(false);
-
-					if fake_enabled {
-						info!(
-							env = CHATTY_ENABLE_FAKE_ADAPTER_ENV,
-							"starting dev-only fake adapter (enabled by env)"
-						);
-						platform_adapters.push(Box::new(crate::adapters::DemoAdapter::new()));
-					}
-
-					let adapter_manager = Arc::new(start_global_adapter_manager(
-						Arc::clone(&state),
-						AdapterManagerConfig::default(),
-						platform_adapters,
-					));
-					let room_hub = RoomHub::new(RoomHubConfig::default());
-					let _room_hub =
-						spawn_ingest_router(Arc::clone(&adapter_manager), room_hub.clone(), RouterConfig::default());
 
 					if let Err(e) = handle_connection(
 						conn_id,

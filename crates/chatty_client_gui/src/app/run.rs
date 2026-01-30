@@ -5,9 +5,9 @@ use iced::Task;
 use crate::app::{Chatty, Message};
 
 pub fn run() -> iced::Result {
-	iced::application(Chatty::new, update, Chatty::view)
-		.title("Chatty")
-		.theme(iced::Theme::Dark)
+	iced::daemon(Chatty::new, update, Chatty::view)
+		.title(Chatty::title)
+		.theme(Chatty::theme)
 		.subscription(Chatty::subscription)
 		.run()
 }

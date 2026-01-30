@@ -1,293 +1,23 @@
 #![forbid(unsafe_code)]
 
-use std::collections::{HashMap, HashSet};
-#[cfg(not(test))]
-use std::io::Cursor;
-use std::num::NonZeroUsize;
-use std::sync::{Arc, Mutex as StdMutex};
-use std::time::{Duration, Instant};
+use std::collections::HashMap;
+use std::sync::Arc;
 
-use chatty_client_core::ClientConfigV1;
-use chatty_client_ui::app_state::{AppState, JoinRequest, TabId, TabTarget, UiNotificationKind};
-use chatty_client_ui::net::{self, NetController};
-use chatty_client_ui::settings::{ShortcutKey, SplitLayoutKind, ThemeKind};
-use chatty_domain::{Platform, RoomKey};
-use iced::widget::image::Handle as ImageHandle;
+use chatty_domain::RoomKey;
+use iced::Task;
 use iced::widget::{pane_grid, text_editor};
-use iced::{Task, keyboard};
-#[cfg(not(test))]
-use image::AnimationDecoder;
-#[cfg(not(test))]
-use image::codecs::gif::GifDecoder;
-#[cfg(not(test))]
-use image::codecs::webp::WebPDecoder;
-use lru::LruCache;
-use rust_i18n::t;
 #[cfg(not(test))]
 use tokio::sync::Semaphore;
 use tokio::sync::{Mutex, mpsc};
 
+use crate::app::assets::AssetManager;
+use crate::app::message::Message;
 use crate::app::net::{UiEventReceiver, recv_next};
-
-#[allow(dead_code)]
-#[allow(clippy::enum_variant_names)]
-#[derive(Debug, Clone)]
-pub enum Message {
-	Navigate(Page),
-	SettingsCategorySelected(SettingsCategory),
-	UsersFilterChanged(String),
-	PlatformSelected(PlatformChoice),
-	MaxLogItemsChanged(String),
-	SplitLayoutSelected(SplitLayoutChoice),
-	DragModifierSelected(ShortcutKeyChoice),
-	CloseKeyChanged(String),
-	NewKeyChanged(String),
-	ReconnectKeyChanged(String),
-	VimNavToggled(bool),
-	VimLeftKeyChanged(String),
-	VimDownKeyChanged(String),
-	VimUpKeyChanged(String),
-	VimRightKeyChanged(String),
-	CursorMoved(f32, f32),
-	UserScrolled,
-	WindowResized(f32, f32),
-	AnimationTick(Instant),
-
-	CharPressed(char, keyboard::Modifiers),
-	NamedKeyPressed(iced::keyboard::key::Named),
-	OpenPlatformLogin(chatty_domain::Platform),
-
-	ImportFromFilePressed,
-	LayoutImportFileParsed(Result<crate::ui::layout::UiRootState, String>),
-	ConfirmImport,
-	CancelImport,
-	ConfirmExport,
-	CancelExport,
-	ConfirmReset,
-	CancelReset,
-	CancelError,
-	ChooseExportPathPressed,
-	LayoutExportPathChosen(Option<std::path::PathBuf>),
-
-	ExportLayoutPressed,
-	ImportLayoutPressed,
-	LayoutImportClipboard(Option<String>),
-	ResetLayoutPressed,
-	ModalDismissed,
-	ServerEndpointChanged(String),
-	ServerAuthTokenChanged(String),
-	ConnectPressed,
-	DisconnectPressed,
-	ConnectFinished(Result<(), String>),
-
-	ThemeSelected(ThemeChoice),
-
-	PaneJoinChanged(pane_grid::Pane, String),
-	PaneJoinPressed(pane_grid::Pane),
-	PaneSubscribed(pane_grid::Pane, Result<(), String>),
-	TabUnsubscribed(chatty_domain::RoomKey, Result<(), String>),
-
-	PaneComposerChanged(pane_grid::Pane, String),
-	PaneSendPressed(pane_grid::Pane),
-	Sent(Result<(), String>),
-	MessageTextEdit(String, text_editor::Action),
-
-	MessageActionButtonPressed(chatty_domain::RoomKey, Option<String>, Option<String>, Option<String>),
-	DismissMessageAction,
-	ReplyToMessage(chatty_domain::RoomKey, Option<String>, Option<String>),
-	DeleteMessage(chatty_domain::RoomKey, Option<String>, Option<String>),
-	TimeoutUser(chatty_domain::RoomKey, String),
-	BanUser(chatty_domain::RoomKey, String),
-
-	PasteTwitchBlob,
-	PasteKickBlob,
-	ClipboardRead(ClipboardTarget, Option<String>),
-	IdentityUse(String),
-	IdentityToggle(String),
-	IdentityRemove(String),
-	ClearIdentity,
-
-	PaneClicked(pane_grid::Pane),
-	PaneResized(pane_grid::ResizeEvent),
-	PaneDragged(pane_grid::DragEvent),
-	SplitSpiral,
-	SplitMasonry,
-	SplitPressed,
-	CloseFocused,
-	DismissToast,
-	ModifiersChanged(keyboard::Modifiers),
-	LocaleSelected(String),
-	AutoConnectToggled(bool),
-
-	NetPolled(Option<chatty_client_ui::net::UiEvent>),
-	AutoJoinCompleted(Vec<(RoomKey, Result<(), String>)>),
-	NavigatePaneLeft,
-	NavigatePaneDown,
-	NavigatePaneUp,
-	NavigatePaneRight,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ClipboardTarget {
-	Twitch,
-	Kick,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ThemeChoice(pub ThemeKind);
-
-impl ThemeChoice {
-	pub const ALL: [ThemeChoice; 10] = [
-		ThemeChoice(ThemeKind::DarkAmethyst),
-		ThemeChoice(ThemeKind::Dark),
-		ThemeChoice(ThemeKind::Light),
-		ThemeChoice(ThemeKind::Solarized),
-		ThemeChoice(ThemeKind::HighContrast),
-		ThemeChoice(ThemeKind::Ocean),
-		ThemeChoice(ThemeKind::Dracula),
-		ThemeChoice(ThemeKind::Gruvbox),
-		ThemeChoice(ThemeKind::Nord),
-		ThemeChoice(ThemeKind::Synthwave),
-	];
-}
-
-impl std::fmt::Display for ThemeChoice {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		let name = match self.0 {
-			ThemeKind::Dark => t!("theme.dark"),
-			ThemeKind::Light => t!("theme.light"),
-			ThemeKind::Solarized => t!("theme.solarized"),
-			ThemeKind::HighContrast => t!("theme.high_contrast"),
-			ThemeKind::Ocean => t!("theme.ocean"),
-			ThemeKind::Dracula => t!("theme.dracula"),
-			ThemeKind::Gruvbox => t!("theme.gruvbox"),
-			ThemeKind::Nord => t!("theme.nord"),
-			ThemeKind::Synthwave => t!("theme.synthwave"),
-			ThemeKind::DarkAmethyst => t!("theme.dark_amethyst"),
-		};
-		write!(f, "{}", name)
-	}
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SplitLayoutChoice(pub SplitLayoutKind);
-
-impl SplitLayoutChoice {
-	pub const ALL: [SplitLayoutChoice; 3] = [
-		SplitLayoutChoice(SplitLayoutKind::Masonry),
-		SplitLayoutChoice(SplitLayoutKind::Spiral),
-		SplitLayoutChoice(SplitLayoutKind::Linear),
-	];
-}
-
-impl std::fmt::Display for SplitLayoutChoice {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		let name = match self.0 {
-			SplitLayoutKind::Spiral => t!("split.spiral"),
-			SplitLayoutKind::Masonry => t!("split.masonry"),
-			SplitLayoutKind::Linear => t!("split.linear"),
-		};
-
-		write!(f, "{}", name)
-	}
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ShortcutKeyChoice(pub ShortcutKey);
-
-impl ShortcutKeyChoice {
-	pub const ALL: [ShortcutKeyChoice; 6] = [
-		ShortcutKeyChoice(ShortcutKey::Alt),
-		ShortcutKeyChoice(ShortcutKey::Control),
-		ShortcutKeyChoice(ShortcutKey::Shift),
-		ShortcutKeyChoice(ShortcutKey::Logo),
-		ShortcutKeyChoice(ShortcutKey::Always),
-		ShortcutKeyChoice(ShortcutKey::None),
-	];
-}
-
-impl std::fmt::Display for ShortcutKeyChoice {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		let name = match self.0 {
-			ShortcutKey::Alt => t!("shortcut.alt"),
-			ShortcutKey::Control => t!("shortcut.control"),
-			ShortcutKey::Shift => t!("shortcut.shift"),
-			ShortcutKey::Logo => t!("shortcut.logo"),
-			ShortcutKey::Always => t!("shortcut.always"),
-			ShortcutKey::None => t!("shortcut.none"),
-		};
-		write!(f, "{}", name)
-	}
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Page {
-	Main,
-	Settings,
-	Users,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SettingsCategory {
-	General,
-	Server,
-	Accounts,
-	Keybinds,
-	Diagnostics,
-}
-
-impl SettingsCategory {
-	pub const ALL: [SettingsCategory; 5] = [
-		SettingsCategory::General,
-		SettingsCategory::Server,
-		SettingsCategory::Accounts,
-		SettingsCategory::Keybinds,
-		SettingsCategory::Diagnostics,
-	];
-
-	pub fn label_key(self) -> &'static str {
-		match self {
-			SettingsCategory::General => "settings.general",
-			SettingsCategory::Server => "settings.server",
-			SettingsCategory::Accounts => "settings.accounts",
-			SettingsCategory::Keybinds => "settings.keybinds",
-			SettingsCategory::Diagnostics => "settings.diagnostics",
-		}
-	}
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PlatformChoice(pub Platform);
-
-impl PlatformChoice {
-	pub const ALL: [PlatformChoice; 2] = [PlatformChoice(Platform::Twitch), PlatformChoice(Platform::Kick)];
-}
-
-impl std::fmt::Display for PlatformChoice {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		let label = match self.0 {
-			Platform::Twitch => t!("platform.twitch"),
-			Platform::Kick => t!("platform.kick"),
-			_ => t!("platform.unknown"),
-		};
-		write!(f, "{}", label)
-	}
-}
-
-#[derive(Debug, Clone)]
-pub struct PaneState {
-	pub(crate) tab_id: Option<TabId>,
-	pub(crate) composer: String,
-	pub(crate) join_raw: String,
-	pub(crate) reply_to_server_message_id: String,
-	pub(crate) reply_to_platform_message_id: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InsertTarget {
-	Composer,
-	Join,
-}
+use crate::app::state::{AppState, JoinRequest, UiNotificationKind};
+use crate::app::types::PendingCommand;
+use crate::net::{self, NetController};
+use crate::settings::ShortcutKey;
+use crate::ui::components::tab::TabId;
 
 pub struct Chatty {
 	pub(crate) net: NetController,
@@ -295,208 +25,38 @@ pub struct Chatty {
 	pub(crate) _shutdown: Option<net::ShutdownHandle>,
 
 	pub(crate) state: AppState,
-	pub(crate) panes: pane_grid::State<PaneState>,
-	pub(crate) focused_pane: pane_grid::Pane,
-	pub(crate) page: Page,
-	pub(crate) settings_category: SettingsCategory,
-
-	pub(crate) server_endpoint_quic: String,
-	pub(crate) server_auth_token: String,
-	pub(crate) max_log_items_raw: String,
-	pub(crate) users_filter_raw: String,
-
-	pub(crate) spiral_dir: u8,
-	pub(crate) masonry_flip: bool,
-	pub(crate) modifiers: keyboard::Modifiers,
-
-	pub(crate) window_size: Option<(f32, f32)>,
-	pub(crate) last_cursor_pos: Option<(f32, f32)>,
-	pub(crate) toast: Option<String>,
-
-	pub(crate) pending_import_root: Option<crate::ui::layout::UiRootState>,
-	pub(crate) pending_export_root: Option<crate::ui::layout::UiRootState>,
-	pub(crate) pending_export_path: Option<std::path::PathBuf>,
-	pub(crate) pending_reset: bool,
-	pub(crate) pending_error: Option<String>,
-	pub(crate) pending_auto_connect_cfg: Option<ClientConfigV1>,
-
-	pub(crate) image_cache: Arc<StdMutex<LruCache<String, ImageHandle>>>,
-	pub(crate) animated_cache: Arc<StdMutex<LruCache<String, AnimatedImage>>>,
-	pub(crate) image_loading: Arc<StdMutex<HashSet<String>>>,
-	pub(crate) image_failed: Arc<StdMutex<HashSet<String>>>,
+	pub(crate) assets: AssetManager,
 	pub(crate) pending_commands: Vec<PendingCommand>,
-	pub(crate) image_fetch_sender: mpsc::Sender<String>,
-	pub(crate) pending_message_action: Option<PendingMessageAction>,
 	pub(crate) message_text_editors: HashMap<String, text_editor::Content>,
-	pub(crate) animation_start: Instant,
-	pub(crate) animation_clock: Instant,
-
-	pub(crate) follow_end: bool,
-	pub(crate) last_focus: Option<std::time::Instant>,
-	pub(crate) pending_deletion: Option<(chatty_domain::RoomKey, Option<String>, Option<String>)>,
-
-	pub(crate) insert_mode: bool,
-	pub(crate) insert_target: Option<InsertTarget>,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub enum PendingCommand {
-	Delete {
-		room: RoomKey,
-		server_message_id: Option<String>,
-		platform_message_id: Option<String>,
-	},
-	Timeout {
-		room: RoomKey,
-		user_id: String,
-	},
-	Ban {
-		room: RoomKey,
-		user_id: String,
-	},
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct PendingMessageAction {
-	pub(crate) room: chatty_domain::RoomKey,
-	pub(crate) server_message_id: Option<String>,
-	pub(crate) platform_message_id: Option<String>,
-	pub(crate) author_id: Option<String>,
-	pub(crate) cursor_pos: Option<(f32, f32)>,
 }
 
 pub(crate) fn first_char_lower(s: &str) -> char {
 	s.chars().next().map(|c| c.to_ascii_lowercase()).unwrap_or('\0')
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct AnimatedImage {
-	pub(crate) frames: Vec<ImageHandle>,
-	pub(crate) delays: Vec<Duration>,
-	pub(crate) total: Duration,
-}
-
-impl AnimatedImage {
-	pub(crate) fn frame_at(&self, elapsed: Duration) -> Option<&ImageHandle> {
-		if self.frames.is_empty() {
-			return None;
-		}
-
-		let total_ms = self.total.as_millis() as u64;
-		let mut t_ms = if total_ms == 0 {
-			0
-		} else {
-			(elapsed.as_millis() as u64) % total_ms
-		};
-		for (idx, delay) in self.delays.iter().enumerate() {
-			let delay_ms = delay.as_millis() as u64;
-			if t_ms <= delay_ms {
-				return self.frames.get(idx);
-			}
-			t_ms = t_ms.saturating_sub(delay_ms);
-		}
-
-		self.frames.last()
-	}
-}
-
-#[cfg(not(test))]
-fn decode_animated_image(bytes: &[u8]) -> Option<AnimatedImage> {
-	if bytes.len() < 12 {
-		return None;
-	}
-
-	let is_gif = bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a");
-	let is_webp = bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP");
-
-	if is_gif {
-		return decode_gif(bytes);
-	}
-	if is_webp {
-		return decode_webp(bytes);
-	}
-
-	None
-}
-
-#[cfg(not(test))]
-fn decode_gif(bytes: &[u8]) -> Option<AnimatedImage> {
-	let decoder = GifDecoder::new(Cursor::new(bytes)).ok()?;
-	let frames = decoder.into_frames().collect_frames().ok()?;
-	if frames.len() < 2 {
-		return None;
-	}
-
-	let mut handles = Vec::with_capacity(frames.len());
-	let mut delays = Vec::with_capacity(frames.len());
-	let mut total = Duration::ZERO;
-
-	for frame in frames {
-		let delay = frame.delay();
-		let ms = delay.numer_denom_ms().0.max(20);
-		let d = Duration::from_millis(ms as u64);
-		total += d;
-		delays.push(d);
-		let buffer = frame.into_buffer();
-		let width = buffer.width();
-		let height = buffer.height();
-		handles.push(ImageHandle::from_rgba(width, height, buffer.into_raw()));
-	}
-
-	Some(AnimatedImage {
-		frames: handles,
-		delays,
-		total,
-	})
-}
-
-#[cfg(not(test))]
-fn decode_webp(bytes: &[u8]) -> Option<AnimatedImage> {
-	let decoder = WebPDecoder::new(Cursor::new(bytes)).ok()?;
-	let frames = decoder.into_frames().collect_frames().ok()?;
-	if frames.len() < 2 {
-		return None;
-	}
-
-	let mut handles = Vec::with_capacity(frames.len());
-	let mut delays = Vec::with_capacity(frames.len());
-	let mut total = Duration::ZERO;
-
-	for frame in frames {
-		let delay = frame.delay();
-		let ms = delay.numer_denom_ms().0.max(20);
-		let d = Duration::from_millis(ms as u64);
-		total += d;
-		delays.push(d);
-		let buffer = frame.into_buffer();
-		let width = buffer.width();
-		let height = buffer.height();
-		handles.push(ImageHandle::from_rgba(width, height, buffer.into_raw()));
-	}
-
-	Some(AnimatedImage {
-		frames: handles,
-		delays,
-		total,
-	})
-}
-
 impl Chatty {
+	pub fn title(&self, _window: iced::window::Id) -> String {
+		"Chatty".to_string()
+	}
+
+	pub fn theme(&self, _window: iced::window::Id) -> iced::Theme {
+		iced::Theme::Dark
+	}
+
 	pub fn new() -> (Self, Task<Message>) {
 		let (net, rx, shutdown) = net::start_networking();
 		let net_rx = Arc::new(Mutex::new(rx));
-		let state = AppState::new();
+		let mut state = AppState::new();
 		let gs = state.gui_settings().clone();
-		let (panes, root) = pane_grid::State::new(PaneState {
-			tab_id: None,
-			composer: String::new(),
-			join_raw: String::new(),
-			reply_to_server_message_id: String::new(),
-			reply_to_platform_message_id: String::new(),
-		});
 
-		let initial_focused = root;
+		if state.tabs.is_empty() {
+			let id = state.create_tab_for_rooms(t!("main.welcome"), Vec::new());
+			state.selected_tab_id = Some(id);
+		}
+
+		state.ui.server_endpoint_quic = gs.server_endpoint_quic.clone();
+		state.ui.server_auth_token = gs.server_auth_token.clone();
+		state.ui.max_log_items_raw = gs.max_log_items.to_string();
 
 		let mut instance = Self {
 			net,
@@ -504,88 +64,55 @@ impl Chatty {
 			_shutdown: Some(shutdown),
 
 			state,
-			panes,
-			focused_pane: initial_focused,
-			page: Page::Main,
-			settings_category: SettingsCategory::General,
 
-			server_endpoint_quic: gs.server_endpoint_quic.clone(),
-			server_auth_token: gs.server_auth_token.clone(),
-			max_log_items_raw: gs.max_log_items.to_string(),
-			users_filter_raw: String::new(),
-			spiral_dir: 0,
-			masonry_flip: false,
-			modifiers: keyboard::Modifiers::default(),
-			window_size: None,
-			last_cursor_pos: None,
-			toast: None,
-			pending_import_root: None,
-			pending_export_root: None,
-			pending_export_path: None,
-			pending_reset: false,
-			pending_error: None,
-			insert_mode: false,
-			insert_target: None,
-			follow_end: true,
-			last_focus: None,
-			pending_auto_connect_cfg: None,
-			image_cache: Arc::new(StdMutex::new(LruCache::new(NonZeroUsize::new(512).unwrap()))),
-			animated_cache: Arc::new(StdMutex::new(LruCache::new(NonZeroUsize::new(256).unwrap()))),
-			image_loading: Arc::new(StdMutex::new(HashSet::new())),
-			image_failed: Arc::new(StdMutex::new(HashSet::new())),
-			pending_commands: Vec::new(),
-			image_fetch_sender: {
+			assets: AssetManager::new({
 				let (tx, _rx) = mpsc::channel::<String>(1);
 				tx
-			},
-			pending_deletion: None,
-			pending_message_action: None,
+			}),
+			pending_commands: Vec::new(),
 			message_text_editors: HashMap::new(),
-			animation_start: Instant::now(),
-			animation_clock: Instant::now(),
 		};
 
 		#[cfg(not(test))]
 		{
-			let image_cache_arc = Arc::clone(&instance.image_cache);
-			let animated_cache_arc = Arc::clone(&instance.animated_cache);
-			let image_loading_arc = Arc::clone(&instance.image_loading);
-			let image_failed_arc = Arc::clone(&instance.image_failed);
-			let (img_tx, mut img_rx) = mpsc::channel::<String>(200);
+			let image_cache_arc = instance.assets.image_cache.clone();
+			let animated_cache_arc = instance.assets.animated_cache.clone();
+			let image_loading_arc = Arc::clone(&instance.assets.image_loading);
+			let image_failed_arc = Arc::clone(&instance.assets.image_failed);
+			let svg_cache_arc = instance.assets.svg_cache.clone();
+			let (img_tx, mut img_rx) = mpsc::channel::<String>(1000);
 			let sem: std::sync::Arc<tokio::sync::Semaphore> = Arc::new(Semaphore::new(6));
 
-			instance.image_fetch_sender = img_tx.clone();
+			instance.assets.image_fetch_sender = img_tx.clone();
 
 			tokio::spawn(async move {
 				let client = reqwest::Client::new();
 				while let Some(url) = img_rx.recv().await {
-					let img_cache = Arc::clone(&image_cache_arc);
-					let animated_cache = Arc::clone(&animated_cache_arc);
+					let img_cache = image_cache_arc.clone();
+					let animated_cache = animated_cache_arc.clone();
 					let image_loading = Arc::clone(&image_loading_arc);
 					let image_failed = Arc::clone(&image_failed_arc);
+					let svg_cache = svg_cache_arc.clone();
 					let sem = Arc::clone(&sem);
 					let client = client.clone();
 					tokio::spawn(async move {
-						let _permit = sem.acquire().await.expect("semaphore closed");
+						let Ok(_permit) = sem.acquire().await else {
+							return;
+						};
 
-						{
-							let guard = img_cache.lock().unwrap();
-							if guard.contains(&url) {
-								return;
-							}
+						if img_cache.contains_key(&url) {
+							return;
 						}
 
-						{
-							let guard = animated_cache.lock().unwrap();
-							if guard.contains(&url) {
-								return;
-							}
+						if animated_cache.contains_key(&url) {
+							return;
 						}
 
-						{
-							let mut l = image_loading.lock().unwrap();
-							l.insert(url.clone());
+						if svg_cache.contains_key(&url) {
+							return;
 						}
+
+						image_loading.insert(url.clone());
 
 						let mut succeeded = false;
 						let mut attempt = 0u8;
@@ -597,15 +124,26 @@ impl Chatty {
 									match tokio::time::timeout(std::time::Duration::from_secs(8), resp.bytes()).await {
 										Ok(Ok(bytes)) => {
 											let bytes = bytes.to_vec();
-											if let Some(animated) = decode_animated_image(&bytes) {
-												let mut g = animated_cache.lock().unwrap();
-												g.put(url.clone(), animated);
+											let bytes_to_decode = bytes.clone();
+											let animated = tokio::task::spawn_blocking(move || {
+												crate::app::images::decode_animated_image(&bytes_to_decode)
+											})
+											.await
+											.ok()
+											.flatten();
+
+											if let Some(animated) = animated {
+												animated_cache.insert(url.clone(), animated);
 												tracing::info!(url = %url, attempt, "animated image decoded");
+												succeeded = true;
+											} else if url.ends_with(".svg") || bytes.windows(4).any(|w| w == b"<svg") {
+												let handle = iced::widget::svg::Handle::from_memory(bytes);
+												svg_cache.insert(url.clone(), handle);
+												tracing::info!(url = %url, attempt, "svg image fetch succeeded");
 												succeeded = true;
 											} else {
 												let handle = iced::widget::image::Handle::from_bytes(bytes);
-												let mut g = img_cache.lock().unwrap();
-												g.put(url.clone(), handle);
+												img_cache.insert(url.clone(), handle);
 												tracing::info!(url = %url, attempt, "image fetch succeeded");
 												succeeded = true;
 											}
@@ -626,18 +164,13 @@ impl Chatty {
 							}
 						}
 
-						{
-							let mut l = image_loading.lock().unwrap();
-							l.remove(&url);
-						}
+						image_loading.remove(&url);
 
 						if !succeeded {
-							let mut f = image_failed.lock().unwrap();
-							f.insert(url.clone());
+							image_failed.insert(url.clone());
 							tracing::error!(url = %url, "image fetch final failure");
 						} else {
-							let mut f = image_failed.lock().unwrap();
-							f.remove(&url);
+							image_failed.remove(&url);
 							tracing::debug!(url = %url, "image marked healthy");
 						}
 					});
@@ -651,12 +184,12 @@ impl Chatty {
 		}
 
 		let initial_task = if gs.auto_connect_on_startup {
-			match chatty_client_ui::settings::build_client_config(&gs) {
+			match crate::settings::build_client_config(&gs) {
 				Ok(cfg) => {
-					instance.pending_auto_connect_cfg = Some(cfg.clone());
+					instance.state.ui.pending_auto_connect_cfg = Some(cfg.clone());
 					instance
 						.state
-						.set_connection_status(chatty_client_ui::app_state::ConnectionStatus::Connecting);
+						.set_connection_status(crate::app::state::ConnectionStatus::Connecting);
 					let net_clone = instance.net.clone();
 					let rx_clone = net_rx.clone();
 					Task::perform(
@@ -676,404 +209,110 @@ impl Chatty {
 			Task::perform(recv_next(net_rx), Message::NetPolled)
 		};
 
-		(instance, initial_task)
+		let restore_tasks = Task::batch(instance.state.pending_restore_windows.drain(..).map(|win_model| {
+			if let Some(tid) = win_model.tabs.first() {
+				instance.state.pending_popped_tabs.push_back(*tid);
+			}
+
+			let (wid, task) = iced::window::open(iced::window::Settings {
+				exit_on_close_request: false,
+				size: iced::Size::new(win_model.width as f32, win_model.height as f32),
+				position: if win_model.x >= 0 && win_model.y >= 0 {
+					iced::window::Position::Specific(iced::Point::new(win_model.x as f32, win_model.y as f32))
+				} else {
+					iced::window::Position::Default
+				},
+				..Default::default()
+			});
+
+			instance.state.popped_windows.insert(wid, win_model);
+			task.map(Message::WindowOpened)
+		}));
+
+		let geo = &instance.state.main_window_geometry;
+		let (main_wid, main_window_task) = iced::window::open(iced::window::Settings {
+			exit_on_close_request: true,
+			size: iced::Size::new(geo.width as f32, geo.height as f32),
+			position: if geo.x >= 0 && geo.y >= 0 {
+				iced::window::Position::Specific(iced::Point::new(geo.x as f32, geo.y as f32))
+			} else {
+				iced::window::Position::Default
+			},
+			..Default::default()
+		});
+		instance.state.ui.main_window_id = Some(main_wid);
+		let main_window_task = main_window_task.map(Message::WindowOpened);
+
+		(instance, Task::batch(vec![initial_task, restore_tasks, main_window_task]))
 	}
 
 	pub fn collect_orphaned_tab(&mut self) -> Option<chatty_domain::RoomKey> {
-		let mut to_remove: Vec<(chatty_client_ui::app_state::TabId, chatty_domain::RoomKey)> = Vec::new();
+		let mut to_remove: Vec<crate::app::state::TabId> = Vec::new();
 		for (tid, tab) in &self.state.tabs {
-			if let chatty_client_ui::app_state::TabTarget::Room(room) = &tab.target {
-				let referenced = self.panes.iter().any(|(_, p)| p.tab_id == Some(*tid));
-				if !referenced {
-					to_remove.push((*tid, room.clone()));
-				}
+			let referenced = tab.panes.iter().any(|(_, p)| p.tab_id == Some(*tid));
+			if !referenced && !tab.pinned {
+				to_remove.push(*tid);
 			}
 		}
 
-		if let Some((tid, room)) = to_remove.into_iter().next() {
-			self.state.tabs.remove(&tid);
-			Some(room)
+		if let Some(tid) = to_remove.into_iter().next() {
+			let tab = self.state.tabs.remove(&tid)?;
+			tab.target.0.into_iter().next()
 		} else {
 			None
 		}
 	}
 
 	pub fn navigate_pane(&mut self, dx: i32, dy: i32) {
-		let ids: Vec<pane_grid::Pane> = self.panes.iter().map(|(id, _)| *id).collect();
-		if ids.is_empty() {
-			return;
+		if let Some(tab) = self.selected_tab_mut()
+			&& let Some(focused) = tab.focused_pane
+		{
+			let dir = if dx > 0 {
+				pane_grid::Direction::Right
+			} else if dx < 0 {
+				pane_grid::Direction::Left
+			} else if dy > 0 {
+				pane_grid::Direction::Down
+			} else {
+				pane_grid::Direction::Up
+			};
+			if let Some(next) = tab.panes.adjacent(focused, dir) {
+				tab.focused_pane = Some(next);
+				self.save_ui_layout();
+			}
 		}
-		let pos = ids.iter().position(|p| *p == self.focused_pane).unwrap_or(0);
-		let step = if dx < 0 || dy < 0 { -1isize } else { 1isize };
-		let new_idx = ((pos as isize + step).rem_euclid(ids.len() as isize)) as usize;
-		self.focused_pane = ids[new_idx];
 	}
 
-	pub fn set_focused_by_cursor(&mut self, x: f32, y: f32) {
-		use iced::Size;
-		if let Some((w, h)) = self.window_size {
-			let bounds = Size::new(w, h);
-			let regions = self.panes.layout().pane_regions(8.0, 50.0, bounds);
-			for (pane, rect) in regions {
-				if x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height {
-					self.focused_pane = pane;
+	pub(crate) fn set_focused_by_cursor(&mut self, x: f32, y: f32) {
+		let sz = self.state.ui.window_size;
+		if let (Some(tab), Some(sz)) = (self.selected_tab_mut(), sz) {
+			for (pane, region) in tab.panes.layout().pane_regions(8.0, 50.0, iced::Size::new(sz.0, sz.1)) {
+				if region.contains(iced::Point::new(x, y)) {
+					tab.focused_pane = Some(pane);
 					break;
 				}
 			}
 		}
 	}
 
+	pub fn selected_tab_id(&self) -> Option<TabId> {
+		self.state.selected_tab_id
+	}
+
+	pub fn selected_tab(&self) -> Option<&crate::app::state::TabModel> {
+		self.selected_tab_id().and_then(|id| self.state.tabs.get(&id))
+	}
+
+	pub fn selected_tab_mut(&mut self) -> Option<&mut crate::app::state::TabModel> {
+		self.selected_tab_id().and_then(|id| self.state.tabs.get_mut(&id))
+	}
+
 	pub fn capture_ui_root(&self) -> crate::ui::layout::UiRootState {
-		use iced::Size;
-
-		use crate::ui::layout::{UiPane, UiTab};
-
-		let mut tabs: Vec<UiTab> = Vec::new();
-		for (_id, tab) in self.state.tabs.iter() {
-			tabs.push(UiTab {
-				title: tab.title.clone(),
-				room: match &tab.target {
-					TabTarget::Room(r) => Some(r.clone()),
-					_ => None,
-				},
-				pinned: tab.pinned,
-			});
-		}
-
-		let mut pane_layouts: std::collections::HashMap<pane_grid::Pane, UiPane> = std::collections::HashMap::new();
-		for (pane_id, pane_state) in self.panes.iter() {
-			let tab_room = pane_state
-				.tab_id
-				.and_then(|tid| self.state.tabs.get(&tid))
-				.and_then(|tab| match &tab.target {
-					TabTarget::Room(room) => Some(room.clone()),
-					_ => None,
-				});
-			pane_layouts.insert(
-				*pane_id,
-				UiPane {
-					join_raw: pane_state.join_raw.clone(),
-					composer: pane_state.composer.clone(),
-					tab_room,
-				},
-			);
-		}
-
-		let (w, h) = self.window_size.unwrap_or((800.0, 600.0));
-		let bounds = Size::new(w, h);
-		let regions_map = self.panes.layout().pane_regions(8.0, 50.0, bounds);
-		let regions_vec: Vec<(pane_grid::Pane, iced::Rectangle)> = regions_map.into_iter().collect();
-
-		fn build_node(
-			regions: &[(pane_grid::Pane, iced::Rectangle)],
-			bounds: iced::Size,
-			pane_layouts: &std::collections::HashMap<pane_grid::Pane, UiPane>,
-		) -> crate::ui::layout::UiNode {
-			let bounds_for = |regions: &[(pane_grid::Pane, iced::Rectangle)]| -> iced::Rectangle {
-				let mut min_x = f32::MAX;
-				let mut min_y = f32::MAX;
-				let mut max_x = f32::MIN;
-				let mut max_y = f32::MIN;
-				for (_pane, r) in regions {
-					min_x = min_x.min(r.x);
-					min_y = min_y.min(r.y);
-					max_x = max_x.max(r.x + r.width);
-					max_y = max_y.max(r.y + r.height);
-				}
-				if min_x == f32::MAX {
-					return iced::Rectangle::with_size(iced::Size::new(bounds.width, bounds.height));
-				}
-				iced::Rectangle {
-					x: min_x,
-					y: min_y,
-					width: (max_x - min_x).max(1.0),
-					height: (max_y - min_y).max(1.0),
-				}
-			};
-
-			if regions.len() == 1 {
-				let (p, _r) = &regions[0];
-				let pane_state = pane_layouts.get(p).cloned().unwrap_or_default();
-				return crate::ui::layout::UiNode::Leaf(pane_state);
-			}
-
-			let mut centers_x: Vec<f32> = regions.iter().map(|(_, r)| r.x + r.width / 2.0).collect();
-			centers_x.sort_by(|a, b| a.partial_cmp(b).unwrap());
-			let median_x = centers_x[centers_x.len() / 2];
-			let mut left: Vec<(pane_grid::Pane, iced::Rectangle)> = Vec::new();
-			let mut right: Vec<(pane_grid::Pane, iced::Rectangle)> = Vec::new();
-			for it in regions.iter() {
-				let c = it.1.x + it.1.width / 2.0;
-				if c < median_x {
-					left.push(*it);
-				} else {
-					right.push(*it);
-				}
-			}
-
-			if !left.is_empty() && !right.is_empty() {
-				let left_bounds = bounds_for(&left);
-				let ratio = (left_bounds.width / bounds.width.max(1.0)).clamp(0.05, 0.95);
-				let first_bounds = iced::Size::new(bounds.width * ratio, bounds.height);
-				let second_bounds = iced::Size::new(bounds.width * (1.0 - ratio), bounds.height);
-				let first = build_node(&left, first_bounds, pane_layouts);
-				let second = build_node(&right, second_bounds, pane_layouts);
-				return crate::ui::layout::UiNode::Split {
-					axis: crate::ui::layout::UiAxis::Vertical,
-					ratio,
-					first: Box::new(first),
-					second: Box::new(second),
-				};
-			}
-
-			let mut centers_y: Vec<f32> = regions.iter().map(|(_, r)| r.y + r.height / 2.0).collect();
-			centers_y.sort_by(|a, b| a.partial_cmp(b).unwrap());
-			let median_y = centers_y[centers_y.len() / 2];
-			let mut top: Vec<(pane_grid::Pane, iced::Rectangle)> = Vec::new();
-			let mut bottom: Vec<(pane_grid::Pane, iced::Rectangle)> = Vec::new();
-			for it in regions.iter() {
-				let c = it.1.y + it.1.height / 2.0;
-				if c < median_y {
-					top.push(*it);
-				} else {
-					bottom.push(*it);
-				}
-			}
-
-			if !top.is_empty() && !bottom.is_empty() {
-				let top_bounds = bounds_for(&top);
-				let ratio = (top_bounds.height / bounds.height.max(1.0)).clamp(0.05, 0.95);
-				let first_bounds = iced::Size::new(bounds.width, bounds.height * ratio);
-				let second_bounds = iced::Size::new(bounds.width, bounds.height * (1.0 - ratio));
-				let first = build_node(&top, first_bounds, pane_layouts);
-				let second = build_node(&bottom, second_bounds, pane_layouts);
-				return crate::ui::layout::UiNode::Split {
-					axis: crate::ui::layout::UiAxis::Horizontal,
-					ratio,
-					first: Box::new(first),
-					second: Box::new(second),
-				};
-			}
-
-			let mut items: Vec<(crate::ui::layout::UiNode, iced::Rectangle)> = regions
-				.iter()
-				.map(|(p, r)| {
-					let pane_state = pane_layouts.get(p).cloned().unwrap_or_default();
-					(crate::ui::layout::UiNode::Leaf(pane_state), *r)
-				})
-				.collect();
-
-			while items.len() > 1 {
-				let mut best = (0usize, 1usize, f32::MAX);
-				for i in 0..items.len() {
-					for j in (i + 1)..items.len() {
-						let ri = items[i].1;
-						let rj = items[j].1;
-						let ci = (ri.x + ri.width / 2.0, ri.y + ri.height / 2.0);
-						let cj = (rj.x + rj.width / 2.0, rj.y + rj.height / 2.0);
-						let dx = ci.0 - cj.0;
-						let dy = ci.1 - cj.1;
-						let dist = dx * dx + dy * dy;
-						if dist < best.2 {
-							best = (i, j, dist);
-						}
-					}
-				}
-
-				let (i, j, _) = best;
-				let (node_a, rect_a) = items.remove(j);
-				let (node_b, rect_b) = items.remove(i);
-
-				let ca = (rect_a.x + rect_a.width / 2.0, rect_a.y + rect_a.height / 2.0);
-				let cb = (rect_b.x + rect_b.width / 2.0, rect_b.y + rect_b.height / 2.0);
-				let axis = if (ca.0 - cb.0).abs() > (ca.1 - cb.1).abs() {
-					crate::ui::layout::UiAxis::Vertical
-				} else {
-					crate::ui::layout::UiAxis::Horizontal
-				};
-
-				let ratio = match axis {
-					crate::ui::layout::UiAxis::Vertical => (rect_a.width / (rect_a.width + rect_b.width)).clamp(0.05, 0.95),
-					crate::ui::layout::UiAxis::Horizontal => {
-						(rect_a.height / (rect_a.height + rect_b.height)).clamp(0.05, 0.95)
-					}
-				};
-
-				let merged_rect = iced::Rectangle {
-					x: rect_a.x.min(rect_b.x),
-					y: rect_a.y.min(rect_b.y),
-					width: (rect_a.x + rect_a.width).max(rect_b.x + rect_b.width) - rect_a.x.min(rect_b.x),
-					height: (rect_a.y + rect_a.height).max(rect_b.y + rect_b.height) - rect_a.y.min(rect_b.y),
-				};
-
-				let merged_node = crate::ui::layout::UiNode::Split {
-					axis,
-					ratio,
-					first: Box::new(node_a),
-					second: Box::new(node_b),
-				};
-
-				items.push((merged_node, merged_rect));
-			}
-
-			items.into_iter().next().map(|(n, _)| n).unwrap_or_default()
-		}
-
-		let root_node = build_node(&regions_vec, bounds, &pane_layouts);
-
-		let ids: Vec<pane_grid::Pane> = self.panes.iter().map(|(id, _)| *id).collect();
-		let focused_idx = ids.iter().position(|p| *p == self.focused_pane).unwrap_or(0);
-
-		fn index_to_path(node: &crate::ui::layout::UiNode, mut target: usize) -> Vec<bool> {
-			fn count_leaves(node: &crate::ui::layout::UiNode) -> usize {
-				match node {
-					crate::ui::layout::UiNode::Leaf(_) => 1,
-					crate::ui::layout::UiNode::Split { first, second, .. } => count_leaves(first) + count_leaves(second),
-				}
-			}
-			let mut path = Vec::new();
-			let mut cur = node;
-			loop {
-				match cur {
-					crate::ui::layout::UiNode::Leaf(_) => break,
-					crate::ui::layout::UiNode::Split { first, second, .. } => {
-						let left_count = count_leaves(first);
-						if target < left_count {
-							path.push(false);
-							cur = first;
-						} else {
-							target -= left_count;
-							path.push(true);
-							cur = second;
-						}
-					}
-				}
-			}
-			path
-		}
-
-		let focused_path = index_to_path(&root_node, focused_idx);
-
-		crate::ui::layout::UiRootState {
-			root: root_node,
-			focused_leaf_path: focused_path,
-			tabs,
-		}
+		crate::ui::layout::UiRootState::from_app(self)
 	}
 
 	pub fn apply_ui_root(&mut self, root: crate::ui::layout::UiRootState) {
-		use crate::ui::layout::{UiAxis, UiNode};
-
-		let (mut new_panes, new_root) = pane_grid::State::new(PaneState {
-			tab_id: None,
-			composer: String::new(),
-			join_raw: String::new(),
-			reply_to_server_message_id: String::new(),
-			reply_to_platform_message_id: String::new(),
-		});
-
-		fn build_on_pane<F>(
-			node: &UiNode,
-			panes: &mut pane_grid::State<PaneState>,
-			pane_id: pane_grid::Pane,
-			apply_leaf: &mut F,
-		) where
-			F: FnMut(&crate::ui::layout::UiPane, pane_grid::Pane, &mut pane_grid::State<PaneState>),
-		{
-			match node {
-				UiNode::Leaf(up) => {
-					apply_leaf(up, pane_id, panes);
-				}
-				UiNode::Split {
-					axis,
-					ratio,
-					first,
-					second,
-				} => {
-					let new_state = PaneState {
-						tab_id: None,
-						composer: String::new(),
-						join_raw: String::new(),
-						reply_to_server_message_id: String::new(),
-						reply_to_platform_message_id: String::new(),
-					};
-					if let Some((new_pane, split)) = panes.split(
-						match axis {
-							UiAxis::Vertical => pane_grid::Axis::Vertical,
-							UiAxis::Horizontal => pane_grid::Axis::Horizontal,
-						},
-						pane_id,
-						new_state,
-					) {
-						build_on_pane(first, panes, pane_id, apply_leaf);
-						build_on_pane(second, panes, new_pane, apply_leaf);
-						panes.resize(split, *ratio);
-					}
-				}
-			}
-		}
-
-		let mut apply_leaf =
-			|up: &crate::ui::layout::UiPane, pane_id: pane_grid::Pane, panes: &mut pane_grid::State<PaneState>| {
-				if let Some(p) = panes.get_mut(pane_id) {
-					p.composer = up.composer.clone();
-					p.join_raw = up.join_raw.clone();
-					if let Some(room) = up.tab_room.as_ref() {
-						let tid = self.ensure_tab_for_room(room);
-						p.tab_id = Some(tid);
-						if p.join_raw.trim().is_empty() {
-							p.join_raw = format!("{}:{}", room.platform.as_str(), room.room_id.as_str());
-						}
-					}
-				}
-			};
-
-		build_on_pane(&root.root, &mut new_panes, new_root, &mut apply_leaf);
-
-		self.panes = new_panes;
-
-		fn index_of_path(node: &crate::ui::layout::UiNode, path: &[bool]) -> Option<usize> {
-			fn count_leaves(node: &crate::ui::layout::UiNode) -> usize {
-				match node {
-					crate::ui::layout::UiNode::Leaf(_) => 1,
-					crate::ui::layout::UiNode::Split { first, second, .. } => count_leaves(first) + count_leaves(second),
-				}
-			}
-			let mut cur = node;
-			let mut offset = 0usize;
-			for &b in path.iter() {
-				match cur {
-					crate::ui::layout::UiNode::Leaf(_) => return None,
-					crate::ui::layout::UiNode::Split { first, second, .. } => {
-						if !b {
-							cur = first;
-						} else {
-							offset += count_leaves(first);
-							cur = second;
-						}
-					}
-				}
-			}
-
-			Some(offset)
-		}
-
-		if let Some(fi) = index_of_path(&root.root, &root.focused_leaf_path) {
-			let ids: Vec<pane_grid::Pane> = self.panes.iter().map(|(id, _)| *id).collect();
-			if fi < ids.len() {
-				self.focused_pane = ids[fi];
-			}
-		}
-
-		for t in root.tabs {
-			if let Some(room) = t.room {
-				let tid = self.ensure_tab_for_room(&room);
-				if let Some(tab) = self.state.tabs.get_mut(&tid) {
-					tab.title = t.title.clone();
-					tab.pinned = t.pinned;
-				}
-			}
-		}
+		root.apply_to(self);
 	}
 
 	pub fn save_ui_layout(&self) {
@@ -1081,79 +320,71 @@ impl Chatty {
 		crate::ui::layout::save_ui_layout(&root);
 	}
 
-	pub fn view(&self) -> iced::Element<'_, Message> {
-		crate::ui::view(self)
+	pub fn view(&self, window: iced::window::Id) -> iced::Element<'_, Message> {
+		crate::ui::view(self, window)
 	}
 
 	pub fn pane_drag_enabled(&self) -> bool {
 		let gs = self.state.gui_settings();
 		match gs.keybinds.drag_modifier {
 			ShortcutKey::Always => true,
-			ShortcutKey::Alt => self.modifiers.alt(),
-			ShortcutKey::Control => self.modifiers.control(),
-			ShortcutKey::Shift => self.modifiers.shift(),
-			ShortcutKey::Logo => self.modifiers.logo(),
+			ShortcutKey::Alt => self.state.ui.modifiers.alt(),
+			ShortcutKey::Control => self.state.ui.modifiers.control(),
+			ShortcutKey::Shift => self.state.ui.modifiers.shift(),
+			ShortcutKey::Logo => self.state.ui.modifiers.logo(),
 			ShortcutKey::None => false,
 		}
 	}
 
 	pub(crate) fn focused_tab_id(&self) -> Option<TabId> {
-		self.panes.get(self.focused_pane).and_then(|p| p.tab_id)
-	}
-
-	pub(crate) fn message_key(m: &chatty_client_ui::app_state::ChatMessageUi) -> String {
-		let time = m
-			.time
-			.duration_since(std::time::UNIX_EPOCH)
-			.map(|d| d.as_millis())
-			.unwrap_or(0);
-		format!(
-			"{}:{}:{}:{}",
-			m.room,
-			m.server_message_id.as_deref().unwrap_or(""),
-			m.platform_message_id.as_deref().unwrap_or(""),
-			time
-		)
-	}
-
-	pub(crate) fn selection_text(text: &str) -> String {
-		let mut out = String::with_capacity(text.len());
-		let mut chars = text.chars().peekable();
-		while let Some(ch) = chars.next() {
-			if is_emoji_base(ch) {
-				out.push('□');
-				consume_emoji_suffix(&mut chars);
-				continue;
-			}
-			if is_emoji_modifier(ch) || is_variation_selector(ch) || is_zwj(ch) {
-				continue;
-			}
-			out.push(ch);
-		}
-		out
+		self.selected_tab()
+			.and_then(|t| t.focused_pane.and_then(|fp| t.panes.get(fp)).and_then(|p| p.tab_id))
 	}
 
 	pub(crate) fn pane_room(&self, pane: pane_grid::Pane) -> Option<RoomKey> {
-		let tab_id = self.panes.get(pane).and_then(|p| p.tab_id)?;
-		let tab = self.state.tabs.get(&tab_id)?;
-		match &tab.target {
-			TabTarget::Room(room) => Some(room.clone()),
-			_ => None,
-		}
+		self.pane_rooms(pane).into_iter().next()
 	}
 
-	pub(crate) fn ensure_tab_for_room(&mut self, room: &RoomKey) -> TabId {
-		if let Some((tid, _)) = self
-			.state
-			.tabs
-			.iter()
-			.find(|(_, t)| matches!(&t.target, TabTarget::Room(rk) if rk == room))
-		{
+	pub(crate) fn pane_rooms(&self, pane: pane_grid::Pane) -> Vec<RoomKey> {
+		for tab in self.state.tabs.values() {
+			if let Some(ps) = tab.panes.get(pane)
+				&& let Some(tid) = ps.tab_id
+				&& let Some(t) = self.state.tabs.get(&tid)
+			{
+				return t.target.0.clone();
+			}
+		}
+		Vec::new()
+	}
+
+	pub(crate) fn ensure_tab_for_rooms(&mut self, rooms: Vec<RoomKey>) -> TabId {
+		if rooms.is_empty() {
+			return TabId(0);
+		}
+
+		let mut sorted_rooms = rooms.clone();
+		sorted_rooms.sort_by(|a, b| {
+			a.platform
+				.as_str()
+				.cmp(b.platform.as_str())
+				.then_with(|| a.room_id.as_str().cmp(b.room_id.as_str()))
+		});
+
+		if let Some((tid, _)) = self.state.tabs.iter().find(|(_, t)| {
+			let mut t_rooms = t.target.0.clone();
+			t_rooms.sort_by(|a, b| {
+				a.platform
+					.as_str()
+					.cmp(b.platform.as_str())
+					.then_with(|| a.room_id.as_str().cmp(b.room_id.as_str()))
+			});
+			t_rooms == sorted_rooms
+		}) {
 			return *tid;
 		}
 
-		let title = format!("{}:{}", room.platform.as_str(), room.room_id.as_str());
-		self.state.create_tab_for_room(title, room.clone())
+		let title = rooms.iter().map(|r| r.room_id.as_str()).collect::<Vec<_>>().join(", ");
+		self.state.create_tab_for_rooms(title, rooms)
 	}
 
 	pub(crate) fn active_identity_label(&self) -> String {
@@ -1167,60 +398,15 @@ impl Chatty {
 	}
 
 	#[allow(dead_code)]
-	pub(crate) fn invalid_room_toast(&mut self) {
-		self.toast = Some(t!("invalid_room").to_string());
-		self.state
-			.push_notification(UiNotificationKind::Warning, t!("invalid_room").to_string());
-	}
-
-	#[allow(dead_code)]
 	pub(crate) fn apply_join_request(&mut self, pane: pane_grid::Pane) -> Option<(RoomKey, JoinRequest)> {
-		let raw = self.panes.get(pane).map(|p| p.join_raw.clone()).unwrap_or_default();
+		let raw = self
+			.selected_tab()
+			.and_then(|t| t.panes.get(pane))
+			.map(|p| p.join_raw.clone())
+			.unwrap_or_default();
 		let req = JoinRequest { raw };
 		let room = self.state.parse_join_room(&req)?;
 		Some((room, req))
-	}
-}
-
-fn is_emoji_base(ch: char) -> bool {
-	let code = ch as u32;
-	(0x1F300..=0x1FAFF).contains(&code) || (0x2600..=0x27BF).contains(&code) || (0x1F1E6..=0x1F1FF).contains(&code)
-}
-
-fn is_emoji_modifier(ch: char) -> bool {
-	matches!(ch as u32, 0x1F3FB..=0x1F3FF)
-}
-
-fn is_variation_selector(ch: char) -> bool {
-	matches!(ch, '\u{FE0E}' | '\u{FE0F}')
-}
-
-fn is_zwj(ch: char) -> bool {
-	ch == '\u{200D}'
-}
-
-fn consume_emoji_suffix<I>(chars: &mut std::iter::Peekable<I>)
-where
-	I: Iterator<Item = char>,
-{
-	loop {
-		match chars.peek().copied() {
-			Some(next) if is_variation_selector(next) || is_emoji_modifier(next) => {
-				chars.next();
-			}
-			Some(next) if is_zwj(next) => {
-				chars.next();
-				if let Some(after) = chars.next()
-					&& is_emoji_base(after)
-				{
-					continue;
-				}
-			}
-			Some(next) if (next as u32) >= 0x1F1E6 && (next as u32) <= 0x1F1FF => {
-				chars.next();
-			}
-			_ => break,
-		}
 	}
 }
 
@@ -1237,13 +423,13 @@ mod tests {
 		let td = tempdir().expect("tempdir");
 
 		let (mut inst, _task) = Chatty::new();
-		inst.window_size = Some((800.0, 600.0));
+		inst.state.ui.window_size = Some((800.0, 600.0));
 
 		let room = chatty_domain::RoomKey::new(
 			chatty_domain::Platform::Twitch,
 			chatty_domain::RoomId::new("room1").expect("room id"),
 		);
-		let tid = inst.ensure_tab_for_room(&room);
+		let tid = inst.ensure_tab_for_rooms(vec![room]);
 		if let Some(tab) = inst.state.tabs.get_mut(&tid) {
 			tab.title = "room1 title".to_string();
 			tab.pinned = true;
@@ -1253,11 +439,15 @@ mod tests {
 			make_layout(&mut inst);
 		}
 
-		let ids: Vec<pane_grid::Pane> = inst.panes.iter().map(|(id, _)| *id).collect();
-		for id in ids {
-			if let Some(p) = inst.panes.get_mut(id) {
-				p.composer = "composer".to_string();
-				p.join_raw = "join".to_string();
+		if let Some(tab) = inst.selected_tab_mut() {
+			let ids: Vec<pane_grid::Pane> = tab.panes.iter().map(|(id, _)| *id).collect();
+			for id in ids {
+				if let Some(p) = tab.panes.get_mut(id) {
+					p.composer.clear();
+					p.join_raw.clear();
+					p.reply_to_server_message_id.clear();
+					p.reply_to_platform_message_id.clear();
+				}
 			}
 		}
 

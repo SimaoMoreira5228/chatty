@@ -1,25 +1,20 @@
 #![forbid(unsafe_code)]
 
-use chatty_client_ui::settings;
 use chatty_domain::Platform;
+use iced::Task;
 
-use crate::app::Chatty;
+use crate::app::{Chatty, Message};
+use crate::settings;
 
 impl Chatty {
-	pub(crate) fn upsert_identity_from_twitch_blob(&mut self, raw: String) {
+	pub(crate) fn upsert_identity_from_twitch_blob(&mut self, raw: String) -> Task<Message> {
 		let mut gs = self.state.gui_settings().clone();
-		gs.twitch_oauth_blob = raw.clone();
 		if let Some(parsed) = settings::parse_twitch_oauth_blob(&raw) {
-			gs.twitch_username = parsed.username.clone();
-			gs.twitch_user_id = parsed.user_id.clone();
-			gs.twitch_client_id = parsed.client_id.clone();
-			gs.twitch_oauth_token = parsed.oauth_token.clone();
-			gs.user_oauth_token = parsed.oauth_token;
+			let username = parsed.username.clone();
+			let user_id = parsed.user_id.clone();
+			let client_id = parsed.client_id.clone();
+			let oauth_token = parsed.oauth_token.clone();
 
-			let username = gs.twitch_username.trim().to_string();
-			let user_id = gs.twitch_user_id.trim().to_string();
-			let client_id = gs.twitch_client_id.trim().to_string();
-			let oauth_token = gs.twitch_oauth_token.trim().to_string();
 			if !username.is_empty() && !oauth_token.is_empty() {
 				let id = if !user_id.is_empty() {
 					format!("twitch:{}", user_id)
@@ -44,20 +39,18 @@ impl Chatty {
 				gs.active_identity = Some(id);
 			}
 		}
+
 		self.state.set_gui_settings(gs);
+		Task::done(Message::ConnectPressed)
 	}
 
-	pub(crate) fn upsert_identity_from_kick_blob(&mut self, raw: String) {
+	pub(crate) fn upsert_identity_from_kick_blob(&mut self, raw: String) -> Task<Message> {
 		let mut gs = self.state.gui_settings().clone();
-		gs.kick_oauth_blob = raw.clone();
 		if let Some(parsed) = settings::parse_kick_oauth_blob(&raw) {
-			gs.kick_username = parsed.username.clone();
-			gs.kick_user_id = parsed.user_id.clone();
-			gs.kick_oauth_token = parsed.oauth_token.clone();
+			let username = parsed.username.clone();
+			let user_id = parsed.user_id.clone();
+			let oauth_token = parsed.oauth_token.clone();
 
-			let username = gs.kick_username.trim().to_string();
-			let user_id = gs.kick_user_id.trim().to_string();
-			let oauth_token = gs.kick_oauth_token.trim().to_string();
 			if !username.is_empty() && !oauth_token.is_empty() {
 				let id = if !user_id.is_empty() {
 					format!("kick:{}", user_id)
@@ -82,6 +75,8 @@ impl Chatty {
 				gs.active_identity = Some(id);
 			}
 		}
+
 		self.state.set_gui_settings(gs);
+		Task::done(Message::ConnectPressed)
 	}
 }

@@ -1,10 +1,10 @@
 #![forbid(unsafe_code)]
 
-use chatty_client_ui::app_state::ConnectionStatus;
 use iced::widget::{button, container, row, rule, space, svg, text};
 use iced::{Alignment, Background, Border, Element, Length, Shadow};
 use rust_i18n::t;
 
+use crate::app::state::ConnectionStatus;
 use crate::app::{Chatty, Message, Page};
 use crate::assets::svg_handle;
 use crate::theme;
@@ -23,10 +23,34 @@ pub fn view(app: &Chatty, palette: theme::Palette) -> Element<'_, Message> {
 	let icon_button = |icon: &'static str, msg: Message| button(svg(svg_handle(icon)).width(16).height(16)).on_press(msg);
 
 	let conn_button = match &app.state.connection {
-		ConnectionStatus::Disconnected { .. } => button(text(t!("settings.connect"))).on_press(Message::ConnectPressed),
-		ConnectionStatus::Connecting => button(text(t!("cancel_label"))).on_press(Message::DisconnectPressed),
-		ConnectionStatus::Reconnecting { .. } => button(text(t!("settings.reconnect"))).on_press(Message::ConnectPressed),
-		ConnectionStatus::Connected { .. } => button(text(t!("settings.disconnect"))).on_press(Message::DisconnectPressed),
+		ConnectionStatus::Disconnected { .. } => button(
+			row![
+				svg(svg_handle("connect.svg")).width(16).height(16),
+				text(t!("settings.connect"))
+			]
+			.spacing(4),
+		)
+		.on_press(Message::ConnectPressed),
+		ConnectionStatus::Connecting => {
+			button(row![svg(svg_handle("spinner.svg")).width(16).height(16), text(t!("cancel_label"))].spacing(4))
+				.on_press(Message::DisconnectPressed)
+		}
+		ConnectionStatus::Reconnecting { .. } => button(
+			row![
+				svg(svg_handle("refresh.svg")).width(16).height(16),
+				text(t!("settings.reconnect"))
+			]
+			.spacing(4),
+		)
+		.on_press(Message::ConnectPressed),
+		ConnectionStatus::Connected { .. } => button(
+			row![
+				svg(svg_handle("disconnect.svg")).width(16).height(16),
+				text(t!("settings.disconnect"))
+			]
+			.spacing(4),
+		)
+		.on_press(Message::DisconnectPressed),
 	};
 
 	let status_chip = container(text(status_text).color(palette.text_dim))
@@ -43,7 +67,7 @@ pub fn view(app: &Chatty, palette: theme::Palette) -> Element<'_, Message> {
 			snap: false,
 		});
 
-	let insert_chip = if app.insert_mode {
+	let insert_chip = if app.state.ui.vim.insert_mode {
 		container(text(t!("topbar.insert")).color(palette.text))
 			.padding([2, 8])
 			.style(move |_theme| container::Style {
@@ -62,7 +86,7 @@ pub fn view(app: &Chatty, palette: theme::Palette) -> Element<'_, Message> {
 	};
 
 	let mut right = row![].spacing(10).align_y(Alignment::Center);
-	if app.page != Page::Main {
+	if app.state.ui.page != Page::Main {
 		right = right.push(icon_button("chevron-left.svg", Message::Navigate(Page::Main)));
 	}
 	right = right
@@ -99,33 +123,4 @@ pub fn view(app: &Chatty, palette: theme::Palette) -> Element<'_, Message> {
 			snap: false,
 		})
 		.into()
-}
-
-pub fn toast_bar(app: &Chatty, palette: theme::Palette) -> Element<'_, Message> {
-	if let Some(msg) = app.toast.as_ref() {
-		return container(
-			row![
-				text(msg.clone()).color(palette.system_text).width(Length::Fill),
-				button(svg(svg_handle("close.svg")).width(14).height(14)).on_press(Message::DismissToast),
-			]
-			.spacing(10)
-			.align_y(Alignment::Center),
-		)
-		.width(Length::Fill)
-		.padding([6, 12])
-		.style(move |_theme| container::Style {
-			text_color: Some(palette.system_text),
-			background: Some(Background::Color(palette.panel_bg_2)),
-			border: Border {
-				color: palette.border,
-				width: 1.0,
-				radius: 0.0.into(),
-			},
-			shadow: Shadow::default(),
-			snap: false,
-		})
-		.into();
-	}
-
-	container(row![]).height(0).padding(0).into()
 }

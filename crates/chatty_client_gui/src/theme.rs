@@ -1,33 +1,107 @@
 #![forbid(unsafe_code)]
 
-use chatty_client_ui::settings::ThemeKind;
 use iced::Color;
+use serde::{Deserialize, Serialize};
 
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemeKind {
+	Dark,
+	Light,
+	Solarized,
+	HighContrast,
+	Ocean,
+	Dracula,
+	Gruvbox,
+	Nord,
+	Synthwave,
+	#[default]
+	DarkAmethyst,
+	Custom(String),
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Palette {
+	#[serde(with = "color_hex")]
 	pub app_bg: Color,
+	#[serde(with = "color_hex")]
 	pub panel_bg: Color,
+	#[serde(with = "color_hex")]
 	pub panel_bg_2: Color,
+	#[serde(with = "color_hex")]
 	pub surface_bg: Color,
+	#[serde(with = "color_hex")]
 	pub surface_hover_bg: Color,
+	#[serde(with = "color_hex")]
 	pub border: Color,
+	#[serde(with = "color_hex")]
 	pub text: Color,
+	#[serde(with = "color_hex")]
 	pub text_dim: Color,
+	#[serde(with = "color_hex")]
 	pub text_muted: Color,
+	#[serde(with = "color_hex")]
 	pub accent_green: Color,
+	#[serde(with = "color_hex")]
 	pub accent_blue: Color,
+	#[serde(with = "color_hex")]
 	pub chat_bg: Color,
+	#[serde(with = "color_hex")]
 	pub chat_row_bg: Color,
+	#[serde(with = "color_hex")]
 	pub chat_row_hover_bg: Color,
+	#[serde(with = "color_hex")]
 	pub chat_nick: Color,
+	#[serde(with = "color_hex")]
 	pub system_text: Color,
+	#[serde(with = "color_hex")]
 	pub tooltip_bg: Color,
+	#[serde(with = "color_hex")]
 	pub button_bg: Color,
+	#[serde(with = "color_hex")]
 	pub button_hover_bg: Color,
+	#[serde(with = "color_hex")]
 	pub button_text: Color,
+	#[serde(with = "color_hex")]
 	pub icon_button_bg: Color,
+	#[serde(with = "color_hex")]
 	pub icon_button_hover_bg: Color,
+	#[serde(with = "color_hex")]
+	pub warning_text: Color,
+	#[serde(with = "color_hex")]
+	pub warning_bg: Color,
+}
+
+mod color_hex {
+	use iced::Color;
+	use serde::{Deserialize, Deserializer, Serializer};
+
+	pub fn serialize<S>(color: &Color, serializer: S) -> Result<S::Ok, S::Error>
+	where
+		S: Serializer,
+	{
+		let r = (color.r * 255.0) as u32;
+		let g = (color.g * 255.0) as u32;
+		let b = (color.b * 255.0) as u32;
+		let hex = format!("#{:02x}{:02x}{:02x}", r, g, b);
+		serializer.serialize_str(&hex)
+	}
+
+	pub fn deserialize<'de, D>(deserializer: D) -> Result<Color, D::Error>
+	where
+		D: Deserializer<'de>,
+	{
+		let s = String::deserialize(deserializer)?;
+		let s = s.trim_start_matches('#');
+		if let Ok(hex) = u32::from_str_radix(s, 16) {
+			let r = ((hex >> 16) & 0xff) as f32 / 255.0;
+			let g = ((hex >> 8) & 0xff) as f32 / 255.0;
+			let b = (hex & 0xff) as f32 / 255.0;
+			Ok(Color::from_rgb(r, g, b))
+		} else {
+			Err(serde::de::Error::custom("invalid hex color"))
+		}
+	}
 }
 
 fn rgb(hex: u32) -> Color {
@@ -37,8 +111,12 @@ fn rgb(hex: u32) -> Color {
 	Color::from_rgb(r, g, b)
 }
 
-pub fn palette(kind: ThemeKind) -> Palette {
+pub fn palette(kind: &ThemeKind, custom_palettes: &std::collections::HashMap<String, Palette>) -> Palette {
 	match kind {
+		ThemeKind::Custom(name) => custom_palettes
+			.get(name)
+			.cloned()
+			.unwrap_or_else(|| palette(&ThemeKind::DarkAmethyst, custom_palettes)),
 		ThemeKind::Dark => Palette {
 			app_bg: rgb(0x1e1f22),
 			panel_bg: rgb(0x232428),
@@ -62,6 +140,8 @@ pub fn palette(kind: ThemeKind) -> Palette {
 			button_text: rgb(0xe3e5e8),
 			icon_button_bg: rgb(0x2b2d31),
 			icon_button_hover_bg: rgb(0x35373c),
+			warning_text: rgb(0xfbbf24),
+			warning_bg: rgb(0x422006),
 		},
 		ThemeKind::Light => Palette {
 			app_bg: rgb(0xf6f7f8),
@@ -86,6 +166,8 @@ pub fn palette(kind: ThemeKind) -> Palette {
 			button_text: rgb(0x0b0c0d),
 			icon_button_bg: rgb(0xe9eef5),
 			icon_button_hover_bg: rgb(0xd6e2ff),
+			warning_text: rgb(0x92400e),
+			warning_bg: rgb(0xfef3c7),
 		},
 		ThemeKind::Solarized => Palette {
 			app_bg: rgb(0x002b36),
@@ -110,6 +192,8 @@ pub fn palette(kind: ThemeKind) -> Palette {
 			button_text: rgb(0x93a1a1),
 			icon_button_bg: rgb(0x073642),
 			icon_button_hover_bg: rgb(0x0b3b46),
+			warning_text: rgb(0xb58900),
+			warning_bg: rgb(0x073642),
 		},
 		ThemeKind::HighContrast => Palette {
 			app_bg: rgb(0x000000),
@@ -134,6 +218,8 @@ pub fn palette(kind: ThemeKind) -> Palette {
 			button_text: rgb(0xffffff),
 			icon_button_bg: rgb(0x111111),
 			icon_button_hover_bg: rgb(0x222222),
+			warning_text: rgb(0xffff00),
+			warning_bg: rgb(0x111111),
 		},
 		ThemeKind::Ocean => Palette {
 			app_bg: rgb(0x071528),
@@ -158,6 +244,8 @@ pub fn palette(kind: ThemeKind) -> Palette {
 			button_text: rgb(0xdbeefc),
 			icon_button_bg: rgb(0x123244),
 			icon_button_hover_bg: rgb(0x16485a),
+			warning_text: rgb(0xfbbf24),
+			warning_bg: rgb(0x123244),
 		},
 		ThemeKind::Dracula => Palette {
 			app_bg: rgb(0x282a36),
@@ -182,6 +270,8 @@ pub fn palette(kind: ThemeKind) -> Palette {
 			button_text: rgb(0xf8f8f2),
 			icon_button_bg: rgb(0x44475a),
 			icon_button_hover_bg: rgb(0x6272a4),
+			warning_text: rgb(0xffb86c),
+			warning_bg: rgb(0x44475a),
 		},
 		ThemeKind::Gruvbox => Palette {
 			app_bg: rgb(0x282828),
@@ -206,6 +296,8 @@ pub fn palette(kind: ThemeKind) -> Palette {
 			button_text: rgb(0xebdbb2),
 			icon_button_bg: rgb(0x3c3836),
 			icon_button_hover_bg: rgb(0x504945),
+			warning_text: rgb(0xfabd2f),
+			warning_bg: rgb(0x3c3836),
 		},
 		ThemeKind::Nord => Palette {
 			app_bg: rgb(0x2e3440),
@@ -230,6 +322,8 @@ pub fn palette(kind: ThemeKind) -> Palette {
 			button_text: rgb(0xeceff4),
 			icon_button_bg: rgb(0x3b4252),
 			icon_button_hover_bg: rgb(0x4c566a),
+			warning_text: rgb(0xebcb8b),
+			warning_bg: rgb(0x3b4252),
 		},
 		ThemeKind::Synthwave => Palette {
 			app_bg: rgb(0x241b2f),
@@ -254,6 +348,8 @@ pub fn palette(kind: ThemeKind) -> Palette {
 			button_text: rgb(0xff00cc),
 			icon_button_bg: rgb(0x362c49),
 			icon_button_hover_bg: rgb(0x49365e),
+			warning_text: rgb(0xf0c674),
+			warning_bg: rgb(0x362c49),
 		},
 		ThemeKind::DarkAmethyst => Palette {
 			app_bg: rgb(0x030712),
@@ -278,6 +374,8 @@ pub fn palette(kind: ThemeKind) -> Palette {
 			chat_row_bg: rgb(0x030712),
 			chat_row_hover_bg: rgb(0x1f2937),
 			tooltip_bg: rgb(0x1f2937),
+			warning_text: rgb(0xfbbf24),
+			warning_bg: rgb(0x1f2937),
 		},
 	}
 }

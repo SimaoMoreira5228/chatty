@@ -7,7 +7,6 @@ license.workspace = true
 
 [dependencies]
 chatty_client_core = { path = "../chatty_client_core" }
-chatty_client_ui = { path = "../chatty_client_ui" }
 chatty_domain = { path = "../chatty_domain" }
 chatty_protocol = { path = "../chatty_protocol" }
 chatty_util = { path = "../chatty_util" }
@@ -18,11 +17,14 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
+dashmap = "6.1"
 dirs = { workspace = true }
 iced = { version = "0.14", features = ["image", "selector", "svg", "tokio", "advanced"] }
-image = { version = "0.25", default-features = false, features = ["gif", "webp"] }
-lru = "0.16"
+image = { version = "0.25", default-features = false, features = ["gif", "webp", "png", "default-formats", "rayon"] }
+keyring = "3.6"
+moka = { version = "0.12", features = ["sync"] }
 open = "5.3"
+rand = "0.9"
 reqwest = { version = "0.13", features = ["native-tls"] }
 rfd = "0.17"
 rust-embed = { workspace = true, features = ["compression", "include-exclude"] }

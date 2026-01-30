@@ -1,0 +1,196 @@
+use iced::Task;
+
+use crate::app::types::PendingCommand;
+use crate::app::{Chatty, InsertTarget, Message};
+
+impl Chatty {
+	pub fn update_message_action_button_pressed(
+		&mut self,
+		room: chatty_domain::RoomKey,
+		server_msg_id: Option<String>,
+		platform_msg_id: Option<String>,
+		author_id: Option<String>,
+	) -> Task<Message> {
+		self.state.ui.active_overlay = Some(crate::ui::modals::ActiveOverlay::MessageAction(
+			crate::ui::modals::message_action::MessageActionMenu::new(
+				room,
+				server_msg_id,
+				platform_msg_id,
+				author_id,
+				self.state.ui.last_cursor_pos,
+			),
+		));
+
+		Task::none()
+	}
+
+	pub fn update_dismiss_message_action(&mut self) -> Task<Message> {
+		self.state.ui.active_overlay = None;
+		Task::none()
+	}
+
+	pub fn update_reply_to_message(
+		&mut self,
+		room: chatty_domain::RoomKey,
+		server_msg_id: Option<String>,
+		platform_msg_id: Option<String>,
+	) -> Task<Message> {
+		let Some(tab) = self.selected_tab_mut() else {
+			return Task::none();
+		};
+		let Some(pane) = tab.focused_pane else {
+			return Task::none();
+		};
+
+		if let Some(p) = tab.panes.get_mut(pane) {
+			p.reply_to_server_message_id = server_msg_id.clone().unwrap_or_default();
+			p.reply_to_platform_message_id = platform_msg_id.clone().unwrap_or_default();
+			p.reply_to_room = Some(room);
+			if self.state.gui_settings().keybinds.vim_nav {
+				self.state.ui.vim.enter_insert_mode(InsertTarget::Composer);
+			} else {
+				self.state.ui.vim.exit_insert_mode();
+			}
+		}
+
+		self.state.ui.active_overlay = None;
+		let focus_cmd = iced::widget::operation::focus(format!("composer-{:?}", pane));
+		Task::batch(vec![focus_cmd])
+	}
+
+	pub fn update_delete_message(
+		&mut self,
+		room: chatty_domain::RoomKey,
+		server_msg_id: Option<String>,
+		platform_msg_id: Option<String>,
+	) -> Task<Message> {
+		self.state.ui.active_overlay = Some(crate::ui::modals::ActiveOverlay::Confirm(
+			crate::ui::modals::confirm::ConfirmModal::new_delete(room, server_msg_id, platform_msg_id),
+		));
+		Task::none()
+	}
+
+	pub fn execute_delete_message(
+		&mut self,
+		room: chatty_domain::RoomKey,
+		server_msg_id: Option<String>,
+		platform_msg_id: Option<String>,
+	) -> Task<Message> {
+		let topic = chatty_domain::RoomTopic::format(&room);
+		let cmd = chatty_protocol::pb::Command {
+			command: Some(chatty_protocol::pb::command::Command::DeleteMessage(
+				chatty_protocol::pb::DeleteMessageCommand {
+					topic,
+					server_message_id: server_msg_id.clone().unwrap_or_default(),
+					platform_message_id: platform_msg_id.clone().unwrap_or_default(),
+				},
+			)),
+		};
+		let net = self.net.clone();
+		self.state.ui.active_overlay = None;
+		self.pending_commands.push(PendingCommand::Delete {
+			room: room.clone(),
+			server_message_id: server_msg_id.clone(),
+			platform_message_id: platform_msg_id.clone(),
+		});
+		Task::perform(
+			async move {
+				let res: Result<(), String> = net.send_command(cmd).await.map_err(|e| e.to_string());
+				Message::Sent(res)
+			},
+			|m| m,
+		)
+	}
+
+	pub fn update_timeout_user(&mut self, room: chatty_domain::RoomKey, user_id: String) -> Task<Message> {
+		self.state.ui.active_overlay = Some(crate::ui::modals::ActiveOverlay::Confirm(
+			crate::ui::modals::confirm::ConfirmModal::new_timeout(room, user_id),
+		));
+		Task::none()
+	}
+
+	pub fn execute_timeout_user(&mut self, room: chatty_domain::RoomKey, user_id: String) -> Task<Message> {
+		let topic = chatty_domain::RoomTopic::format(&room);
+		let cmd = chatty_protocol::pb::Command {
+			command: Some(chatty_protocol::pb::command::Command::TimeoutUser(
+				chatty_protocol::pb::TimeoutUserCommand {
+					topic,
+					user_id: user_id.clone(),
+					duration_seconds: 600,
+					reason: String::new(),
+				},
+			)),
+		};
+		let net = self.net.clone();
+		self.state.ui.active_overlay = None;
+		self.pending_commands.push(PendingCommand::Timeout {
+			room: room.clone(),
+			user_id: user_id.clone(),
+		});
+		Task::perform(
+			async move {
+				let res: Result<(), String> = net.send_command(cmd).await.map_err(|e| e.to_string());
+				Message::Sent(res)
+			},
+			|m| m,
+		)
+	}
+
+	pub fn update_ban_user(&mut self, room: chatty_domain::RoomKey, user_id: String) -> Task<Message> {
+		self.state.ui.active_overlay = Some(crate::ui::modals::ActiveOverlay::Confirm(
+			crate::ui::modals::confirm::ConfirmModal::new_ban(room, user_id),
+		));
+		Task::none()
+	}
+
+	pub fn execute_ban_user(&mut self, room: chatty_domain::RoomKey, user_id: String) -> Task<Message> {
+		let topic = chatty_domain::RoomTopic::format(&room);
+		let cmd = chatty_protocol::pb::Command {
+			command: Some(chatty_protocol::pb::command::Command::BanUser(
+				chatty_protocol::pb::BanUserCommand {
+					topic,
+					user_id: user_id.clone(),
+					reason: String::new(),
+				},
+			)),
+		};
+		let net = self.net.clone();
+		self.state.ui.active_overlay = None;
+		self.pending_commands.push(PendingCommand::Ban {
+			room: room.clone(),
+			user_id: user_id.clone(),
+		});
+		Task::perform(
+			async move {
+				let res: Result<(), String> = net.send_command(cmd).await.map_err(|e| e.to_string());
+				Message::Sent(res)
+			},
+			|m| m,
+		)
+	}
+
+	pub fn update_confirm_modal_confirmed(&mut self, modal: crate::ui::modals::confirm::ConfirmModal) -> Task<Message> {
+		let room = modal.room;
+		let kind = modal.kind;
+		let server_msg_id = modal.server_message_id;
+		let platform_msg_id = modal.platform_message_id;
+
+		match kind {
+			crate::ui::modals::confirm::ConfirmModalKind::DeleteMessage => {
+				self.execute_delete_message(room, server_msg_id, platform_msg_id)
+			}
+			crate::ui::modals::confirm::ConfirmModalKind::TimeoutUser(user_id) => self.execute_timeout_user(room, user_id),
+			crate::ui::modals::confirm::ConfirmModalKind::BanUser(user_id) => self.execute_ban_user(room, user_id),
+		}
+	}
+
+	pub fn update_sent(&mut self, res: Result<(), String>) -> Task<Message> {
+		if let Err(e) = res {
+			let t = self.toast(e.clone());
+			self.state.push_notification(crate::app::state::UiNotificationKind::Error, e);
+			let _ = self.pending_commands.pop();
+			return t;
+		}
+		Task::none()
+	}
+}

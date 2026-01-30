@@ -2,9 +2,10 @@
 
 use std::sync::Arc;
 
-use chatty_client_ui::net::UiEvent;
 use tokio::sync::{Mutex, mpsc};
 use tracing::info;
+
+use crate::net::UiEvent;
 
 pub(crate) type UiEventReceiver = mpsc::UnboundedReceiver<UiEvent>;
 

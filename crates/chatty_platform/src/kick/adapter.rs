@@ -30,9 +30,9 @@ use crate::assets::{
 	fetch_kick_badge_bundle, fetch_kick_emote_bundle,
 };
 use crate::{
-	AdapterAuth, AdapterControl, AdapterControlRx, AdapterEvent, AdapterEventTx, AssetBundle, AssetProvider, AssetScope,
-	ChatMessage, CommandError, CommandRequest, IngestEvent, IngestPayload, PermissionsInfo, PlatformAdapter, SecretString,
-	UserRef, new_session_id, status,
+	AdapterAuth, AdapterControl, AdapterControlRx, AdapterEvent, AdapterEventTx, AssetBundle, AssetProvider, AssetRef,
+	AssetScope, ChatMessage, CommandError, CommandRequest, IngestEvent, IngestPayload, ModerationAction, ModerationEvent,
+	PermissionsInfo, PlatformAdapter, SecretString, UserRef, new_session_id, status,
 };
 
 #[derive(Clone)]
@@ -651,7 +651,7 @@ async fn handle_kick_webhook(
 		}
 	}
 
-	if event_type != "chat.message.sent" {
+	if event_type != "chat.message.sent" && event_type != "chat.message.deleted" && event_type != "moderation.banned" {
 		metrics::counter!("chatty_kick_webhook_ignored_total").increment(1);
 		return Ok(Response::builder()
 			.status(StatusCode::NO_CONTENT)
@@ -659,124 +659,252 @@ async fn handle_kick_webhook(
 			.unwrap());
 	}
 
-	let payload: KickWebhookChatMessage = match serde_json::from_slice(&body_bytes) {
-		Ok(v) => v,
-		Err(err) => {
-			warn!(error = %err, "kick webhook payload parse failed");
-			metrics::counter!("chatty_kick_webhook_parse_errors_total").increment(1);
-			return Ok(Response::builder()
-				.status(StatusCode::BAD_REQUEST)
-				.body(Full::new(Bytes::new()))
-				.unwrap());
-		}
-	};
-
-	let channel_slug = payload
-		.broadcaster
-		.as_ref()
-		.map(|b| b.channel_slug.as_str())
-		.unwrap_or(payload.sender.channel_slug.as_str());
-	let room_id = match RoomId::new(channel_slug.to_string()) {
-		Ok(v) => v,
-		Err(_) => {
-			return Ok(Response::builder()
-				.status(StatusCode::BAD_REQUEST)
-				.body(Full::new(Bytes::new()))
-				.unwrap());
-		}
-	};
-	let room = RoomKey::new(Platform::Kick, room_id);
-
-	let is_joined = {
-		let guard = state.joined_rooms.read().await;
-		guard.contains(&room)
-	};
-	if !is_joined {
-		metrics::counter!("chatty_kick_webhook_unsubscribed_total").increment(1);
-		return Ok(Response::builder()
-			.status(StatusCode::NO_CONTENT)
-			.body(Full::new(Bytes::new()))
-			.unwrap());
-	}
-
-	if state.auth_user_ids.read().await.contains(&payload.sender.user_id) {
-		let has_mod_badge = payload
-			.sender
-			.identity
-			.as_ref()
-			.map(|identity| {
-				identity
-					.badges
-					.iter()
-					.any(|badge| badge.badge_type.as_deref() == Some("moderator"))
-			})
-			.unwrap_or(false);
-		let mut guard = state.moderator_rooms.write().await;
-		let entry = guard.entry(payload.sender.user_id).or_insert_with(HashSet::new);
-
-		if has_mod_badge {
-			entry.insert(room.clone());
-		} else {
-			entry.remove(&room);
-		}
-	}
-
-	let author = UserRef {
-		id: payload.sender.user_id.to_string(),
-		login: payload.sender.username.clone(),
-		display: Some(payload.sender.username.clone()),
-	};
-	let mut chat_message = ChatMessage::new(author, payload.content);
-	chat_message.badges = payload
-		.sender
-		.identity
-		.as_ref()
-		.map(|identity| {
-			identity
-				.badges
-				.iter()
-				.filter_map(|badge| badge.badge_type.as_ref().map(|t| format!("kick:{t}")))
-				.collect::<Vec<_>>()
-		})
-		.unwrap_or_default();
-	chat_message.ids.platform_id = Some(payload.message_id.clone());
-
-	let mut ingest = IngestEvent::new(Platform::Kick, room.room_id.clone(), IngestPayload::ChatMessage(chat_message));
-	if let Some(ts) = payload.created_at.as_deref()
-		&& let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(ts)
-	{
-		let utc = parsed.with_timezone(&chrono::Utc);
-		let st = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(utc.timestamp_millis() as u64);
-		ingest.platform_time = Some(st);
-	}
-
-	let emote_ids: Vec<String> = payload.emotes.iter().map(|e| e.emote_id.clone()).collect();
-	if !emote_ids.is_empty() {
-		let mut guard = state.emote_ids_by_room.write().await;
-		let room_emotes = guard.entry(room.clone()).or_insert_with(HashSet::new);
-		let old_len = room_emotes.len();
-		for id in emote_ids {
-			room_emotes.insert(id);
-		}
-		let new_len = room_emotes.len();
-		if new_len > old_len {
-			let emote_ids_vec: Vec<String> = room_emotes.iter().cloned().collect();
-			drop(guard);
-			let room_for_emotes = room.clone();
-			let events_tx = state.events_tx.clone();
-
-			tokio::spawn(async move {
-				if let Some(bundle) = fetch_kick_emote_bundle(room_for_emotes.room_id.as_str(), &emote_ids_vec).await {
-					let ingest = IngestEvent::new(
-						Platform::Kick,
-						room_for_emotes.room_id.clone(),
-						IngestPayload::AssetBundle(bundle),
-					);
-					let _ = events_tx.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+	let ingest = match event_type {
+		"chat.message.sent" => {
+			let payload: KickWebhookChatMessage = match serde_json::from_slice(&body_bytes) {
+				Ok(v) => v,
+				Err(err) => {
+					warn!(error = %err, "kick webhook payload parse failed (chat.message.sent)");
+					metrics::counter!("chatty_kick_webhook_parse_errors_total").increment(1);
+					return Ok(Response::builder()
+						.status(StatusCode::BAD_REQUEST)
+						.body(Full::new(Bytes::new()))
+						.unwrap());
 				}
-			});
+			};
+
+			let channel_slug = payload
+				.broadcaster
+				.as_ref()
+				.map(|b| b.channel_slug.as_str())
+				.unwrap_or(payload.sender.channel_slug.as_str());
+			let room_id = match RoomId::new(channel_slug.to_string()) {
+				Ok(v) => v,
+				Err(_) => {
+					return Ok(Response::builder()
+						.status(StatusCode::BAD_REQUEST)
+						.body(Full::new(Bytes::new()))
+						.unwrap());
+				}
+			};
+			let room = RoomKey::new(Platform::Kick, room_id);
+
+			let is_joined = {
+				let guard = state.joined_rooms.read().await;
+				guard.contains(&room)
+			};
+			if !is_joined {
+				metrics::counter!("chatty_kick_webhook_unsubscribed_total").increment(1);
+				return Ok(Response::builder()
+					.status(StatusCode::NO_CONTENT)
+					.body(Full::new(Bytes::new()))
+					.unwrap());
+			}
+
+			if state.auth_user_ids.read().await.contains(&payload.sender.user_id) {
+				let has_mod_badge = payload
+					.sender
+					.identity
+					.as_ref()
+					.map(|identity| {
+						identity
+							.badges
+							.iter()
+							.any(|badge| badge.badge_type.as_deref() == Some("moderator"))
+					})
+					.unwrap_or(false);
+				let mut guard = state.moderator_rooms.write().await;
+				let entry = guard.entry(payload.sender.user_id).or_insert_with(HashSet::new);
+
+				if has_mod_badge {
+					entry.insert(room.clone());
+				} else {
+					entry.remove(&room);
+				}
+			}
+
+			let author = UserRef {
+				id: payload.sender.user_id.to_string(),
+				login: payload.sender.username.clone(),
+				display: Some(payload.sender.username.clone()),
+			};
+			let mut chat_message = ChatMessage::new(author, payload.content.clone());
+			chat_message.badges = payload
+				.sender
+				.identity
+				.as_ref()
+				.map(|identity| {
+					identity
+						.badges
+						.iter()
+						.filter_map(|badge| badge.badge_type.as_ref().map(|t| format!("kick:{t}")))
+						.collect::<Vec<_>>()
+				})
+				.unwrap_or_default();
+			chat_message.ids.platform_id = Some(payload.message_id.clone());
+
+			for kick_emote in &payload.emotes {
+				if let Some(pos) = kick_emote.positions.first() {
+					let start = pos.s as usize;
+					let end = pos.e as usize;
+					if let Some(name) = payload.content.get(start..=end) {
+						chat_message.emotes.push(AssetRef {
+							id: format!("kick:emote:{}", kick_emote.emote_id),
+							name: name.to_string(),
+							image_url: format!("https://files.kick.com/emotes/{}/fullsize", kick_emote.emote_id),
+							image_format: "png".to_string(),
+							width: 0,
+							height: 0,
+						});
+					}
+				}
+			}
+
+			let mut ingest =
+				IngestEvent::new(Platform::Kick, room.room_id.clone(), IngestPayload::ChatMessage(chat_message));
+			if let Some(ts) = payload.created_at.as_deref()
+				&& let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(ts)
+			{
+				let utc = parsed.with_timezone(&chrono::Utc);
+				let st = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(utc.timestamp_millis() as u64);
+				ingest.platform_time = Some(st);
+			}
+
+			let emote_ids: Vec<String> = payload.emotes.iter().map(|e| e.emote_id.clone()).collect();
+			if !emote_ids.is_empty() {
+				let mut guard = state.emote_ids_by_room.write().await;
+				let room_emotes = guard.entry(room.clone()).or_insert_with(HashSet::new);
+				let old_len = room_emotes.len();
+				for id in emote_ids {
+					room_emotes.insert(id);
+				}
+				let new_len = room_emotes.len();
+				if new_len > old_len {
+					let emote_ids_vec: Vec<String> = room_emotes.iter().cloned().collect();
+					drop(guard);
+					let room_for_emotes = room.clone();
+					let events_tx = state.events_tx.clone();
+
+					tokio::spawn(async move {
+						if let Some(bundle) = fetch_kick_emote_bundle(room_for_emotes.room_id.as_str(), &emote_ids_vec).await
+						{
+							let ingest = IngestEvent::new(
+								Platform::Kick,
+								room_for_emotes.room_id.clone(),
+								IngestPayload::AssetBundle(bundle),
+							);
+							let _ = events_tx.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+						}
+					});
+				}
+			}
+			ingest
 		}
-	}
+		"moderation.banned" => {
+			let payload: serde_json::Value = match serde_json::from_slice(&body_bytes) {
+				Ok(v) => v,
+				Err(_) => {
+					return Ok(Response::builder()
+						.status(StatusCode::BAD_REQUEST)
+						.body(Full::new(Bytes::new()))
+						.unwrap());
+				}
+			};
+
+			let banned_user = payload.get("banned_user");
+			let user_id = banned_user
+				.and_then(|v| v.get("user_id"))
+				.and_then(|v| v.as_u64())
+				.map(|v| v.to_string())
+				.unwrap_or_default();
+			let username = banned_user
+				.and_then(|v| v.get("username"))
+				.and_then(|v| v.as_str())
+				.unwrap_or("");
+
+			let moderator = payload.get("moderator");
+			let actor_id = moderator
+				.and_then(|v| v.get("user_id"))
+				.and_then(|v| v.as_u64())
+				.map(|v| v.to_string())
+				.unwrap_or_default();
+			let actor_username = moderator
+				.and_then(|v| v.get("username"))
+				.and_then(|v| v.as_str())
+				.unwrap_or("");
+
+			let metadata = payload.get("metadata");
+			let reason = metadata
+				.and_then(|v| v.get("reason"))
+				.and_then(|v| v.as_str())
+				.map(|v| v.to_string());
+			let created_at_str = metadata.and_then(|v| v.get("created_at")).and_then(|v| v.as_str());
+			let expires_at_str = metadata.and_then(|v| v.get("expires_at")).and_then(|v| v.as_str());
+
+			let created_at = created_at_str
+				.and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+				.map(|dt| dt.with_timezone(&chrono::Utc));
+
+			let expires_at = expires_at_str
+				.and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+				.map(|dt| dt.with_timezone(&chrono::Utc));
+
+			let duration_seconds = if let (Some(c), Some(e)) = (created_at, expires_at) {
+				let diff = e.signed_duration_since(c);
+				if diff.num_seconds() > 0 {
+					Some(diff.num_seconds() as u64)
+				} else {
+					None
+				}
+			} else {
+				None
+			};
+
+			let channel_slug = payload
+				.get("broadcaster")
+				.and_then(|v| v.get("channel_slug"))
+				.and_then(|v| v.as_str())
+				.unwrap_or("");
+			let room_id =
+				RoomId::new(channel_slug.to_string()).unwrap_or_else(|_| RoomId::new("unknown".to_string()).unwrap());
+
+			let is_timeout = expires_at.is_some();
+
+			let mod_event = ModerationEvent {
+				kind: if is_timeout {
+					"timeout".to_string()
+				} else {
+					"ban".to_string()
+				},
+				actor: Some(UserRef {
+					id: actor_id,
+					login: actor_username.to_string(),
+					display: Some(actor_username.to_string()),
+				}),
+				target: Some(UserRef {
+					id: user_id,
+					login: username.to_string(),
+					display: Some(username.to_string()),
+				}),
+				target_message_platform_id: None,
+				notes: reason.clone(),
+				action: Some(if is_timeout {
+					ModerationAction::Timeout {
+						duration_seconds,
+						expires_at: expires_at.map(std::time::SystemTime::from),
+						reason: reason.clone(),
+					}
+				} else {
+					ModerationAction::Ban {
+						is_permanent: Some(true),
+						reason,
+					}
+				}),
+			};
+			IngestEvent::new(Platform::Kick, room_id, IngestPayload::Moderation(Box::new(mod_event)))
+		}
+		_ => unreachable!(),
+	};
 
 	if state.events_tx.send(AdapterEvent::Ingest(Box::new(ingest))).await.is_err() {
 		warn!("kick webhook ingest channel closed");
