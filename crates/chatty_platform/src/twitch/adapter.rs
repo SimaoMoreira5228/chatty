@@ -1063,7 +1063,7 @@ impl TwitchEventSubAdapter {
 									let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
 								}
 								Err(error) => {
-									warn!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, error=?error, "failed to fetch 7tv channel badges bundle");
+									info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, error=?error, "failed to fetch 7tv channel badges bundle");
 								}
 							}
 
@@ -1080,7 +1080,7 @@ impl TwitchEventSubAdapter {
 									let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
 								}
 								Err(error) => {
-									warn!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, error=?error, "failed to fetch 7tv emote set bundle");
+									info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, error=?error, "failed to fetch 7tv emote set bundle");
 								}
 							}
 						}

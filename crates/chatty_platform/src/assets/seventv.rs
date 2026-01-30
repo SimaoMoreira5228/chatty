@@ -108,20 +108,46 @@ query UserEmoteSet($platform: Platform!, $platformId: String!) {
 		.context("7tv gql status")?;
 
 	let body: SevenTvResponse = resp.json().await.context("7tv gql json")?;
-	let set = body
+	let user = body
 		.data
 		.and_then(|d| d.users)
 		.and_then(|u| u.user_by_connection)
-		.and_then(|u| u.personal_emote_set.or_else(|| u.style.and_then(|s| s.active_emote_set)))
-		.ok_or_else(|| anyhow!("7tv emote set not found"))?;
+		.ok_or_else(|| anyhow!("7tv user not found"))?;
 
-	let emotes: Vec<AssetRef> = set.emotes.items.into_iter().filter_map(seventv_emote_to_asset).collect();
+	let mut emotes_map: HashMap<String, AssetRef> = HashMap::new();
+	let mut set_id = String::new();
+
+	if let Some(set) = user.style.and_then(|s| s.active_emote_set) {
+		set_id = set.id.clone();
+		for item in set.emotes.items {
+			if let Some(asset) = seventv_emote_to_asset(item) {
+				emotes_map.insert(asset.id.clone(), asset);
+			}
+		}
+	}
+
+	if let Some(set) = user.personal_emote_set {
+		if set_id.is_empty() {
+			set_id = set.id.clone();
+		}
+		for item in set.emotes.items {
+			if let Some(asset) = seventv_emote_to_asset(item) {
+				emotes_map.entry(asset.id.clone()).or_insert(asset);
+			}
+		}
+	}
+
+	if set_id.is_empty() {
+		return Err(anyhow!("7tv emote set not found"));
+	}
+
+	let emotes: Vec<AssetRef> = emotes_map.into_values().collect();
 	let etag = compute_bundle_etag(&emotes, &[]);
 
 	let bundle = AssetBundle {
 		provider: AssetProvider::SevenTv,
 		scope: AssetScope::Channel,
-		cache_key: format!("7tv:set:{}", set.id),
+		cache_key: format!("7tv:set:{}", set_id),
 		etag: Some(etag),
 		emotes,
 		badges: Vec::new(),
