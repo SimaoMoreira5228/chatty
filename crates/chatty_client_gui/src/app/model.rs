@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use chatty_domain::RoomKey;
@@ -22,12 +22,28 @@ use crate::ui::components::tab::TabId;
 pub struct Chatty {
 	pub(crate) net: NetController,
 	pub(crate) net_rx: Arc<Mutex<UiEventReceiver>>,
-	pub(crate) _shutdown: Option<net::ShutdownHandle>,
+	pub(crate) shutdown: Option<net::ShutdownHandle>,
 
 	pub(crate) state: AppState,
 	pub(crate) assets: AssetManager,
 	pub(crate) pending_commands: Vec<PendingCommand>,
+	pub(crate) pending_delete_keys: HashSet<PendingDeleteKey>,
 	pub(crate) message_text_editors: HashMap<String, text_editor::Content>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct PendingDeleteKey {
+	pub(crate) room: RoomKey,
+	pub(crate) server_message_id: Option<String>,
+	pub(crate) platform_message_id: Option<String>,
+}
+
+impl Drop for Chatty {
+	fn drop(&mut self) {
+		if let Some(shutdown) = self.shutdown.take() {
+			shutdown.shutdown();
+		}
+	}
 }
 
 pub(crate) fn first_char_lower(s: &str) -> char {
@@ -35,6 +51,38 @@ pub(crate) fn first_char_lower(s: &str) -> char {
 }
 
 impl Chatty {
+	pub(crate) fn rebuild_pending_delete_keys(&mut self) {
+		self.pending_delete_keys = self
+			.pending_commands
+			.iter()
+			.filter_map(|pc| match pc {
+				PendingCommand::Delete {
+					room,
+					server_message_id,
+					platform_message_id,
+				} => Some(PendingDeleteKey {
+					room: room.clone(),
+					server_message_id: server_message_id.clone(),
+					platform_message_id: platform_message_id.clone(),
+				}),
+				_ => None,
+			})
+			.collect();
+	}
+
+	pub(crate) fn is_pending_delete(
+		&self,
+		room: &RoomKey,
+		server_message_id: Option<&str>,
+		platform_message_id: Option<&str>,
+	) -> bool {
+		self.pending_delete_keys.contains(&PendingDeleteKey {
+			room: room.clone(),
+			server_message_id: server_message_id.map(|v| v.to_string()),
+			platform_message_id: platform_message_id.map(|v| v.to_string()),
+		})
+	}
+
 	pub fn title(&self, _window: iced::window::Id) -> String {
 		"Chatty".to_string()
 	}
@@ -49,11 +97,6 @@ impl Chatty {
 		let mut state = AppState::new();
 		let gs = state.gui_settings().clone();
 
-		if state.tabs.is_empty() {
-			let id = state.create_tab_for_rooms(t!("main.welcome"), Vec::new());
-			state.selected_tab_id = Some(id);
-		}
-
 		state.ui.server_endpoint_quic = gs.server_endpoint_quic.clone();
 		state.ui.server_auth_token = gs.server_auth_token.clone();
 		state.ui.max_log_items_raw = gs.max_log_items.to_string();
@@ -61,7 +104,7 @@ impl Chatty {
 		let mut instance = Self {
 			net,
 			net_rx: net_rx.clone(),
-			_shutdown: Some(shutdown),
+			shutdown: Some(shutdown),
 
 			state,
 
@@ -70,6 +113,7 @@ impl Chatty {
 				tx
 			}),
 			pending_commands: Vec::new(),
+			pending_delete_keys: HashSet::new(),
 			message_text_editors: HashMap::new(),
 		};
 
@@ -387,16 +431,6 @@ impl Chatty {
 		self.state.create_tab_for_rooms(title, rooms)
 	}
 
-	pub(crate) fn active_identity_label(&self) -> String {
-		let gs = self.state.gui_settings();
-		if let Some(id) = gs.active_identity.as_ref()
-			&& let Some(identity) = gs.identities.iter().find(|i| &i.id == id)
-		{
-			return format!("{} ({:?})", identity.display_name, identity.platform);
-		}
-		"None".to_string()
-	}
-
 	#[allow(dead_code)]
 	pub(crate) fn apply_join_request(&mut self, pane: pane_grid::Pane) -> Option<(RoomKey, JoinRequest)> {
 		let raw = self
@@ -475,10 +509,5 @@ mod tests {
 	#[test]
 	fn layout_roundtrip_masonry() {
 		roundtrip_for_layout(|i| i.split_masonry());
-	}
-
-	#[test]
-	fn layout_roundtrip_linear() {
-		roundtrip_for_layout(|i| i.split_linear());
 	}
 }

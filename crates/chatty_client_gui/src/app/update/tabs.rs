@@ -1,5 +1,4 @@
 use iced::Task;
-use rust_i18n::t;
 
 use crate::app::{Chatty, Message};
 
@@ -12,13 +11,7 @@ impl Chatty {
 	}
 
 	pub fn update_add_tab_pressed(&mut self) -> Task<Message> {
-		let id = self.state.create_tab_for_rooms(t!("main.welcome"), Vec::new());
-		self.state.selected_tab_id = Some(id);
-
-		self.state.ui.vim.insert_mode = true;
-		self.state.ui.vim.insert_target = Some(crate::app::types::InsertTarget::Join);
-
-		Task::none()
+		self.update_open_join_modal(crate::app::types::JoinTarget::NewTab)
 	}
 
 	pub fn update_close_tab_pressed(&mut self, id: crate::app::state::TabId) -> Task<Message> {
@@ -27,14 +20,6 @@ impl Chatty {
 
 		if self.state.selected_tab_id == Some(id) {
 			self.state.selected_tab_id = self.state.tab_order.first().copied();
-		}
-
-		if self.state.tab_order.is_empty() {
-			let new_id = self.state.create_tab_for_rooms(t!("main.welcome"), Vec::new());
-			self.state.selected_tab_id = Some(new_id);
-
-			self.state.ui.vim.insert_mode = true;
-			self.state.ui.vim.insert_target = Some(crate::app::types::InsertTarget::Join);
 		}
 
 		Task::none()
@@ -76,15 +61,24 @@ impl Chatty {
 	pub fn update_window_closed(&mut self, id: iced::window::Id) -> Task<Message> {
 		if let Some(win_model) = self.state.popped_windows.remove(&id) {
 			for tab_id in win_model.tabs {
-				self.state.tab_order.push(tab_id);
+				if !self.state.tab_order.contains(&tab_id) {
+					self.state.tab_order.push(tab_id);
+				}
+
 				if self.state.selected_tab_id.is_none() {
 					self.state.selected_tab_id = Some(tab_id);
 				}
 			}
 
-			Task::none()
-		} else {
+			iced::window::close(id)
+		} else if self.state.ui.main_window_id == Some(id) {
+			if let Some(shutdown) = self.shutdown.take() {
+				shutdown.shutdown();
+			}
+
 			iced::exit()
+		} else {
+			Task::none()
 		}
 	}
 

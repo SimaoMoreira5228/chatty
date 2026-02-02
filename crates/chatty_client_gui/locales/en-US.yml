@@ -129,7 +129,6 @@ platform.kick: "Kick"
 platform.unknown: "Unknown"
 
 log.system_label: "[system]"
-log.lagged_label: "[lagged]"
 
 confirm.ban_title: "Ban User"
 confirm.ban_desc: "Are you sure you want to ban this user?"

@@ -27,6 +27,7 @@ impl Chatty {
 			}
 			Message::CursorMoved(x, y) => self.update_cursor_moved(x, y),
 			Message::UserScrolled => self.update_user_scrolled(),
+			Message::ChatLogScrolled(pane, viewport) => self.update_chat_log_scrolled(pane, viewport),
 			Message::Navigate(p) => self.update_navigate(p),
 			Message::ToasterMessage(msg) => {
 				let mut toaster =
@@ -38,7 +39,12 @@ impl Chatty {
 			Message::OverlayMessage(msg) => {
 				if let Some(mut overlay) = self.state.ui.active_overlay.take() {
 					let task = overlay.update(self, msg);
-					self.state.ui.active_overlay = Some(overlay);
+					if self.state.ui.overlay_dismissed {
+						self.state.ui.overlay_dismissed = false;
+					} else if self.state.ui.active_overlay.is_none() {
+						self.state.ui.active_overlay = Some(overlay);
+					}
+
 					task
 				} else {
 					Task::none()
@@ -64,6 +70,7 @@ impl Chatty {
 				self.update_message_action_button_pressed(room, s_id, p_id, a_id)
 			}
 			Message::ModalDismissed => self.update_modal_dismissed(),
+			Message::OpenJoinModal(target) => self.update_open_join_modal(target),
 			Message::ReplyToMessage(room, s_id, p_id) => self.update_reply_to_message(room, s_id, p_id),
 			Message::DeleteMessage(room, s_id, p_id) => self.update_delete_message(room, s_id, p_id),
 			Message::TimeoutUser(room, user_id) => self.update_timeout_user(room, user_id),

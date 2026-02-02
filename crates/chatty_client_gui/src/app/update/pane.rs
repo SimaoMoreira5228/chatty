@@ -3,16 +3,26 @@ use std::str::FromStr;
 use chatty_domain::RoomTopic;
 use chatty_protocol::pb;
 use iced::Task;
-use iced::widget::pane_grid;
+use iced::widget::{pane_grid, scrollable};
 use rust_i18n::t;
 
 use crate::app::net::recv_next;
 use crate::app::state::JoinRequest;
+use crate::app::types::JoinTarget;
 use crate::app::{Chatty, Message};
 use crate::settings::SplitLayoutKind;
 use crate::ui::components::chat_pane::ChatPaneMessage;
 
 impl Chatty {
+	pub fn update_chat_log_scrolled(&mut self, _pane: pane_grid::Pane, viewport: scrollable::Viewport) -> Task<Message> {
+		let bounds = viewport.bounds();
+		let content = viewport.content_bounds();
+		let offset = viewport.absolute_offset();
+		let at_end = offset.y + bounds.height + 4.0 >= content.height;
+		self.state.ui.follow_end = at_end;
+		Task::none()
+	}
+
 	pub fn update_pane_message(&mut self, pane: pane_grid::Pane, msg: ChatPaneMessage) -> Task<Message> {
 		if let Some(tab) = self.selected_tab_mut()
 			&& let Some(mut p) = tab.panes.get_mut(pane).cloned()
@@ -26,46 +36,6 @@ impl Chatty {
 			return task;
 		}
 		Task::none()
-	}
-
-	pub fn update_pane_join_pressed(&mut self, pane: pane_grid::Pane) -> Task<Message> {
-		let raw = self
-			.selected_tab()
-			.and_then(|t| t.panes.get(pane))
-			.map(|p| p.join_raw.clone())
-			.unwrap_or_default();
-		let req = JoinRequest { raw };
-		let rooms = self.state.parse_join_rooms(&req);
-		if rooms.is_empty() {
-			self.state
-				.push_notification(crate::app::state::UiNotificationKind::Warning, t!("invalid_room").to_string());
-			return Task::none();
-		};
-
-		let tid = self.ensure_tab_for_rooms(rooms.clone());
-		if let Some(tab) = self.selected_tab_mut()
-			&& let Some(p) = tab.panes.get_mut(pane)
-		{
-			p.tab_id = Some(tid);
-			p.join_raw = rooms
-				.iter()
-				.map(|r| format!("{}:{}", r.platform.as_str(), r.room_id.as_str()))
-				.collect::<Vec<_>>()
-				.join(", ");
-		}
-
-		let net = self.net.clone();
-		Task::perform(
-			async move {
-				let mut results = Vec::new();
-				for room in rooms {
-					let res = net.subscribe_room_key(room.clone()).await;
-					results.push((room, res));
-				}
-				results
-			},
-			Message::AutoJoinCompleted,
-		)
 	}
 
 	pub fn update_pane_subscribed(&mut self, _pane: pane_grid::Pane, res: Result<(), String>) -> Task<Message> {
@@ -217,39 +187,40 @@ impl Chatty {
 	}
 
 	pub fn update_split_pressed(&mut self) -> Task<Message> {
-		let split_layout = self.state.gui_settings().split_layout;
-		let has_panes = self.selected_tab().map(|t| t.panes.iter().count() > 0).unwrap_or(false);
-
-		if !has_panes {
-			return self.update_open_join_modal();
-		}
-
-		match split_layout {
-			SplitLayoutKind::Spiral => self.split_spiral(),
-			SplitLayoutKind::Linear => self.split_linear(),
-			SplitLayoutKind::Masonry => self.split_masonry(),
-		}
-
-		self.save_ui_layout();
-		Task::none()
+		self.update_open_join_modal(JoinTarget::Split)
 	}
 
-	pub fn update_open_join_modal(&mut self) -> Task<Message> {
+	pub fn update_open_join_modal(&mut self, target: JoinTarget) -> Task<Message> {
+		self.state.ui.pending_join_target = Some(target);
 		self.state.ui.active_overlay = Some(crate::ui::modals::ActiveOverlay::Join(crate::ui::modals::JoinModal::new(
 			self.state.default_platform,
 		)));
 		Task::none()
 	}
 
-	pub fn update_join_modal_submit(&mut self) -> Task<Message> {
-		let Some(crate::ui::modals::ActiveOverlay::Join(m)) = self.state.ui.active_overlay.take() else {
-			return Task::none();
-		};
-
-		let raw = m.input.trim().to_string();
-		if raw.is_empty() {
+	pub fn update_join_modal_submit(&mut self, modal: crate::ui::modals::JoinModal) -> Task<Message> {
+		let raw_input = modal.input.trim().to_string();
+		if raw_input.is_empty() {
 			return Task::none();
 		}
+
+		let platform = modal.platform;
+		let raw = raw_input
+			.split(',')
+			.map(|part| {
+				let part = part.trim();
+				if part.is_empty() {
+					return String::new();
+				}
+				if part.starts_with(RoomTopic::PREFIX) || part.contains(':') {
+					part.to_string()
+				} else {
+					format!("{}:{}", platform.as_str(), part)
+				}
+			})
+			.filter(|p| !p.is_empty())
+			.collect::<Vec<_>>()
+			.join(", ");
 
 		let req = JoinRequest { raw };
 		let rooms = self.state.parse_join_rooms(&req);
@@ -257,55 +228,177 @@ impl Chatty {
 			return self.toast(t!("invalid_room").to_string());
 		}
 
-		let tid = self.ensure_tab_for_rooms(rooms.clone());
-		let split_layout = self.state.gui_settings().split_layout;
+		self.state.ui.active_overlay = None;
+		self.state.ui.overlay_dismissed = true;
+
+		let join_target = self.state.ui.pending_join_target.take().unwrap_or(JoinTarget::Split);
 		let join_raw = rooms
 			.iter()
 			.map(|r| format!("{}:{}", r.platform.as_str(), r.room_id.as_str()))
 			.collect::<Vec<_>>()
 			.join(", ");
 
-		if let Some(tab) = self.selected_tab_mut() {
-			if tab.panes.iter().next().is_none() {
-				let (panes, pane) = pane_grid::State::new(crate::ui::components::chat_pane::ChatPane::new(Some(tid)));
-				tab.panes = panes;
-				tab.focused_pane = Some(pane);
-				// Set join_raw
-				if let Some(p) = tab.panes.get_mut(pane) {
-					p.join_raw = join_raw;
-				}
-			} else {
-				let axis = match split_layout {
-					SplitLayoutKind::Linear => pane_grid::Axis::Vertical,
-					_ => {
-						if tab.panes.iter().count() % 2 == 0 {
-							pane_grid::Axis::Horizontal
-						} else {
-							pane_grid::Axis::Vertical
-						}
+		let has_selected_tab = self.selected_tab_id().is_some();
+		match join_target {
+			JoinTarget::NewTab | JoinTarget::Split if !has_selected_tab => {
+				let title = rooms.iter().map(|r| r.room_id.as_str()).collect::<Vec<_>>().join(", ");
+				let tid = self.state.create_tab_for_rooms(title, rooms.clone());
+				self.state.selected_tab_id = Some(tid);
+			}
+			JoinTarget::Split => {
+				let mut sorted_rooms = rooms.clone();
+				sorted_rooms.sort_by(|a, b| {
+					a.platform
+						.as_str()
+						.cmp(b.platform.as_str())
+						.then_with(|| a.room_id.as_str().cmp(b.room_id.as_str()))
+				});
+
+				let existing_tid = self.state.tabs.iter().find_map(|(tid, t)| {
+					let mut t_rooms = t.target.0.clone();
+					t_rooms.sort_by(|a, b| {
+						a.platform
+							.as_str()
+							.cmp(b.platform.as_str())
+							.then_with(|| a.room_id.as_str().cmp(b.room_id.as_str()))
+					});
+					(t_rooms == sorted_rooms).then_some(*tid)
+				});
+
+				let (tid, created_new) = match existing_tid {
+					Some(tid) => (tid, false),
+					None => {
+						let title = rooms.iter().map(|r| r.room_id.as_str()).collect::<Vec<_>>().join(", ");
+						let tid = self.state.create_tab_for_rooms(title, rooms.clone());
+						(tid, true)
 					}
 				};
 
-				let Some(focused) = tab.focused_pane.or_else(|| tab.panes.iter().next().map(|(id, _)| *id)) else {
-					return Task::none();
-				};
-
-				let mut new_state = crate::ui::components::chat_pane::ChatPane::new(Some(tid));
-				new_state.join_raw = join_raw;
-
-				if let Some((new_pane, _)) = tab.panes.split(axis, focused, new_state) {
-					tab.focused_pane = Some(new_pane);
+				if created_new {
+					self.state.tab_order.retain(|&id| id != tid);
 				}
+
+				let split_layout = self.state.gui_settings().split_layout;
+				let window_size = self.state.ui.window_size;
+				let mut spiral_dir = self.state.ui.spiral_dir;
+				let mut masonry_flip = self.state.ui.masonry_flip;
+
+				if let Some(tab) = self.selected_tab_mut() {
+					if tab.panes.iter().next().is_none() {
+						let (panes, pane) =
+							pane_grid::State::new(crate::ui::components::chat_pane::ChatPane::new(Some(tid)));
+						tab.panes = panes;
+						tab.focused_pane = Some(pane);
+						if let Some(p) = tab.panes.get_mut(pane) {
+							p.join_raw = join_raw;
+						}
+					} else {
+						let Some(focused) = tab.focused_pane.or_else(|| tab.panes.iter().next().map(|(id, _)| *id)) else {
+							return Task::none();
+						};
+
+						let mut new_state = crate::ui::components::chat_pane::ChatPane::new(Some(tid));
+						new_state.join_raw = join_raw;
+
+						match split_layout {
+							SplitLayoutKind::Linear => {
+								let axis = pane_grid::Axis::Vertical;
+								let ratio = 0.5;
+								if let Some((new_pane, split)) = tab.panes.split(axis, focused, new_state) {
+									tab.panes.resize(split, ratio);
+									tab.focused_pane = Some(new_pane);
+								}
+							}
+							SplitLayoutKind::Spiral => {
+								let dir = spiral_dir % 4;
+								spiral_dir = (spiral_dir + 1) % 4;
+								let (axis, ratio, swap) = match dir {
+									0 => (pane_grid::Axis::Vertical, 0.618, false),
+									1 => (pane_grid::Axis::Horizontal, 0.618, false),
+									2 => (pane_grid::Axis::Vertical, 0.618, true),
+									3 => (pane_grid::Axis::Horizontal, 0.618, true),
+									_ => unreachable!(),
+								};
+								if let Some((new_pane, split)) = tab.panes.split(axis, focused, new_state) {
+									tab.panes.resize(split, ratio);
+									if swap {
+										tab.panes.swap(focused, new_pane);
+									}
+									tab.focused_pane = Some(focused);
+								}
+							}
+							SplitLayoutKind::Masonry => {
+								let Some((width, height)) = window_size else {
+									return Task::none();
+								};
+								let bounds = iced::Size::new(width, height);
+
+								let mut best: Option<(pane_grid::Pane, iced::Rectangle, f32)> = None;
+								for (pane, rect) in tab.panes.layout().pane_regions(8.0, 50.0, bounds) {
+									let area = rect.width * rect.height;
+									best = match best {
+										None => Some((pane, rect, area)),
+										Some((bp, br, ba)) => {
+											let is_focused = Some(pane) == tab.focused_pane;
+											if area > ba || (area == ba && is_focused) {
+												Some((pane, rect, area))
+											} else {
+												Some((bp, br, ba))
+											}
+										}
+									};
+								}
+
+								let Some((target_pane, rect, _)) = best else {
+									return Task::none();
+								};
+
+								let axis = if rect.width >= rect.height {
+									pane_grid::Axis::Vertical
+								} else {
+									pane_grid::Axis::Horizontal
+								};
+
+								let flip = masonry_flip;
+								masonry_flip = !masonry_flip;
+								let ratio = if flip { 0.5 } else { 0.618 };
+								let swap = flip;
+
+								if let Some((new_pane, split)) = tab.panes.split(axis, target_pane, new_state) {
+									tab.panes.resize(split, ratio);
+									if swap {
+										tab.panes.swap(target_pane, new_pane);
+									}
+									tab.focused_pane = Some(target_pane);
+								}
+							}
+						}
+					}
+				}
+				self.state.ui.spiral_dir = spiral_dir;
+				self.state.ui.masonry_flip = masonry_flip;
+			}
+			JoinTarget::NewTab => {
+				let title = rooms.iter().map(|r| r.room_id.as_str()).collect::<Vec<_>>().join(", ");
+				let tid = self.state.create_tab_for_rooms(title, rooms.clone());
+				self.state.selected_tab_id = Some(tid);
 			}
 		}
 
 		self.save_ui_layout();
 
+		let mut unique_rooms: std::collections::HashSet<chatty_domain::RoomKey> = std::collections::HashSet::new();
+		for tab in self.state.tabs.values() {
+			for room in &tab.target.0 {
+				unique_rooms.insert(room.clone());
+			}
+		}
+
 		let net = self.net.clone();
 		Task::perform(
 			async move {
 				let mut results = Vec::new();
-				for room in rooms {
+				for room in unique_rooms.into_iter() {
 					let res = net.subscribe_room_key(room.clone()).await;
 					results.push((room, res));
 				}

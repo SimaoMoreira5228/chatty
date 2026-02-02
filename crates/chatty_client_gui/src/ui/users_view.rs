@@ -1,12 +1,9 @@
 #![forbid(unsafe_code)]
 
-use std::collections::HashMap;
-
 use iced::widget::{column, container, row, rule, scrollable, svg, text, text_input};
 use iced::{Alignment, Background, Border, Element, Length, Shadow, Task};
 use rust_i18n::t;
 
-use crate::app::state::ChatItem;
 use crate::app::{Chatty, Message};
 use crate::assets::svg_handle;
 use crate::theme;
@@ -44,13 +41,7 @@ impl UsersView {
 			&& let Some(tab) = app.state.tabs.get(&tab_id)
 		{
 			title = format!("Users • {}", tab.title);
-			let mut counts: HashMap<String, usize> = HashMap::new();
-			for item in tab.log.items.iter() {
-				if let ChatItem::ChatMessage(msg) = item {
-					*counts.entry(msg.user_login.clone()).or_insert(0) += 1;
-				}
-			}
-			let mut users: Vec<(String, usize)> = counts.into_iter().collect();
+			let mut users: Vec<(String, usize)> = tab.user_counts.iter().map(|(k, v)| (k.clone(), *v)).collect();
 			users.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
 			let mut any = false;

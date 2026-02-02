@@ -13,7 +13,7 @@ use tracing::{debug, info, warn};
 use super::api::{BoxedSessionControl, BoxedSessionEvents};
 use super::controller::NetCommand;
 use super::reconnect::{RECONNECT_RESET_AFTER, schedule_reconnect};
-use super::subscriptions::{reconcile_subscriptions_on_connect, subscribe_topics, topic_for_room, unsubscribe_topics};
+use super::subscriptions::{reconcile_subscriptions_on_connect, topic_for_room, unsubscribe_topics};
 use super::types::UiEvent;
 use crate::net::{dev_default_topics, should_dev_auto_connect};
 use crate::ui::components::chat_message::AssetRefUi;
@@ -166,6 +166,7 @@ pub async fn run_network_task_with_session_factory<F>(
 
 				match cmd {
 					NetCommand::Connect { cfg } => {
+						dev_auto_connect_fired = true;
 						last_connect_cfg = Some(*cfg.clone());
 						reconnect_attempt = 0;
 						reconnect_deadline = None;
@@ -227,9 +228,17 @@ pub async fn run_network_task_with_session_factory<F>(
 
 						if was_zero
 							&& let Some(s) = session.as_mut()
-								&& let Err(e) = subscribe_topics(s, vec![topic.clone()], &cursor_by_topic, &ui_tx, &mut events_task).await {
-									ui_send_error(&ui_tx, e, last_connect_cfg.as_ref());
-								}
+								&& let Err(e) = reconcile_subscriptions_on_connect(
+									s,
+									&topics_refcounts,
+									&cursor_by_topic,
+									&ui_tx,
+									&mut events_task,
+								)
+								.await
+							{
+								ui_send_error(&ui_tx, e, last_connect_cfg.as_ref());
+							}
 					}
 
 					NetCommand::UnsubscribeRoomKey { room } => {
@@ -271,7 +280,11 @@ pub async fn run_network_task_with_session_factory<F>(
 				}
 			}
 
-			_ = tokio::time::sleep(Duration::from_millis(200)), if cfg!(debug_assertions) && !dev_auto_connect_fired && should_dev_auto_connect() => {
+			_ = tokio::time::sleep(Duration::from_millis(200)), if cfg!(debug_assertions)
+				&& !dev_auto_connect_fired
+				&& should_dev_auto_connect()
+				&& session.is_none()
+				&& last_connect_cfg.is_none() => {
 				dev_auto_connect_fired = true;
 				let _ = ui_tx.send(UiEvent::Connecting);
 				if let Some(t) = events_task.take() { t.abort(); }
@@ -494,15 +507,16 @@ fn map_event_envelope_to_ui_event(ev: pb::EventEnvelope) -> Option<UiEvent> {
 				emotes,
 			})
 		}
-		Some(pb::event_envelope::Event::TopicLagged(lag)) => Some(UiEvent::TopicLagged {
-			topic,
-			dropped: lag.dropped,
-			detail: if lag.detail.is_empty() {
+		Some(pb::event_envelope::Event::TopicLagged(lag)) => {
+			let detail = if lag.detail.is_empty() {
 				"lagged".to_string()
 			} else {
 				lag.detail
-			},
-		}),
+			};
+
+			warn!(topic, dropped = lag.dropped, detail, "Topic lagged");
+			None
+		}
 		Some(pb::event_envelope::Event::Permissions(perms)) => Some(UiEvent::RoomPermissions {
 			topic,
 			can_send: perms.can_send,

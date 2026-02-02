@@ -20,7 +20,7 @@ use crate::theme;
 
 pub fn view(app: &Chatty, window: iced::window::Id) -> Element<'_, Message> {
 	if let Some(win_model) = app.state.popped_windows.get(&window)
-		&& let Some(tab_id) = win_model.active_tab
+		&& let Some(tab_id) = win_model.active_tab.or_else(|| win_model.tabs.first().copied())
 	{
 		return popped_view::view(app, tab_id);
 	}

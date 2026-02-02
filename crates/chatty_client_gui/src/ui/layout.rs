@@ -59,9 +59,14 @@ impl UiRootState {
 			if let Some(tab) = app.state.tabs.get(tid) {
 				let mut pane_layouts: std::collections::HashMap<pane_grid::Pane, UiPane> = std::collections::HashMap::new();
 				for (pane_id, pane_state) in tab.panes.iter() {
+					let rooms = pane_state
+						.tab_id
+						.and_then(|tid| app.state.tabs.get(&tid).map(|t| t.target.0.clone()))
+						.unwrap_or_default();
 					pane_layouts.insert(
 						*pane_id,
 						UiPane {
+							rooms,
 							join_raw: pane_state.join_raw.clone(),
 							composer: pane_state.composer.clone(),
 						},
@@ -99,9 +104,14 @@ impl UiRootState {
 					let mut pane_layouts: std::collections::HashMap<pane_grid::Pane, UiPane> =
 						std::collections::HashMap::new();
 					for (pane_id, pane_state) in tab.panes.iter() {
+						let rooms = pane_state
+							.tab_id
+							.and_then(|tid| app.state.tabs.get(&tid).map(|t| t.target.0.clone()))
+							.unwrap_or_default();
 						pane_layouts.insert(
 							*pane_id,
 							UiPane {
+								rooms,
 								join_raw: pane_state.join_raw.clone(),
 								composer: pane_state.composer.clone(),
 							},
@@ -144,8 +154,6 @@ impl UiRootState {
 	}
 
 	pub fn apply_to(&self, app: &mut crate::app::Chatty) {
-		use rust_i18n::t;
-
 		use crate::app::state::AppState;
 		use crate::ui::components::chat_pane::ChatPane;
 
@@ -155,6 +163,36 @@ impl UiRootState {
 		app.state.pending_popped_tabs.clear();
 		app.state.pending_restore_windows.clear();
 		app.state.selected_tab_id = None;
+
+		fn ensure_tab_for_rooms(state: &mut AppState, rooms: Vec<chatty_domain::RoomKey>) -> TabId {
+			if rooms.is_empty() {
+				return TabId(0);
+			}
+
+			let mut sorted_rooms = rooms.clone();
+			sorted_rooms.sort_by(|a, b| {
+				a.platform
+					.as_str()
+					.cmp(b.platform.as_str())
+					.then_with(|| a.room_id.as_str().cmp(b.room_id.as_str()))
+			});
+
+			if let Some((tid, _)) = state.tabs.iter().find(|(_, t)| {
+				let mut t_rooms = t.target.0.clone();
+				t_rooms.sort_by(|a, b| {
+					a.platform
+						.as_str()
+						.cmp(b.platform.as_str())
+						.then_with(|| a.room_id.as_str().cmp(b.room_id.as_str()))
+				});
+				t_rooms == sorted_rooms
+			}) {
+				return *tid;
+			}
+
+			let title = rooms.iter().map(|r| r.room_id.as_str()).collect::<Vec<_>>().join(", ");
+			state.create_tab_for_rooms(title, rooms)
+		}
 
 		fn build_tab_content(t: &UiTab, state: &mut AppState) -> TabId {
 			let id = state.create_tab_for_rooms(t.title.clone(), t.rooms.clone());
@@ -199,7 +237,12 @@ impl UiRootState {
 
 			for (pid, lp) in pane_states {
 				if let Some(ps) = panes.get_mut(pid) {
-					ps.tab_id = Some(id);
+					let pane_tab = if lp.rooms.is_empty() {
+						id
+					} else {
+						ensure_tab_for_rooms(state, lp.rooms.clone())
+					};
+					ps.tab_id = Some(pane_tab);
 					ps.join_raw = lp.join_raw;
 					ps.composer = lp.composer;
 				}
@@ -231,9 +274,11 @@ impl UiRootState {
 			id
 		}
 
+		let mut keep_ids: Vec<TabId> = Vec::new();
 		for (i, t) in self.tabs.iter().enumerate() {
 			let id = build_tab_content(t, &mut app.state);
 			app.state.tab_order.push(id);
+			keep_ids.push(id);
 			if i == self.selected_tab_index {
 				app.state.selected_tab_id = Some(id);
 			}
@@ -259,14 +304,18 @@ impl UiRootState {
 			app.state.pending_restore_windows.push(win_model);
 		}
 
+		{
+			let keep: std::collections::HashSet<TabId> = keep_ids.into_iter().collect();
+			app.state.tab_order.retain(|id| keep.contains(id));
+			let mut seen = std::collections::HashSet::new();
+			app.state.tab_order.retain(|id| seen.insert(*id));
+		}
+
 		if let Some(geo) = &self.geometry {
 			app.state.main_window_geometry = geo.clone();
 		}
 
-		if app.state.tabs.is_empty() {
-			let id = app.state.create_tab_for_rooms(t!("main.welcome"), Vec::new());
-			app.state.selected_tab_id = Some(id);
-		} else if app.state.selected_tab_id.is_none() && !app.state.tab_order.is_empty() {
+		if app.state.selected_tab_id.is_none() && !app.state.tab_order.is_empty() {
 			app.state.selected_tab_id = Some(app.state.tab_order[0]);
 		}
 	}
@@ -315,6 +364,8 @@ pub enum UiAxis {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct UiPane {
+	#[serde(default)]
+	pub rooms: Vec<chatty_domain::RoomKey>,
 	#[serde(default)]
 	pub join_raw: String,
 	#[serde(default)]

@@ -16,4 +16,4 @@ mod update;
 pub use message::Message;
 pub use model::Chatty;
 pub use run::run;
-pub use types::{InsertTarget, Page, PendingCommand, PlatformChoice, ShortcutKeyChoice, SplitLayoutChoice, ThemeChoice};
+pub use types::{InsertTarget, Page, PlatformChoice, ShortcutKeyChoice, SplitLayoutChoice, ThemeChoice};

@@ -1,19 +1,16 @@
 use chatty_domain::RoomKey;
-use iced::widget::{button, column, container, pane_grid, row, rule, scrollable, svg, text, text_input};
+use iced::widget::{button, column, container, pane_grid, row, rule, scrollable, text, text_input};
 use iced::{Alignment, Background, Border, Element, Length, Shadow, Task};
 use rust_i18n::t;
 
 use super::chat_message::ChatMessageView;
 use crate::app::state::ConnectionStatus;
 use crate::app::{Chatty, InsertTarget, Message};
-use crate::assets::svg_handle;
 use crate::theme::Palette;
 use crate::ui::components::tab::{ChatItem, TabId, TabModel};
 
 #[derive(Debug, Clone)]
 pub enum ChatPaneMessage {
-	JoinChanged(String),
-	JoinPressed,
 	ComposerChanged(String),
 	SendPressed,
 }
@@ -42,17 +39,17 @@ impl ChatPane {
 
 	pub fn update(&mut self, pane: pane_grid::Pane, message: ChatPaneMessage, app: &mut Chatty) -> Task<Message> {
 		match message {
-			ChatPaneMessage::JoinChanged(v) => {
-				self.join_raw = v;
-				Task::none()
-			}
-			ChatPaneMessage::JoinPressed => app.update_pane_join_pressed(pane),
 			ChatPaneMessage::ComposerChanged(v) => {
 				self.composer = v;
 				app.save_ui_layout();
 				Task::none()
 			}
-			ChatPaneMessage::SendPressed => app.update_pane_send_pressed(pane),
+			ChatPaneMessage::SendPressed => {
+				let task = app.update_pane_send_pressed(pane);
+				self.composer.clear();
+				app.save_ui_layout();
+				task
+			}
 		}
 	}
 
@@ -74,7 +71,7 @@ impl ChatPane {
 
 		let body: Element<'a, Message> = match self.tab_id.and_then(|tid| app.state.tabs.get(&tid)) {
 			Some(tab_ref) => self.view_subscribed_pane(app, tab, pane, tab_ref, palette),
-			None => self.view_unsubscribed_pane(app, tab, pane, palette),
+			None => self.view_unsubscribed_pane(app, pane, palette),
 		};
 
 		let pane_body = container(body)
@@ -118,12 +115,7 @@ impl ChatPane {
 			platforms.insert(room.platform);
 		}
 		for platform in platforms {
-			let has_identity = app
-				.state
-				.gui_settings()
-				.identities
-				.iter()
-				.any(|id| id.platform == platform && id.enabled);
+			let has_identity = app.state.gui_settings().identities.iter().any(|id| id.platform == platform);
 			if !has_identity {
 				let warning_text = match platform {
 					chatty_domain::Platform::Twitch => t!("main.warning_no_twitch_login"),
@@ -145,7 +137,6 @@ impl ChatPane {
 			}
 		}
 
-		let emotes_map = app.assets.get_emotes_for_target(&app.state, &tab_ref.target);
 		let badges_map = app.assets.get_badges_for_target(&app.state, &tab_ref.target);
 
 		let is_focused = is_focused_at(pane, tab);
@@ -154,23 +145,14 @@ impl ChatPane {
 		for item in tab_ref.log.items.iter().skip(start_index) {
 			match item {
 				ChatItem::ChatMessage(m) => {
+					let room_target = crate::ui::components::tab::TabTarget(vec![m.room.clone()]);
+					let emotes_map = app.assets.get_emotes_for_target(&app.state, &room_target);
 					col = col.push(
-						ChatMessageView::new(app, m, palette, is_focused, emotes_map.clone(), badges_map.clone()).view(),
+						ChatMessageView::new(app, m.as_ref(), palette, is_focused, emotes_map, badges_map.clone()).view(),
 					);
 				}
 				ChatItem::SystemNotice(n) => {
 					col = col.push(text(format!("{} {}", t!("log.system_label"), n.text)).color(palette.system_text));
-				}
-				ChatItem::Lagged(l) => {
-					col = col.push(
-						text(format!(
-							"{} dropped={} {}",
-							t!("log.lagged_label"),
-							l.dropped,
-							l.detail.clone().unwrap_or_default()
-						))
-						.color(palette.system_text),
-					);
 				}
 			}
 		}
@@ -179,9 +161,11 @@ impl ChatPane {
 		let col = col.push(end_marker);
 
 		let log_id = format!("log-{:?}", pane);
-		let log = scrollable(col).id(log_id).height(Length::Fill).width(Length::Fill);
-
-		let join_row = render_join_row(pane, self, is_active_join(pane, app, tab), palette);
+		let log = scrollable(col)
+			.id(log_id)
+			.on_scroll(move |viewport| Message::ChatLogScrolled(pane, viewport))
+			.height(Length::Fill)
+			.width(Length::Fill);
 
 		let restrictions = self.get_room_restrictions(app, &rooms);
 		let placeholder = self.get_composer_placeholder(connected, &rooms, can_send, &restrictions);
@@ -227,25 +211,16 @@ impl ChatPane {
 
 		let composer = row![input_and_caret, send_btn].spacing(8).align_y(Alignment::Center);
 
-		column![log, rule::horizontal(1), join_row, composer]
-			.spacing(8)
-			.padding(8)
-			.into()
+		column![log, rule::horizontal(1), composer].spacing(8).padding(8).into()
 	}
 
 	fn view_unsubscribed_pane<'a>(
 		&'a self,
 		app: &'a Chatty,
-		tab: &'a TabModel,
 		pane: pane_grid::Pane,
 		palette: Palette,
 	) -> Element<'a, Message> {
 		let connected = matches!(app.state.connection, ConnectionStatus::Connected { .. });
-		let is_join_active = app.state.ui.vim.insert_mode
-			&& app.state.ui.vim.insert_target == Some(InsertTarget::Join)
-			&& tab.focused_pane == Some(pane);
-
-		let join_row = render_join_row(pane, self, is_join_active, palette);
 		let placeholder = if !connected {
 			t!("main.placeholder_connect_to_send").to_string()
 		} else {
@@ -270,11 +245,12 @@ impl ChatPane {
 		let end_marker = container(text("")).id(format!("end-{:?}", pane));
 		let col = info.push(end_marker);
 		let log_id = format!("log-{:?}", pane);
-		let log = scrollable(col).id(log_id).height(Length::Fill).width(Length::Fill);
-		column![log, rule::horizontal(1), join_row, composer]
-			.spacing(8)
-			.padding(8)
-			.into()
+		let log = scrollable(col)
+			.id(log_id)
+			.on_scroll(move |viewport| Message::ChatLogScrolled(pane, viewport))
+			.height(Length::Fill)
+			.width(Length::Fill);
+		column![log, rule::horizontal(1), composer].spacing(8).padding(8).into()
 	}
 
 	fn get_room_restrictions(&self, app: &Chatty, rooms: &[chatty_domain::RoomKey]) -> Vec<String> {
@@ -334,54 +310,6 @@ impl ChatPane {
 	}
 }
 
-fn render_join_row<'a>(
-	pane: pane_grid::Pane,
-	state: &'a ChatPane,
-	is_active: bool,
-	palette: Palette,
-) -> Element<'a, Message> {
-	let join_placeholder = t!("main.join_placeholder").to_string();
-	let mut join = text_input(&join_placeholder, &state.join_raw)
-		.on_input(move |v| Message::PaneMessage(pane, ChatPaneMessage::JoinChanged(v)))
-		.width(Length::Fill)
-		.id(format!("join-{:?}", pane));
-	join = join.on_submit(Message::PaneMessage(pane, ChatPaneMessage::JoinPressed));
-
-	let input = row![join].spacing(4).align_y(Alignment::Center);
-	let input = container(input).style(move |_theme| container::Style {
-		text_color: Some(palette.text),
-		background: Some(Background::Color(if is_active {
-			palette.panel_bg_2
-		} else {
-			palette.chat_bg
-		})),
-		border: Border {
-			color: if is_active { palette.accent_blue } else { palette.border },
-			width: 1.0,
-			radius: 6.0.into(),
-		},
-		shadow: Shadow::default(),
-		snap: false,
-	});
-
-	row![
-		input,
-		button(row![svg(svg_handle("plus.svg")).width(14).height(14), text(t!("main.join_button"))].spacing(4))
-			.on_press(Message::PaneMessage(pane, ChatPaneMessage::JoinPressed))
-	]
-	.spacing(8)
-	.align_y(Alignment::Center)
-	.into()
-}
-
 fn is_focused_at(pane: pane_grid::Pane, tab: &TabModel) -> bool {
 	Some(pane) == tab.focused_pane
-}
-
-fn is_active_join(pane: pane_grid::Pane, app: &Chatty, tab: &TabModel) -> bool {
-	if let Some(crate::app::types::InsertTarget::Join) = app.state.ui.vim.insert_target {
-		tab.focused_pane == Some(pane)
-	} else {
-		false
-	}
 }

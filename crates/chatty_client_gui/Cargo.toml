@@ -1,6 +1,6 @@
 [package]
 name = "chatty_client_gui"
-version = "0.2.0"
+version = "0.3.0"
 build = "build.rs"
 edition.workspace = true
 license.workspace = true
@@ -21,7 +21,7 @@ dashmap = "6.1"
 dirs = { workspace = true }
 iced = { version = "0.14", features = ["image", "selector", "svg", "tokio", "advanced"] }
 image = { version = "0.25", default-features = false, features = ["gif", "webp", "png", "default-formats", "rayon"] }
-keyring = "3.6"
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 moka = { version = "0.12", features = ["sync"] }
 open = "5.3"
 rand = "0.9"

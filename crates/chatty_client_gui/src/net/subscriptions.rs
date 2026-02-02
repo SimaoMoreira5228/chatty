@@ -46,29 +46,6 @@ pub async fn reconcile_subscriptions_on_connect(
 	ensure_events_loop_started(session, events_task, ui_tx, cursor_by_topic).await
 }
 
-pub async fn subscribe_topics(
-	session: &mut BoxedSessionControl,
-	topics: Vec<String>,
-	cursor_by_topic: &Arc<Mutex<HashMap<String, u64>>>,
-	ui_tx: &mpsc::UnboundedSender<UiEvent>,
-	events_task: &mut Option<tokio::task::JoinHandle<()>>,
-) -> Result<(), String> {
-	let mut subs = Vec::with_capacity(topics.len());
-	{
-		let cursors = cursor_by_topic.lock().unwrap();
-		for topic in &topics {
-			subs.push((topic.clone(), *cursors.get(topic).unwrap_or(&0)));
-		}
-	}
-
-	session
-		.subscribe(subs)
-		.await
-		.map_err(|e| format!("subscribe failed: {}", map_core_err(e)))?;
-
-	ensure_events_loop_started(session, events_task, ui_tx, cursor_by_topic).await
-}
-
 pub async fn unsubscribe_topics(
 	session: &mut BoxedSessionControl,
 	topics: Vec<String>,

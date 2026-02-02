@@ -86,6 +86,7 @@ impl Chatty {
 				},
 			)),
 		};
+
 		let net = self.net.clone();
 		self.state.ui.active_overlay = None;
 		self.pending_commands.push(PendingCommand::Delete {
@@ -93,6 +94,8 @@ impl Chatty {
 			server_message_id: server_msg_id.clone(),
 			platform_message_id: platform_msg_id.clone(),
 		});
+
+		self.rebuild_pending_delete_keys();
 		Task::perform(
 			async move {
 				let res: Result<(), String> = net.send_command(cmd).await.map_err(|e| e.to_string());
@@ -189,6 +192,7 @@ impl Chatty {
 			let t = self.toast(e.clone());
 			self.state.push_notification(crate::app::state::UiNotificationKind::Error, e);
 			let _ = self.pending_commands.pop();
+			self.rebuild_pending_delete_keys();
 			return t;
 		}
 		Task::none()

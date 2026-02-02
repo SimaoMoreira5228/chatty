@@ -38,7 +38,7 @@ impl JoinModal {
 				self.platform = p;
 				Task::none()
 			}
-			JoinModalMessage::Submit => app.update_join_modal_submit(),
+			JoinModalMessage::Submit => app.update_join_modal_submit(self.clone()),
 			JoinModalMessage::Cancel => app.update_modal_dismissed(),
 		}
 	}

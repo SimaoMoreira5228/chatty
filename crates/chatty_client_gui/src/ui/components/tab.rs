@@ -1,9 +1,9 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use chatty_domain::RoomKey;
 use iced::widget::pane_grid;
 
-use crate::ui::components::chat_message::{ChatMessageUi, LaggedUi, SystemNoticeUi};
+use crate::ui::components::chat_message::{ChatMessageUi, SystemNoticeUi};
 use crate::ui::components::chat_pane::ChatPane;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -15,9 +15,8 @@ pub struct TabTarget(pub Vec<RoomKey>);
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub enum ChatItem {
-	ChatMessage(ChatMessageUi),
+	ChatMessage(Box<ChatMessageUi>),
 	SystemNotice(SystemNoticeUi),
-	Lagged(LaggedUi),
 }
 
 #[derive(Debug, Clone)]
@@ -34,11 +33,15 @@ impl ChatLog {
 		}
 	}
 
-	pub fn push(&mut self, item: ChatItem) {
+	pub fn push(&mut self, item: ChatItem) -> Vec<ChatItem> {
 		self.items.push_back(item);
+		let mut removed = Vec::new();
 		while self.items.len() > self.max_items {
-			self.items.pop_front();
+			if let Some(front) = self.items.pop_front() {
+				removed.push(front);
+			}
 		}
+		removed
 	}
 }
 
@@ -49,6 +52,7 @@ pub struct TabModel {
 	pub title: String,
 	pub target: TabTarget,
 	pub log: ChatLog,
+	pub user_counts: HashMap<String, usize>,
 	pub pinned: bool,
 	pub panes: pane_grid::State<ChatPane>,
 	pub focused_pane: Option<pane_grid::Pane>,

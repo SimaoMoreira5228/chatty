@@ -6,6 +6,7 @@ use crate::app::model::first_char_lower;
 use crate::app::net::recv_next;
 use crate::app::state::{ConnectionStatus, UiNotificationKind};
 use crate::app::subscription::shortcut_match;
+use crate::app::types::JoinTarget;
 use crate::app::{Chatty, InsertTarget, Message};
 use crate::settings;
 
@@ -22,13 +23,15 @@ impl Chatty {
 			}
 
 			if first_char_lower(&k.new_key) == ch {
-				self.split_spiral();
-				self.save_ui_layout();
-				return Task::none();
+				return self.update_open_join_modal(JoinTarget::Split);
 			}
 
 			if first_char_lower(&k.reconnect_key) == ch {
-				let gs = self.state.gui_settings().clone();
+				let mut gs = self.state.gui_settings().clone();
+				if !chatty_client_core::ClientConfigV1::server_endpoint_locked() {
+					gs.server_endpoint_quic = self.state.ui.server_endpoint_quic.clone();
+				}
+				gs.server_auth_token = self.state.ui.server_auth_token.clone();
 
 				let cfg = match settings::build_client_config(&gs) {
 					Ok(c) => c,
@@ -41,7 +44,7 @@ impl Chatty {
 
 				self.state.set_connection_status(ConnectionStatus::Connecting);
 				let net = self.net.clone();
-				return Task::perform(async move { net.connect(cfg).await }, |_| Message::ConnectFinished(Ok(())));
+				return Task::perform(async move { net.connect(cfg).await }, Message::ConnectFinished);
 			}
 		}
 
@@ -85,21 +88,15 @@ impl Chatty {
 				let connected = matches!(self.state.connection, crate::app::state::ConnectionStatus::Connected { .. });
 				use_composer = connected && !rooms.is_empty() && can_send;
 			}
-			self.state.ui.vim.enter_insert_mode(if use_composer {
-				InsertTarget::Composer
-			} else {
-				InsertTarget::Join
-			});
-			let toast_cmd = self.toast(t!("insert_mode").to_string());
-			let id = if use_composer {
-				format!("composer-{:?}", focused)
-			} else {
-				format!("join-{:?}", focused)
-			};
+			if use_composer {
+				self.state.ui.vim.enter_insert_mode(InsertTarget::Composer);
+				let toast_cmd = self.toast(t!("insert_mode").to_string());
+				let focus_cmd = iced::widget::operation::focus(format!("composer-{:?}", focused));
+				let recv_cmd = Task::perform(recv_next(self.net_rx.clone()), Message::NetPolled);
+				return Task::batch(vec![toast_cmd, focus_cmd, recv_cmd]);
+			}
 
-			let focus_cmd = iced::widget::operation::focus(id);
-			let recv_cmd = Task::perform(recv_next(self.net_rx.clone()), Message::NetPolled);
-			return Task::batch(vec![toast_cmd, focus_cmd, recv_cmd]);
+			return self.update_open_join_modal(JoinTarget::Split);
 		}
 
 		Task::none()
@@ -215,11 +212,6 @@ impl Chatty {
 									);
 								}
 							}
-							Some(InsertTarget::Join) => {
-								if !p.join_raw.trim().is_empty() {
-									return self.update_pane_join_pressed(focused);
-								}
-							}
 							None => {}
 						}
 					}
@@ -239,16 +231,10 @@ impl Chatty {
 					let insert_target = self.state.ui.vim.insert_target;
 
 					if let Some(tab) = self.selected_tab_mut() {
-						if let Some(p) = tab.panes.get_mut(focused) {
-							match insert_target {
-								Some(InsertTarget::Composer) => {
-									p.composer.pop();
-								}
-								Some(InsertTarget::Join) => {
-									p.join_raw.pop();
-								}
-								_ => {}
-							}
+						if let Some(p) = tab.panes.get_mut(focused)
+							&& let Some(InsertTarget::Composer) = insert_target
+						{
+							p.composer.pop();
 						}
 						self.save_ui_layout();
 					}

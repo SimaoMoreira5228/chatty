@@ -10,16 +10,6 @@ use crate::assets::svg_handle;
 use crate::theme;
 
 pub fn view(app: &Chatty, palette: theme::Palette) -> Element<'_, Message> {
-	let status_text = match &app.state.connection {
-		ConnectionStatus::Disconnected { .. } => t!("status.disconnected").to_string(),
-		ConnectionStatus::Connecting => t!("status.connecting").to_string(),
-		ConnectionStatus::Reconnecting {
-			attempt,
-			next_retry_in_ms,
-		} => format!("{} (attempt {attempt}, {next_retry_in_ms}ms)", t!("status.reconnecting")),
-		ConnectionStatus::Connected { server } => format!("{}: {server}", t!("status.connected")),
-	};
-
 	let icon_button = |icon: &'static str, msg: Message| button(svg(svg_handle(icon)).width(16).height(16)).on_press(msg);
 
 	let conn_button = match &app.state.connection {
@@ -53,20 +43,6 @@ pub fn view(app: &Chatty, palette: theme::Palette) -> Element<'_, Message> {
 		.on_press(Message::DisconnectPressed),
 	};
 
-	let status_chip = container(text(status_text).color(palette.text_dim))
-		.padding([2, 8])
-		.style(move |_theme| container::Style {
-			text_color: Some(palette.text_dim),
-			background: Some(Background::Color(palette.app_bg)),
-			border: Border {
-				color: palette.border,
-				width: 1.0,
-				radius: 999.0.into(),
-			},
-			shadow: Shadow::default(),
-			snap: false,
-		});
-
 	let insert_chip = if app.state.ui.vim.insert_mode {
 		container(text(t!("topbar.insert")).color(palette.text))
 			.padding([2, 8])
@@ -89,6 +65,7 @@ pub fn view(app: &Chatty, palette: theme::Palette) -> Element<'_, Message> {
 	if app.state.ui.page != Page::Main {
 		right = right.push(icon_button("chevron-left.svg", Message::Navigate(Page::Main)));
 	}
+
 	right = right
 		.push(icon_button("split.svg", Message::SplitPressed))
 		.push(icon_button("close.svg", Message::CloseFocused))
@@ -101,7 +78,6 @@ pub fn view(app: &Chatty, palette: theme::Palette) -> Element<'_, Message> {
 		svg(svg_handle("logo.svg")).width(16).height(16),
 		text(t!("app.name")).color(palette.text_dim),
 		rule::vertical(1),
-		status_chip,
 		insert_chip,
 	]
 	.spacing(10)

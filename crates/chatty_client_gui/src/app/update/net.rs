@@ -14,6 +14,49 @@ use crate::settings;
 use crate::ui::components::chat_message::{AssetBundleUi, ChatMessageUi};
 
 impl Chatty {
+	pub fn update_chat_message_prepared(&mut self, msg: ChatMessageUi) -> Task<Message> {
+		let key = msg.key.clone();
+		self.message_text_editors.entry(key).or_default();
+		let tabs = self.state.push_message(msg);
+
+		if self.state.ui.follow_end {
+			for tid in tabs {
+				let mut panes_with_tab: Vec<pane_grid::Pane> = Vec::new();
+				for tab in self.state.tabs.values() {
+					for (pane, p) in tab.panes.iter() {
+						if p.tab_id == Some(tid) {
+							panes_with_tab.push(*pane);
+						}
+					}
+				}
+
+				if !panes_with_tab.is_empty() {
+					let do_focus = match self.state.ui.last_focus {
+						Some(ts) => ts.elapsed() >= Duration::from_millis(250),
+						None => true,
+					};
+
+					let recv_cmd = Task::perform(recv_next(self.net_rx.clone()), Message::NetPolled);
+
+					if do_focus {
+						self.state.ui.last_focus = Some(Instant::now());
+						let mut cmds = Vec::new();
+						for pane in panes_with_tab {
+							let id = format!("log-{:?}", pane);
+							cmds.push(iced::widget::operation::snap_to_end(id));
+						}
+						cmds.push(recv_cmd);
+						return Task::batch(cmds);
+					} else {
+						return recv_cmd;
+					}
+				}
+			}
+		}
+
+		Task::none()
+	}
+
 	pub fn update_server_endpoint_changed(&mut self, v: String) -> Task<Message> {
 		self.state.ui.server_endpoint_quic = v;
 		Task::none()
@@ -29,6 +72,7 @@ impl Chatty {
 		if !chatty_client_core::ClientConfigV1::server_endpoint_locked() {
 			gs.server_endpoint_quic = self.state.ui.server_endpoint_quic.clone();
 		}
+		gs.server_auth_token = self.state.ui.server_auth_token.clone();
 
 		let cfg = match settings::build_client_config(&gs) {
 			Ok(c) => c,
@@ -83,7 +127,19 @@ impl Chatty {
 			return Task::none();
 		};
 
-		tracing::debug!(?ev, "NetPolled event received in UI");
+		let event_kind = match ev {
+			UiEvent::Connecting => "connecting",
+			UiEvent::Reconnecting { .. } => "reconnecting",
+			UiEvent::Connected { .. } => "connected",
+			UiEvent::Disconnected { .. } => "disconnected",
+			UiEvent::ErrorWithServer { .. } => "error",
+			UiEvent::ChatMessage { .. } => "chat_message",
+			UiEvent::RoomPermissions { .. } => "room_permissions",
+			UiEvent::RoomState { .. } => "room_state",
+			UiEvent::AssetBundle { .. } => "asset_bundle",
+			UiEvent::CommandResult { .. } => "command_result",
+		};
+		tracing::debug!(event_kind, "NetPolled event received in UI");
 
 		let mut pre_task: Option<Task<Message>> = None;
 		if let Some(room) = self.collect_orphaned_tab() {
@@ -101,7 +157,7 @@ impl Chatty {
 			| UiEvent::Connected { .. }
 			| UiEvent::Disconnected { .. } => self.handle_connection_event(ev),
 			UiEvent::ErrorWithServer { .. } => self.handle_error_event(ev),
-			UiEvent::ChatMessage { .. } | UiEvent::TopicLagged { .. } => self.handle_chat_event(ev),
+			UiEvent::ChatMessage { .. } => self.handle_chat_event(ev),
 			UiEvent::RoomPermissions { .. } | UiEvent::RoomState { .. } => self.handle_room_event(ev),
 			UiEvent::AssetBundle { .. } => self.handle_asset_event(ev),
 			UiEvent::CommandResult { .. } => self.handle_command_result_event(ev),
@@ -220,73 +276,32 @@ impl Chatty {
 			} => {
 				if let Ok(room) = RoomTopic::parse(&topic) {
 					let _tid = self.ensure_tab_for_rooms(vec![room.clone()]);
+					let tokens = tokenize_message_text(&text);
+					let time = SystemTime::now();
+					let display_name = author_display.clone().unwrap_or_else(|| author_login.clone());
+					let key = build_message_key(&room, server_message_id.as_deref(), platform_message_id.as_deref(), time);
 					let msg = ChatMessageUi {
-						time: SystemTime::now(),
+						time,
 						platform: room.platform,
 						room: room.clone(),
+						key,
 						server_message_id,
 						author_id,
 						user_login: author_login,
 						user_display: author_display,
+						display_name,
 						text,
+						tokens,
 						badge_ids,
 						emotes,
 						platform_message_id,
 					};
-
-					let key = msg.key();
-					let selection_text = ChatMessageUi::selection_text(&msg.text);
-					self.message_text_editors
-						.entry(key)
-						.or_insert_with(|| iced::widget::text_editor::Content::with_text(&selection_text));
-					let tabs = self.state.push_message(msg);
-
-					if self.state.ui.follow_end {
-						for tid in tabs {
-							let mut panes_with_tab: Vec<pane_grid::Pane> = Vec::new();
-							for tab in self.state.tabs.values() {
-								for (pane, p) in tab.panes.iter() {
-									if p.tab_id == Some(tid) {
-										panes_with_tab.push(*pane);
-									}
-								}
-							}
-
-							if !panes_with_tab.is_empty() {
-								let do_focus = match self.state.ui.last_focus {
-									Some(ts) => ts.elapsed() >= Duration::from_millis(250),
-									None => true,
-								};
-
-								let recv_cmd = Task::perform(recv_next(self.net_rx.clone()), Message::NetPolled);
-
-								if do_focus {
-									self.state.ui.last_focus = Some(Instant::now());
-									let mut cmds = Vec::new();
-									for pane in panes_with_tab {
-										let id = format!("log-{:?}", pane);
-										cmds.push(iced::widget::operation::snap_to_end(id));
-									}
-									cmds.push(recv_cmd);
-									return Some(Task::batch(cmds));
-								} else {
-									return Some(recv_cmd);
-								}
-							}
-						}
-					}
-					None
+					Some(self.update_chat_message_prepared(msg))
 				} else {
 					self.state
 						.push_notification(UiNotificationKind::Warning, format!("{}: {topic}", t!("unparseable_topic")));
 					None
 				}
-			}
-			UiEvent::TopicLagged { topic, dropped, detail } => {
-				if let Ok(room) = RoomTopic::parse(&topic) {
-					let _ = self.state.push_lagged(&room, dropped, Some(detail));
-				}
-				None
 			}
 			_ => unreachable!("handle_chat_event called with non-chat event"),
 		}
@@ -362,8 +377,6 @@ impl Chatty {
 		} = ev
 		{
 			info!(topic = %topic, cache_key = %cache_key, emote_count = emotes.len(), badge_count = badges.len(), "received AssetBundle UiEvent");
-			self.assets.emotes_cache.invalidate_all();
-			self.assets.badges_cache.invalidate_all();
 			let ck = cache_key.clone();
 			self.state.asset_bundles.insert(
 				ck.clone(),
@@ -443,8 +456,30 @@ impl Chatty {
 						crate::app::types::PendingCommand::Timeout { .. } | crate::app::types::PendingCommand::Ban { .. }
 					)
 				});
+
+				self.rebuild_pending_delete_keys();
 			}
 		}
 		None
 	}
+}
+
+fn tokenize_message_text(text: &str) -> Vec<String> {
+	text.split_whitespace().map(|t| t.to_string()).collect()
+}
+
+fn build_message_key(
+	room: &RoomKey,
+	server_message_id: Option<&str>,
+	platform_message_id: Option<&str>,
+	time: SystemTime,
+) -> String {
+	let time = time.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+	format!(
+		"{}:{}:{}:{}",
+		room,
+		server_message_id.unwrap_or(""),
+		platform_message_id.unwrap_or(""),
+		time
+	)
 }

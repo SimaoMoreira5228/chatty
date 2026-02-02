@@ -2,10 +2,10 @@ use std::time::Instant;
 
 use chatty_domain::RoomKey;
 use iced::keyboard;
-use iced::widget::{pane_grid, text_editor};
+use iced::widget::{pane_grid, scrollable, text_editor};
 
 use crate::app::state::TabId;
-use crate::app::types::Page;
+use crate::app::types::{JoinTarget, Page};
 use crate::ui::components::chat_pane::ChatPaneMessage;
 use crate::ui::settings::SettingsMessage;
 use crate::ui::users_view::UsersViewMessage;
@@ -20,12 +20,14 @@ pub enum Message {
 	UsersViewMessage(UsersViewMessage),
 	CursorMoved(f32, f32),
 	UserScrolled,
+	ChatLogScrolled(pane_grid::Pane, scrollable::Viewport),
 	AnimationTick(Instant),
 
 	CharPressed(char, keyboard::Modifiers),
 	NamedKeyPressed(iced::keyboard::key::Named),
 
 	ModalDismissed,
+	OpenJoinModal(JoinTarget),
 	ConnectPressed,
 	DisconnectPressed,
 	ConnectFinished(Result<(), String>),

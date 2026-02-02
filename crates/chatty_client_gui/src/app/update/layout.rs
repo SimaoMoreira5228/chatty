@@ -168,7 +168,10 @@ impl Chatty {
 		{
 			toast = self.toast(t!("import_cancelled").to_string());
 		}
+
 		self.state.ui.active_overlay = None;
+		self.state.ui.overlay_dismissed = true;
+		self.state.ui.pending_join_target = None;
 		toast
 	}
 }

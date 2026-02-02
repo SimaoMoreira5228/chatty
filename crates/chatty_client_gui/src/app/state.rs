@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 
 use std::collections::{HashMap, VecDeque};
-use std::time::{Instant, SystemTime};
+use std::time::Instant;
 
 use chatty_client_core::ClientConfigV1;
 use chatty_domain::{Platform, RoomKey};
@@ -10,10 +10,10 @@ use iced::keyboard;
 use iced::widget::pane_grid;
 use tracing::{debug, info};
 
-use crate::app::types::{Page, SettingsCategory};
+use crate::app::types::{JoinTarget, Page, SettingsCategory};
 use crate::settings;
 use crate::settings::GuiSettings;
-pub use crate::ui::components::chat_message::{ChatMessageUi, LaggedUi};
+pub use crate::ui::components::chat_message::ChatMessageUi;
 use crate::ui::components::chat_pane::ChatPane;
 pub use crate::ui::components::room::{JoinRequest, RoomPermissions, RoomStateUi};
 pub use crate::ui::components::tab::{ChatItem, ChatLog, TabId, TabModel, TabTarget};
@@ -54,9 +54,11 @@ pub struct UiState {
 	pub max_log_items_raw: String,
 	pub users_view: crate::ui::users_view::UsersView,
 	pub active_overlay: Option<crate::ui::modals::ActiveOverlay>,
+	pub overlay_dismissed: bool,
 	pub main_window_id: Option<iced::window::Id>,
 	pub settings_view: crate::ui::settings::SettingsView,
 	pub pending_auto_connect_cfg: Option<ClientConfigV1>,
+	pub pending_join_target: Option<JoinTarget>,
 }
 
 impl Default for UiState {
@@ -79,9 +81,11 @@ impl Default for UiState {
 			max_log_items_raw: String::new(),
 			users_view: crate::ui::users_view::UsersView::new(),
 			active_overlay: None,
+			overlay_dismissed: false,
 			main_window_id: None,
 			settings_view: crate::ui::settings::SettingsView::new(SettingsCategory::General),
 			pending_auto_connect_cfg: None,
+			pending_join_target: None,
 		}
 	}
 }
@@ -221,6 +225,7 @@ impl AppState {
 				title: title.into(),
 				target: TabTarget(rooms),
 				log: ChatLog::new(self.settings.max_log_items),
+				user_counts: HashMap::new(),
 				pinned: false,
 				panes,
 				focused_pane: Some(root),
@@ -253,7 +258,21 @@ impl AppState {
 
 		for tid in &matching_tabs {
 			if let Some(tab) = self.tabs.get_mut(tid) {
-				tab.log.push(item.clone());
+				let removed = tab.log.push(item.clone());
+				for removed_item in removed {
+					if let ChatItem::ChatMessage(m) = removed_item
+						&& let Some(count) = tab.user_counts.get_mut(&m.user_login)
+					{
+						*count = count.saturating_sub(1);
+						if *count == 0 {
+							tab.user_counts.remove(&m.user_login);
+						}
+					}
+				}
+
+				if let ChatItem::ChatMessage(m) = &item {
+					*tab.user_counts.entry(m.user_login.clone()).or_insert(0) += 1;
+				}
 			}
 		}
 
@@ -262,7 +281,7 @@ impl AppState {
 
 	pub fn push_message(&mut self, msg: ChatMessageUi) -> Vec<TabId> {
 		let room = msg.room.clone();
-		self.push_chat_item_for_room(&room, ChatItem::ChatMessage(msg))
+		self.push_chat_item_for_room(&room, ChatItem::ChatMessage(Box::new(msg)))
 	}
 
 	pub fn remove_message(&mut self, room: &RoomKey, server_message_id: Option<&str>, platform_message_id: Option<&str>) {
@@ -285,7 +304,14 @@ impl AppState {
 							{
 								should_remove = true;
 							}
-							if !should_remove {
+							if should_remove {
+								if let Some(count) = tab.user_counts.get_mut(&m.user_login) {
+									*count = count.saturating_sub(1);
+									if *count == 0 {
+										tab.user_counts.remove(&m.user_login);
+									}
+								}
+							} else {
 								new_items.push_back(ChatItem::ChatMessage(m));
 							}
 						} else {
@@ -297,17 +323,6 @@ impl AppState {
 			}
 			tab.log.items = new_items;
 		}
-	}
-
-	pub fn push_lagged(&mut self, room: &RoomKey, dropped: u64, detail: Option<String>) -> Vec<TabId> {
-		self.push_chat_item_for_room(
-			room,
-			ChatItem::Lagged(LaggedUi {
-				time: SystemTime::now(),
-				dropped,
-				detail,
-			}),
-		)
 	}
 
 	pub fn set_connection_status(&mut self, st: ConnectionStatus) {

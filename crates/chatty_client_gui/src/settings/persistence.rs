@@ -169,51 +169,60 @@ pub fn build_client_config(settings: &GuiSettings) -> Result<ClientConfigV1, Str
 		cfg.auth_token = Some(token.to_string());
 	}
 
-	let active_identity = settings
-		.active_identity
-		.as_ref()
-		.and_then(|active_id| settings.identities.iter().find(|id| id.id == *active_id && id.enabled));
-
-	if let Some(identity) = active_identity {
+	let mut twitch_identity = None;
+	let mut kick_identity = None;
+	for identity in settings.identities.iter().rev() {
 		match identity.platform {
 			Platform::Twitch => {
-				let token = identity.oauth_token.trim();
-				if !token.is_empty() {
-					cfg.user_oauth_token = Some(token.to_string());
-				}
-
-				let client_id = identity.client_id.trim();
-				if !client_id.is_empty() {
-					cfg.twitch_client_id = Some(client_id.to_string());
-				}
-
-				let user_id = identity.user_id.trim();
-				if !user_id.is_empty() {
-					cfg.twitch_user_id = Some(user_id.to_string());
-				}
-
-				let username = identity.username.trim();
-				if !username.is_empty() {
-					cfg.twitch_username = Some(username.to_string());
+				if twitch_identity.is_none() {
+					twitch_identity = Some(identity);
 				}
 			}
 			Platform::Kick => {
-				let token = identity.oauth_token.trim();
-				if !token.is_empty() {
-					cfg.kick_user_oauth_token = Some(token.to_string());
-				}
-
-				let user_id = identity.user_id.trim();
-				if !user_id.is_empty() {
-					cfg.kick_user_id = Some(user_id.to_string());
-				}
-
-				let username = identity.username.trim();
-				if !username.is_empty() {
-					cfg.kick_username = Some(username.to_string());
+				if kick_identity.is_none() {
+					kick_identity = Some(identity);
 				}
 			}
 			Platform::YouTube => {}
+		}
+	}
+
+	if let Some(identity) = twitch_identity {
+		let token = identity.oauth_token.trim();
+		if !token.is_empty() {
+			cfg.user_oauth_token = Some(token.to_string());
+		}
+
+		let client_id = identity.client_id.trim();
+		if !client_id.is_empty() {
+			cfg.twitch_client_id = Some(client_id.to_string());
+		}
+
+		let user_id = identity.user_id.trim();
+		if !user_id.is_empty() {
+			cfg.twitch_user_id = Some(user_id.to_string());
+		}
+
+		let username = identity.username.trim();
+		if !username.is_empty() {
+			cfg.twitch_username = Some(username.to_string());
+		}
+	}
+
+	if let Some(identity) = kick_identity {
+		let token = identity.oauth_token.trim();
+		if !token.is_empty() {
+			cfg.kick_user_oauth_token = Some(token.to_string());
+		}
+
+		let user_id = identity.user_id.trim();
+		if !user_id.is_empty() {
+			cfg.kick_user_id = Some(user_id.to_string());
+		}
+
+		let username = identity.username.trim();
+		if !username.is_empty() {
+			cfg.kick_username = Some(username.to_string());
 		}
 	}
 

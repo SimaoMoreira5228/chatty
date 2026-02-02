@@ -24,7 +24,15 @@ impl Chatty {
 			for tab in self.state.tabs.values_mut() {
 				tab.log.max_items = n;
 				while tab.log.items.len() > n {
-					tab.log.items.pop_front();
+					if let Some(removed) = tab.log.items.pop_front()
+						&& let crate::ui::components::tab::ChatItem::ChatMessage(m) = removed
+						&& let Some(count) = tab.user_counts.get_mut(&m.user_login)
+					{
+						*count = count.saturating_sub(1);
+						if *count == 0 {
+							tab.user_counts.remove(&m.user_login);
+						}
+					}
 				}
 			}
 		}
@@ -169,38 +177,9 @@ impl Chatty {
 		Task::none()
 	}
 
-	pub fn update_identity_use(&mut self, id: String) -> Task<Message> {
-		let mut gs = self.state.gui_settings().clone();
-		gs.active_identity = Some(id);
-		self.state.set_gui_settings(gs);
-		Task::none()
-	}
-
-	pub fn update_identity_toggle(&mut self, id: String) -> Task<Message> {
-		let mut gs = self.state.gui_settings().clone();
-		if let Some(identity) = gs.identities.iter_mut().find(|i| i.id == id) {
-			identity.enabled = !identity.enabled;
-			if !identity.enabled && gs.active_identity.as_deref() == Some(identity.id.as_str()) {
-				gs.active_identity = None;
-			}
-			self.state.set_gui_settings(gs);
-		}
-		Task::none()
-	}
-
 	pub fn update_identity_remove(&mut self, id: String) -> Task<Message> {
 		let mut gs = self.state.gui_settings().clone();
 		gs.identities.retain(|i| i.id != id);
-		if gs.active_identity.as_deref() == Some(id.as_str()) {
-			gs.active_identity = None;
-		}
-		self.state.set_gui_settings(gs);
-		Task::none()
-	}
-
-	pub fn update_clear_identity(&mut self) -> Task<Message> {
-		let mut gs = self.state.gui_settings().clone();
-		gs.active_identity = None;
 		self.state.set_gui_settings(gs);
 		Task::none()
 	}

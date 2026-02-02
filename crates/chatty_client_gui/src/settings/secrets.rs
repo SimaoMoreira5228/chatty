@@ -33,10 +33,12 @@ pub fn store_secret(name: &str, value: &str) -> Result<(), String> {
 	} else {
 		std::collections::HashMap::new()
 	};
+
 	map.insert(name.to_string(), value.to_string());
 	if let Some(parent) = path.parent() {
 		let _ = std::fs::create_dir_all(parent);
 	}
+
 	match serde_json::to_string_pretty(&map) {
 		Ok(s) => match std::fs::write(&path, s) {
 			Ok(()) => {
@@ -72,5 +74,6 @@ pub fn read_secret(name: &str) -> Option<String> {
 		info!("read secret '{}' from file {}", name, path.display());
 		return Some(v.clone());
 	}
+
 	None
 }

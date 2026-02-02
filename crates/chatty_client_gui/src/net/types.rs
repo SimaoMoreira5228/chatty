@@ -30,11 +30,6 @@ pub enum UiEvent {
 		badge_ids: Vec<String>,
 		emotes: Vec<AssetRefUi>,
 	},
-	TopicLagged {
-		topic: String,
-		dropped: u64,
-		detail: String,
-	},
 	RoomPermissions {
 		topic: String,
 		can_send: bool,

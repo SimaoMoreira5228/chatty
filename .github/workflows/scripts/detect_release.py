@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import os
 import subprocess
-import sys
 import tomllib
 from pathlib import Path
 
@@ -57,8 +56,18 @@ def main() -> None:
   output_file = os.environ.get("GITHUB_OUTPUT", "")
 
   if not before_sha:
-    print("Error: BEFORE_SHA environment variable not set", file=sys.stderr)
-    sys.exit(1)
+    try:
+      result = subprocess.run(
+        ["git", "rev-parse", "HEAD^"],
+        capture_output=True,
+        text=True,
+        check=True,
+      )
+      before_sha = result.stdout.strip()
+      if not before_sha:
+        before_sha = "0" * 40
+    except subprocess.CalledProcessError:
+      before_sha = "0" * 40
 
   server_release_needed = False
   client_release_needed = False

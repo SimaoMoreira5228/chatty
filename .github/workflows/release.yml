@@ -54,7 +54,8 @@ jobs:
             libgl1-mesa-dev \
             libvulkan-dev \
             libwayland-dev \
-            libasound2-dev
+            libasound2-dev \
+            libdbus-1-dev
       - name: Build client (linux)
         env:
           CHATTY_SERVER_ENDPOINT: ${{ secrets.CHATTY_SERVER_ENDPOINT }}
@@ -107,7 +108,8 @@ jobs:
             libgl1-mesa-dev \
             libvulkan-dev \
             libwayland-dev \
-            libasound2-dev
+            libasound2-dev \
+            libdbus-1-dev
       - name: Build client (linux/arm)
         env:
           CHATTY_SERVER_ENDPOINT: ${{ secrets.CHATTY_SERVER_ENDPOINT }}

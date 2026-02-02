@@ -118,29 +118,4 @@ impl Chatty {
 			tab.focused_pane = Some(target_pane);
 		}
 	}
-
-	pub(crate) fn split_linear(&mut self) {
-		let tab_id = self.selected_tab_id();
-		let Some(tab) = self.selected_tab_mut() else {
-			return;
-		};
-
-		if tab.panes.iter().next().is_none() {
-			return;
-		}
-
-		let axis = pane_grid::Axis::Vertical;
-		let ratio = 0.5;
-
-		let state = ChatPane::new(tab_id);
-
-		let Some(target) = tab.focused_pane.or_else(|| tab.panes.iter().next().map(|(id, _)| *id)) else {
-			return;
-		};
-
-		if let Some((new_pane, split)) = tab.panes.split(axis, target, state) {
-			tab.panes.resize(split, ratio);
-			tab.focused_pane = Some(new_pane);
-		}
-	}
 }

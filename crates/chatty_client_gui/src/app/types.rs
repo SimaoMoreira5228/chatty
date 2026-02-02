@@ -159,7 +159,12 @@ impl std::fmt::Display for PlatformChoice {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InsertTarget {
 	Composer,
-	Join,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JoinTarget {
+	Split,
+	NewTab,
 }
 
 #[allow(dead_code)]

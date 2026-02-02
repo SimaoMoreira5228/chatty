@@ -4,13 +4,22 @@ use iced::widget::{button, column, container, row, svg, text};
 use iced::{Alignment, Background, Border, Element, Length};
 use rust_i18n::t;
 
+use crate::app::types::JoinTarget;
 use crate::app::{Chatty, Message};
 use crate::assets::svg_handle;
 use crate::theme;
 
 pub fn view(app: &Chatty, palette: theme::Palette) -> Element<'_, Message> {
 	let Some(selected_tab) = app.selected_tab() else {
-		return container(text(t!("main.info_join_begin")).size(20))
+		let content = column![
+			text(t!("main.info_join_begin")).size(20).color(palette.text),
+			button(row![svg(svg_handle("plus.svg")).width(16).height(16), text(t!("main.join_button"))].spacing(8))
+				.on_press(Message::OpenJoinModal(JoinTarget::NewTab))
+		]
+		.spacing(16)
+		.align_x(Alignment::Center);
+
+		return container(content)
 			.width(Length::Fill)
 			.height(Length::Fill)
 			.center_x(Length::Fill)
@@ -30,24 +39,18 @@ pub fn view(app: &Chatty, palette: theme::Palette) -> Element<'_, Message> {
 		let mut c = row![text(&tab.title).color(tab_color)].align_y(Alignment::Center).spacing(8);
 
 		if !tab.pinned {
+			let icon_style = move |_theme: &iced::Theme, _status| svg::Style {
+				color: Some(palette.text),
+			};
+
 			c = c
 				.push(
-					button(svg(svg_handle("close.svg")).width(12).height(12))
-						.on_press(Message::CloseTabPressed(*tid))
-						.style(move |_theme, _status| button::Style {
-							background: None,
-							text_color: tab_color,
-							..Default::default()
-						}),
+					button(svg(svg_handle("close.svg")).width(12).height(12).style(icon_style))
+						.on_press(Message::CloseTabPressed(*tid)),
 				)
 				.push(
-					button(svg(svg_handle("open-in-new.svg")).width(12).height(12))
-						.on_press(Message::PopTab(*tid))
-						.style(move |_theme, _status| button::Style {
-							background: None,
-							text_color: tab_color,
-							..Default::default()
-						}),
+					button(svg(svg_handle("open-in-new.svg")).width(12).height(12).style(icon_style))
+						.on_press(Message::PopTab(*tid)),
 				);
 		}
 
