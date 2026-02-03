@@ -48,17 +48,43 @@ pub(crate) fn guess_format(url: &str) -> String {
 pub(crate) fn compute_bundle_etag(emotes: &[AssetRef], badges: &[AssetRef]) -> String {
 	let mut keys = Vec::with_capacity(emotes.len().saturating_add(badges.len()));
 	for emote in emotes {
-		keys.push(format!(
-			"e:{}:{}:{}:{}:{}:{}",
-			emote.id, emote.name, emote.image_url, emote.image_format, emote.width, emote.height
-		));
+		let mut images = emote.images.clone();
+		images.sort_by_key(|img| img.scale.as_u8());
+		let image_key = images
+			.iter()
+			.map(|img| {
+				format!(
+					"{}:{}:{}:{}:{}",
+					img.scale.as_u8(),
+					img.url,
+					img.format,
+					img.width,
+					img.height
+				)
+			})
+			.collect::<Vec<_>>()
+			.join("|");
+		keys.push(format!("e:{}:{}:{}", emote.id, emote.name, image_key));
 	}
 
 	for badge in badges {
-		keys.push(format!(
-			"b:{}:{}:{}:{}:{}:{}",
-			badge.id, badge.name, badge.image_url, badge.image_format, badge.width, badge.height
-		));
+		let mut images = badge.images.clone();
+		images.sort_by_key(|img| img.scale.as_u8());
+		let image_key = images
+			.iter()
+			.map(|img| {
+				format!(
+					"{}:{}:{}:{}:{}",
+					img.scale.as_u8(),
+					img.url,
+					img.format,
+					img.width,
+					img.height
+				)
+			})
+			.collect::<Vec<_>>()
+			.join("|");
+		keys.push(format!("b:{}:{}:{}", badge.id, badge.name, image_key));
 	}
 
 	keys.sort();

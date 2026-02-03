@@ -61,6 +61,7 @@ pub struct Identity {
 	pub username: String,
 	pub user_id: String,
 	pub oauth_token: String,
+	pub refresh_token: String,
 	pub client_id: String,
 	pub enabled: bool,
 }
@@ -74,6 +75,7 @@ impl Default for Identity {
 			username: String::new(),
 			user_id: String::new(),
 			oauth_token: String::new(),
+			refresh_token: String::new(),
 			client_id: String::new(),
 			enabled: true,
 		}

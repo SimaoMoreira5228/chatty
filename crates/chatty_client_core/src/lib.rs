@@ -65,6 +65,9 @@ pub struct ClientConfigV1 {
 	/// Optional Twitch username/login.
 	pub twitch_username: Option<String>,
 
+	/// Optional Twitch refresh token (for long-lived sessions).
+	pub twitch_refresh_token: Option<String>,
+
 	/// Optional Kick user OAuth token.
 	pub kick_user_oauth_token: Option<String>,
 
@@ -125,6 +128,7 @@ impl Default for ClientConfigV1 {
 			twitch_client_id: None,
 			twitch_user_id: None,
 			twitch_username: None,
+			twitch_refresh_token: None,
 			kick_user_oauth_token: None,
 			kick_user_id: None,
 			kick_username: None,
@@ -266,6 +270,7 @@ impl SessionControl {
 			twitch_client_id: cfg.twitch_client_id.unwrap_or_default(),
 			twitch_user_id: cfg.twitch_user_id.unwrap_or_default(),
 			twitch_username: cfg.twitch_username.unwrap_or_default(),
+			twitch_refresh_token: cfg.twitch_refresh_token.unwrap_or_default(),
 			kick_user_oauth_token: cfg.kick_user_oauth_token.unwrap_or_default(),
 			kick_user_id: cfg.kick_user_id.unwrap_or_default(),
 			kick_username: cfg.kick_username.unwrap_or_default(),

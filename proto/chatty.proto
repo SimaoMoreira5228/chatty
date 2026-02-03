@@ -58,6 +58,9 @@ message Hello {
   // Optional Twitch username/login.
   string twitch_username = 7;
 
+  // Optional Twitch refresh token for long-lived sessions.
+  string twitch_refresh_token = 11;
+
   // Optional Kick user OAuth token.
   string kick_user_oauth_token = 8;
 
@@ -298,13 +301,26 @@ enum AssetScope {
   ASSET_SCOPE_CHANNEL = 2;
 }
 
+enum AssetScale {
+  ASSET_SCALE_UNSPECIFIED = 0;
+  ASSET_SCALE_1X = 1;
+  ASSET_SCALE_2X = 2;
+  ASSET_SCALE_3X = 3;
+  ASSET_SCALE_4X = 4;
+}
+
+message AssetImage {
+  AssetScale scale = 1;
+  string url = 2;
+  string format = 3;
+  uint32 width = 4;
+  uint32 height = 5;
+}
+
 message AssetRef {
   string id = 1;
   string name = 2;
-  string image_url = 3;
-  string image_format = 4;
-  uint32 width = 5;
-  uint32 height = 6;
+  repeated AssetImage images = 3;
 }
 
 message AssetBundleEvent {

@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use super::common::{CachedBundle, compute_bundle_etag, prune_map_cache, prune_optional_cache};
-use crate::{AssetBundle, AssetProvider, AssetRef, AssetScope};
+use crate::{AssetBundle, AssetImage, AssetProvider, AssetRef, AssetScale, AssetScope};
 
 const SEVENTV_GQL_URL: &str = "https://api.7tv.app/v4/gql";
 const SEVENTV_EMOTES_TTL: Duration = Duration::from_secs(300);
@@ -342,7 +342,10 @@ pub(crate) fn prune_caches() {
 }
 
 fn seventv_emote_to_asset(item: SevenTvEmoteSetEmote) -> Option<AssetRef> {
-	let image = pick_seventv_emote_image(&item.emote.images)?;
+	let images = seventv_images_to_assets(&item.emote.images);
+	if images.is_empty() {
+		return None;
+	}
 
 	let name = if item.alias.trim().is_empty() {
 		item.emote.default_name.clone()
@@ -353,61 +356,46 @@ fn seventv_emote_to_asset(item: SevenTvEmoteSetEmote) -> Option<AssetRef> {
 	Some(AssetRef {
 		id: item.emote.id,
 		name,
-		image_url: image.url.clone(),
-		image_format: image.mime.split('/').next_back().unwrap_or("webp").to_string(),
-		width: image.width as u32,
-		height: image.height as u32,
+		images,
 	})
 }
 
 fn seventv_badge_to_asset(badge: SevenTvBadge) -> Option<AssetRef> {
-	let image = pick_seventv_badge_image(&badge.images)?;
-
-	Some(AssetRef {
-		id: badge.id,
-		name: badge.name,
-		image_url: image.url.clone(),
-		image_format: image.mime.split('/').next_back().unwrap_or("png").to_string(),
-		width: image.width as u32,
-		height: image.height as u32,
-	})
-}
-
-fn pick_seventv_emote_image(images: &[SevenTvImage]) -> Option<&SevenTvImage> {
-	pick_seventv_image(images, true)
-}
-
-fn pick_seventv_badge_image(images: &[SevenTvImage]) -> Option<&SevenTvImage> {
-	pick_seventv_image(images, false)
-}
-
-fn pick_seventv_image(images: &[SevenTvImage], prefer_gif: bool) -> Option<&SevenTvImage> {
+	let images = seventv_images_to_assets(&badge.images);
 	if images.is_empty() {
 		return None;
 	}
 
-	let preferred_mimes = if prefer_gif {
-		["image/gif", "image/webp", "image/png", "image/avif"]
-	} else {
-		["image/png", "image/webp", "image/gif", "image/avif"]
-	};
+	Some(AssetRef {
+		id: badge.id,
+		name: badge.name,
+		images,
+	})
+}
 
-	for mime in preferred_mimes {
-		if let Some(img) = images
-			.iter()
-			.find(|img| img.scale == 1 && img.mime.eq_ignore_ascii_case(mime))
-		{
-			return Some(img);
-		}
-	}
+fn seventv_images_to_assets(images: &[SevenTvImage]) -> Vec<AssetImage> {
+	let mut out: Vec<AssetImage> = images
+		.iter()
+		.filter_map(|img| {
+			let scale = match img.scale {
+				1 => AssetScale::One,
+				2 => AssetScale::Two,
+				3 => AssetScale::Three,
+				4 => AssetScale::Four,
+				_ => return None,
+			};
+			Some(AssetImage {
+				scale,
+				url: img.url.clone(),
+				format: img.mime.split('/').next_back().unwrap_or("png").to_string(),
+				width: img.width as u32,
+				height: img.height as u32,
+			})
+		})
+		.collect();
 
-	for mime in preferred_mimes {
-		if let Some(img) = images.iter().find(|img| img.mime.eq_ignore_ascii_case(mime)) {
-			return Some(img);
-		}
-	}
-
-	images.iter().find(|img| img.scale == 1).or_else(|| images.first())
+	out.sort_by_key(|img| img.scale.as_u8());
+	out
 }
 
 fn get_cached_7tv_emotes(platform: SevenTvPlatform, platform_id: &str) -> Option<AssetBundle> {

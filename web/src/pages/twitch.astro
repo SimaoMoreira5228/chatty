@@ -101,8 +101,15 @@ import "../styles/globals.css";
 			const userId = params.get("user_id") ?? "";
 			const clientId = params.get("client_id") ?? "";
 			const token = params.get("oauth_token") ?? "";
+			const refreshToken = params.get("refresh_token") ?? "";
 
-			const parts = [`username=${username}`, `user_id=${userId}`, `client_id=${clientId}`, `oauth_token=${token}`].filter(
+			const parts = [
+				`username=${username}`,
+				`user_id=${userId}`,
+				`client_id=${clientId}`,
+				`oauth_token=${token}`,
+				`refresh_token=${refreshToken}`,
+			].filter(
 				part => !part.endsWith("="),
 			);
 

@@ -9,9 +9,10 @@ use std::time::{Instant, SystemTime};
 use anyhow::{Context as _, anyhow};
 use chatty_domain::{Platform, RoomKey, RoomTopic};
 use chatty_platform::kick::validate_user_token as validate_kick_user_token;
-use chatty_platform::twitch::validate_user_token;
+use chatty_platform::twitch::{refresh_user_token, validate_user_token};
 use chatty_platform::{
-	AdapterAuth, AssetBundle, AssetProvider, AssetScope, CommandError, CommandRequest, IngestPayload, SecretString,
+	AdapterAuth, AssetBundle, AssetProvider, AssetScale, AssetScope, CommandError, CommandRequest, IngestPayload,
+	SecretString,
 };
 use chatty_protocol::framing::{DEFAULT_MAX_FRAME_SIZE, encode_frame};
 use chatty_protocol::pb;
@@ -29,19 +30,54 @@ use crate::util::time::unix_ms_now;
 /// v1 protocol version written into `pb::Envelope.version`.
 pub const PROTOCOL_VERSION: u32 = 1;
 
+fn map_asset_scale(scale: AssetScale) -> i32 {
+	match scale {
+		AssetScale::One => pb::AssetScale::AssetScale1x as i32,
+		AssetScale::Two => pb::AssetScale::AssetScale2x as i32,
+		AssetScale::Three => pb::AssetScale::AssetScale3x as i32,
+		AssetScale::Four => pb::AssetScale::AssetScale4x as i32,
+	}
+}
+
 fn compute_asset_bundle_etag(bundle: &AssetBundle) -> String {
 	let mut keys = Vec::with_capacity(bundle.emotes.len().saturating_add(bundle.badges.len()));
 	for emote in &bundle.emotes {
-		keys.push(format!(
-			"e:{}:{}:{}:{}:{}:{}",
-			emote.id, emote.name, emote.image_url, emote.image_format, emote.width, emote.height
-		));
+		let mut images = emote.images.clone();
+		images.sort_by_key(|img| img.scale.as_u8());
+		let image_key = images
+			.iter()
+			.map(|img| {
+				format!(
+					"{}:{}:{}:{}:{}",
+					img.scale.as_u8(),
+					img.url,
+					img.format,
+					img.width,
+					img.height
+				)
+			})
+			.collect::<Vec<_>>()
+			.join("|");
+		keys.push(format!("e:{}:{}:{}", emote.id, emote.name, image_key));
 	}
 	for badge in &bundle.badges {
-		keys.push(format!(
-			"b:{}:{}:{}:{}:{}:{}",
-			badge.id, badge.name, badge.image_url, badge.image_format, badge.width, badge.height
-		));
+		let mut images = badge.images.clone();
+		images.sort_by_key(|img| img.scale.as_u8());
+		let image_key = images
+			.iter()
+			.map(|img| {
+				format!(
+					"{}:{}:{}:{}:{}",
+					img.scale.as_u8(),
+					img.url,
+					img.format,
+					img.width,
+					img.height
+				)
+			})
+			.collect::<Vec<_>>()
+			.join("|");
+		keys.push(format!("b:{}:{}:{}", badge.id, badge.name, image_key));
 	}
 
 	keys.sort();
@@ -62,6 +98,9 @@ pub struct ConnectionSettings {
 	pub auth_token: Option<chatty_platform::SecretString>,
 	pub auth_hmac_secret: Option<chatty_platform::SecretString>,
 
+	pub twitch_client_id: Option<String>,
+	pub twitch_client_secret: Option<chatty_platform::SecretString>,
+
 	pub command_rate_limit_per_conn_burst: u32,
 	pub command_rate_limit_per_conn_per_minute: u32,
 	pub command_rate_limit_per_topic_burst: u32,
@@ -75,6 +114,8 @@ impl Default for ConnectionSettings {
 			fan_in_channel_capacity: 1024,
 			auth_token: None,
 			auth_hmac_secret: None,
+			twitch_client_id: None,
+			twitch_client_secret: None,
 			command_rate_limit_per_conn_burst: 0,
 			command_rate_limit_per_conn_per_minute: 0,
 			command_rate_limit_per_topic_burst: 0,
@@ -311,31 +352,95 @@ pub async fn handle_connection(
 		}
 	}
 
-	let user_oauth = hello.user_oauth_token.trim();
+	let mut user_oauth = hello.user_oauth_token.trim().to_string();
 	if !user_oauth.is_empty() {
 		let hello_client_id = hello.twitch_client_id.trim();
 		let hello_user_id = hello.twitch_user_id.trim();
 		let hello_username = hello.twitch_username.trim();
-		let validated = match validate_user_token(user_oauth).await {
+		let mut refresh_token = hello.twitch_refresh_token.trim().to_string();
+
+		let validated = match validate_user_token(&user_oauth).await {
 			Ok(v) => v,
 			Err(e) => {
-				warn!(conn_id, error = %e, "invalid twitch oauth token");
-				send_envelope(
-					&mut control_send,
-					pb::Envelope {
-						version: PROTOCOL_VERSION,
-						request_id: String::new(),
-						msg: Some(pb::envelope::Msg::Error(pb::Error {
-							code: "UNAUTHORIZED".to_string(),
-							message: "invalid twitch oauth token".to_string(),
-							topic: String::new(),
+				let refresh_client_id = if !hello_client_id.is_empty() {
+					Some(hello_client_id.to_string())
+				} else {
+					settings.twitch_client_id.clone()
+				};
+
+				if !refresh_token.is_empty()
+					&& let Some(client_id) = refresh_client_id
+					&& let Some(client_secret) = settings.twitch_client_secret.as_ref()
+				{
+					match refresh_user_token(&client_id, client_secret.expose(), &refresh_token).await {
+						Ok(resp) => {
+							user_oauth = resp.access_token;
+							if let Some(new_refresh) = resp.refresh_token {
+								refresh_token = new_refresh;
+							}
+
+							match validate_user_token(&user_oauth).await {
+								Ok(v) => v,
+								Err(e) => {
+									warn!(conn_id, error = %e, "invalid twitch oauth token after refresh");
+									send_envelope(
+										&mut control_send,
+										pb::Envelope {
+											version: PROTOCOL_VERSION,
+											request_id: String::new(),
+											msg: Some(pb::envelope::Msg::Error(pb::Error {
+												code: "UNAUTHORIZED".to_string(),
+												message: "invalid twitch oauth token".to_string(),
+												topic: String::new(),
+												request_id: String::new(),
+											})),
+										},
+									)
+									.await
+									.ok();
+									return Ok(());
+								}
+							}
+						}
+						Err(e) => {
+							warn!(conn_id, error = %e, "twitch oauth refresh failed");
+							send_envelope(
+								&mut control_send,
+								pb::Envelope {
+									version: PROTOCOL_VERSION,
+									request_id: String::new(),
+									msg: Some(pb::envelope::Msg::Error(pb::Error {
+										code: "UNAUTHORIZED".to_string(),
+										message: "invalid twitch oauth token".to_string(),
+										topic: String::new(),
+										request_id: String::new(),
+									})),
+								},
+							)
+							.await
+							.ok();
+							return Ok(());
+						}
+					}
+				} else {
+					warn!(conn_id, error = %e, "invalid twitch oauth token");
+					send_envelope(
+						&mut control_send,
+						pb::Envelope {
+							version: PROTOCOL_VERSION,
 							request_id: String::new(),
-						})),
-					},
-				)
-				.await
-				.ok();
-				return Ok(());
+							msg: Some(pb::envelope::Msg::Error(pb::Error {
+								code: "UNAUTHORIZED".to_string(),
+								message: "invalid twitch oauth token".to_string(),
+								topic: String::new(),
+								request_id: String::new(),
+							})),
+						},
+					)
+					.await
+					.ok();
+					return Ok(());
+				}
 			}
 		};
 
@@ -355,12 +460,19 @@ pub async fn handle_connection(
 			validated.login.clone()
 		};
 
+		let refresh_token = if refresh_token.trim().is_empty() {
+			None
+		} else {
+			Some(SecretString::new(refresh_token))
+		};
+
 		let updated = adapter_manager
 			.update_auth(
 				Platform::Twitch,
 				AdapterAuth::TwitchUser {
 					client_id,
 					access_token: SecretString::new(user_oauth.to_string()),
+					refresh_token,
 					user_id: Some(user_id),
 					username: Some(username),
 					expires_in: Some(std::time::Duration::from_secs(validated.expires_in)),
@@ -591,10 +703,17 @@ pub async fn handle_connection(
 							.map(|emote| pb::AssetRef {
 								id: emote.id,
 								name: emote.name,
-								image_url: emote.image_url,
-								image_format: emote.image_format,
-								width: emote.width,
-								height: emote.height,
+								images: emote
+									.images
+									.into_iter()
+									.map(|img| pb::AssetImage {
+										scale: map_asset_scale(img.scale),
+										url: img.url,
+										format: img.format,
+										width: img.width,
+										height: img.height,
+									})
+									.collect(),
 							})
 							.collect();
 
@@ -699,23 +818,36 @@ pub async fn handle_connection(
 								.map(|emote| pb::AssetRef {
 									id: emote.id,
 									name: emote.name,
-									image_url: emote.image_url,
-									image_format: emote.image_format,
-									width: emote.width,
-									height: emote.height,
+									images: emote
+										.images
+										.into_iter()
+										.map(|img| pb::AssetImage {
+											scale: map_asset_scale(img.scale),
+											url: img.url,
+											format: img.format,
+											width: img.width,
+											height: img.height,
+										})
+										.collect(),
 								})
 								.collect();
-
 							let badges: Vec<pb::AssetRef> = bundle
 								.badges
 								.into_iter()
 								.map(|badge| pb::AssetRef {
 									id: badge.id,
 									name: badge.name,
-									image_url: badge.image_url,
-									image_format: badge.image_format,
-									width: badge.width,
-									height: badge.height,
+									images: badge
+										.images
+										.into_iter()
+										.map(|img| pb::AssetImage {
+											scale: map_asset_scale(img.scale),
+											url: img.url,
+											format: img.format,
+											width: img.width,
+											height: img.height,
+										})
+										.collect(),
 								})
 								.collect();
 
@@ -790,10 +922,17 @@ pub async fn handle_connection(
 							.map(|emote| pb::AssetRef {
 								id: emote.id,
 								name: emote.name,
-								image_url: emote.image_url,
-								image_format: emote.image_format,
-								width: emote.width,
-								height: emote.height,
+								images: emote
+									.images
+									.into_iter()
+									.map(|img| pb::AssetImage {
+										scale: map_asset_scale(img.scale),
+										url: img.url,
+										format: img.format,
+										width: img.width,
+										height: img.height,
+									})
+									.collect(),
 							})
 							.collect();
 
@@ -803,10 +942,17 @@ pub async fn handle_connection(
 							.map(|badge| pb::AssetRef {
 								id: badge.id,
 								name: badge.name,
-								image_url: badge.image_url,
-								image_format: badge.image_format,
-								width: badge.width,
-								height: badge.height,
+								images: badge
+									.images
+									.into_iter()
+									.map(|img| pb::AssetImage {
+										scale: map_asset_scale(img.scale),
+										url: img.url,
+										format: img.format,
+										width: img.width,
+										height: img.height,
+									})
+									.collect(),
 							})
 							.collect();
 

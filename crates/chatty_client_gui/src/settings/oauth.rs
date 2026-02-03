@@ -6,6 +6,7 @@ pub struct TwitchOAuthInfo {
 	pub user_id: String,
 	pub client_id: String,
 	pub oauth_token: String,
+	pub refresh_token: String,
 }
 
 #[derive(Debug, Clone)]
@@ -20,6 +21,7 @@ pub fn parse_twitch_oauth_blob(blob: &str) -> Option<TwitchOAuthInfo> {
 	let mut user_id = String::new();
 	let mut client_id = String::new();
 	let mut oauth_token = String::new();
+	let mut refresh_token = String::new();
 
 	for part in blob.split(';') {
 		let part = part.trim();
@@ -33,6 +35,7 @@ pub fn parse_twitch_oauth_blob(blob: &str) -> Option<TwitchOAuthInfo> {
 			"user_id" => user_id = v.to_string(),
 			"client_id" => client_id = v.to_string(),
 			"oauth_token" => oauth_token = v.to_string(),
+			"refresh_token" => refresh_token = v.to_string(),
 			_ => {}
 		}
 	}
@@ -46,6 +49,7 @@ pub fn parse_twitch_oauth_blob(blob: &str) -> Option<TwitchOAuthInfo> {
 		user_id,
 		client_id,
 		oauth_token,
+		refresh_token,
 	})
 }
 

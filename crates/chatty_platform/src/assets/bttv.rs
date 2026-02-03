@@ -10,7 +10,7 @@ use serde::Deserialize;
 use tracing::{info, warn};
 
 use super::common::{CachedBundle, compute_bundle_etag, prune_map_cache, prune_optional_cache};
-use crate::{AssetBundle, AssetProvider, AssetRef, AssetScope};
+use crate::{AssetBundle, AssetImage, AssetProvider, AssetRef, AssetScale, AssetScope};
 
 const BTTV_BASE_URL: &str = "https://api.betterttv.net/3";
 const BTTV_EMOTES_TTL: Duration = Duration::from_secs(300);
@@ -163,15 +163,32 @@ fn bttv_emote_to_asset(emote: &BttvEmote) -> Option<AssetRef> {
 		.or_else(|| if emote.animated { Some("gif".to_string()) } else { None })
 		.unwrap_or_else(|| "png".to_string());
 
-	let url = format!("https://cdn.betterttv.net/emote/{}/1x", emote.id);
-
 	Some(AssetRef {
 		id: emote.id.clone(),
 		name: emote.code.clone(),
-		image_url: url,
-		image_format: format,
-		width: 0,
-		height: 0,
+		images: vec![
+			AssetImage {
+				scale: AssetScale::One,
+				url: format!("https://cdn.betterttv.net/emote/{}/1x", emote.id),
+				format: format.clone(),
+				width: 0,
+				height: 0,
+			},
+			AssetImage {
+				scale: AssetScale::Two,
+				url: format!("https://cdn.betterttv.net/emote/{}/2x", emote.id),
+				format: format.clone(),
+				width: 0,
+				height: 0,
+			},
+			AssetImage {
+				scale: AssetScale::Three,
+				url: format!("https://cdn.betterttv.net/emote/{}/3x", emote.id),
+				format,
+				width: 0,
+				height: 0,
+			},
+		],
 	})
 }
 
@@ -183,10 +200,13 @@ fn bttv_badge_to_asset(badge: &BttvBadge) -> Option<AssetRef> {
 	Some(AssetRef {
 		id: format!("bttv:badge:{}", badge.badge_type),
 		name: badge.description.clone(),
-		image_url: badge.svg.clone(),
-		image_format: "svg".to_string(),
-		width: 0,
-		height: 0,
+		images: vec![AssetImage {
+			scale: AssetScale::One,
+			url: badge.svg.clone(),
+			format: "svg".to_string(),
+			width: 0,
+			height: 0,
+		}],
 	})
 }
 

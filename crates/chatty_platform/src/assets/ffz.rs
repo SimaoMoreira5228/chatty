@@ -10,7 +10,7 @@ use serde::Deserialize;
 use tracing::info;
 
 use super::common::{CachedBundle, compute_bundle_etag, guess_format, prune_map_cache, prune_optional_cache};
-use crate::{AssetBundle, AssetProvider, AssetRef, AssetScope};
+use crate::{AssetBundle, AssetImage, AssetProvider, AssetRef, AssetScale, AssetScope};
 
 const FFZ_BASE_URL: &str = "https://api.frankerfacez.com";
 const FFZ_EMOTES_TTL: Duration = Duration::from_secs(300);
@@ -157,22 +157,47 @@ pub(crate) fn prune_caches() {
 }
 
 fn ffz_emote_to_asset(emote: &FfzEmote) -> Option<AssetRef> {
-	let (url, format) = if let Some(animated) = &emote.animated {
-		animated
-			.get("1")
-			.map(|u| (u.clone(), "webp".to_string()))
-			.or_else(|| emote.urls.get("1").map(|u| (u.clone(), guess_format(u))))
-	} else {
-		emote.urls.get("1").map(|u| (u.clone(), guess_format(u)))
-	}?;
+	fn scale_from_str(scale: &str) -> Option<AssetScale> {
+		match scale {
+			"1" => Some(AssetScale::One),
+			"2" => Some(AssetScale::Two),
+			"3" => Some(AssetScale::Three),
+			"4" => Some(AssetScale::Four),
+			_ => None,
+		}
+	}
+
+	let mut images = Vec::new();
+	let animated = emote.animated.as_ref();
+	for (scale, url) in emote.urls.iter() {
+		let Some(scale) = scale_from_str(scale.as_str()) else {
+			continue;
+		};
+		let scale_key = scale.as_u8().to_string();
+		let chosen_url = animated
+			.and_then(|m| m.get(scale_key.as_str()))
+			.cloned()
+			.unwrap_or_else(|| url.clone());
+		let format = guess_format(&chosen_url);
+		images.push(AssetImage {
+			scale,
+			url: chosen_url,
+			format,
+			width: emote.width.unwrap_or(0.0).round() as u32,
+			height: emote.height.unwrap_or(0.0).round() as u32,
+		});
+	}
+
+	if images.is_empty() {
+		return None;
+	}
+
+	images.sort_by_key(|img| img.scale.as_u8());
 
 	Some(AssetRef {
 		id: emote.id.to_string(),
 		name: emote.name.clone(),
-		image_url: url,
-		image_format: format,
-		width: emote.width.unwrap_or(0.0).round() as u32,
-		height: emote.height.unwrap_or(0.0).round() as u32,
+		images,
 	})
 }
 
@@ -195,27 +220,72 @@ fn ffz_room_badges(room: &FfzRoom) -> Vec<AssetRef> {
 }
 
 fn ffz_badge_from_urls(id: &str, name: &str, urls: &HashMap<String, String>) -> Option<AssetRef> {
-	let url = urls.get("1").or_else(|| urls.values().next())?.clone();
+	let mut images = Vec::new();
+	for (scale, url) in urls {
+		let scale = match scale.as_str() {
+			"1" => Some(AssetScale::One),
+			"2" => Some(AssetScale::Two),
+			"3" => Some(AssetScale::Three),
+			"4" => Some(AssetScale::Four),
+			_ => None,
+		};
+		let Some(scale) = scale else {
+			continue;
+		};
+		images.push(AssetImage {
+			scale,
+			url: url.clone(),
+			format: guess_format(url),
+			width: 0,
+			height: 0,
+		});
+	}
+
+	if images.is_empty() {
+		return None;
+	}
+
+	images.sort_by_key(|img| img.scale.as_u8());
+
 	Some(AssetRef {
 		id: id.to_string(),
 		name: name.to_string(),
-		image_url: url.clone(),
-		image_format: guess_format(&url),
-		width: 0,
-		height: 0,
+		images,
 	})
 }
 
 fn ffz_badge_to_asset(badge: FfzBadge) -> Option<AssetRef> {
-	let url = badge.urls.get("1").or_else(|| badge.urls.values().next()).cloned()?;
+	let mut images = Vec::new();
+	for (scale, url) in badge.urls.iter() {
+		let scale = match scale.as_str() {
+			"1" => Some(AssetScale::One),
+			"2" => Some(AssetScale::Two),
+			"3" => Some(AssetScale::Three),
+			"4" => Some(AssetScale::Four),
+			_ => None,
+		};
+		let Some(scale) = scale else {
+			continue;
+		};
+		images.push(AssetImage {
+			scale,
+			url: url.clone(),
+			format: guess_format(url),
+			width: 0,
+			height: 0,
+		});
+	}
+
+	if images.is_empty() {
+		return None;
+	}
+
+	images.sort_by_key(|img| img.scale.as_u8());
 
 	Some(AssetRef {
 		id: badge.id.to_string(),
 		name: badge.name,
-		image_url: url.clone(),
-		image_format: guess_format(&url),
-		width: 0,
-		height: 0,
+		images,
 	})
 }
 

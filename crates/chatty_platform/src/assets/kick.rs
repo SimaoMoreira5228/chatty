@@ -5,7 +5,7 @@ use std::time::Duration;
 use parking_lot::Mutex;
 
 use super::common::{CachedBundle, compute_bundle_etag, prune_map_cache};
-use crate::{AssetBundle, AssetProvider, AssetRef, AssetScope};
+use crate::{AssetBundle, AssetImage, AssetProvider, AssetRef, AssetScale, AssetScope};
 
 const KICK_BADGES_TTL: Duration = Duration::from_secs(600);
 const KICK_EMOTES_TTL: Duration = Duration::from_secs(300);
@@ -21,10 +21,13 @@ pub async fn fetch_kick_badge_bundle(room_id: &str) -> Option<AssetBundle> {
 	let subscriber_badge = AssetRef {
 		id: format!("kick:subscriber:{}", room_id),
 		name: "Subscriber".to_string(),
-		image_url: format!("https://files.kick.com/channel_subscriber_badges/{}/original", room_id),
-		image_format: "png".to_string(),
-		width: 0,
-		height: 0,
+		images: vec![AssetImage {
+			scale: AssetScale::One,
+			url: format!("https://files.kick.com/channel_subscriber_badges/{}/original", room_id),
+			format: "png".to_string(),
+			width: 0,
+			height: 0,
+		}],
 	};
 
 	// TODO: Add more badge types if patterns are discovered (e.g., moderator, vip)
@@ -54,10 +57,13 @@ pub async fn fetch_kick_emote_bundle(room_id: &str, emote_ids: &[String]) -> Opt
 		.map(|id| AssetRef {
 			id: format!("kick:emote:{}", id),
 			name: id.clone(),
-			image_url: format!("https://files.kick.com/emotes/{}/fullsize", id),
-			image_format: "png".to_string(),
-			width: 0,
-			height: 0,
+			images: vec![AssetImage {
+				scale: AssetScale::One,
+				url: format!("https://files.kick.com/emotes/{}/fullsize", id),
+				format: "png".to_string(),
+				width: 0,
+				height: 0,
+			}],
 		})
 		.collect();
 

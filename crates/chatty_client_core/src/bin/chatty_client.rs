@@ -141,6 +141,10 @@ async fn main() -> anyhow::Result<()> {
 			let v = v.trim().to_string();
 			(!v.is_empty()).then_some(v)
 		}),
+		twitch_refresh_token: std::env::var("CHATTY_CLIENT_TWITCH_REFRESH_TOKEN").ok().and_then(|v| {
+			let v = v.trim().to_string();
+			(!v.is_empty()).then_some(v)
+		}),
 		kick_user_oauth_token: std::env::var("CHATTY_CLIENT_KICK_USER_OAUTH_TOKEN").ok().and_then(|v| {
 			let v = v.trim().to_string();
 			(!v.is_empty()).then_some(v)

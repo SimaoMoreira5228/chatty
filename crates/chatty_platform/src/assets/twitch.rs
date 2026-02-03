@@ -9,7 +9,7 @@ use parking_lot::Mutex;
 use serde::Deserialize;
 
 use super::common::{CachedBundle, compute_bundle_etag, prune_map_cache, prune_optional_cache};
-use crate::{AssetBundle, AssetProvider, AssetRef, AssetScope};
+use crate::{AssetBundle, AssetImage, AssetProvider, AssetRef, AssetScale, AssetScope};
 
 const TWITCH_BADGES_TTL: Duration = Duration::from_secs(600);
 const TWITCH_EMOTES_TTL: Duration = Duration::from_secs(600);
@@ -192,14 +192,43 @@ pub(crate) fn prune_caches() {
 }
 
 fn twitch_badge_to_asset(set_id: &str, badge: TwitchBadgeVersion) -> Option<AssetRef> {
-	let url = badge.image_url_1x.clone();
+	let mut images = Vec::new();
+	if !badge.image_url_1x.is_empty() {
+		images.push(AssetImage {
+			scale: AssetScale::One,
+			url: badge.image_url_1x.clone(),
+			format: "png".to_string(),
+			width: 0,
+			height: 0,
+		});
+	}
+	if let Some(url) = badge.image_url_2x.clone() {
+		images.push(AssetImage {
+			scale: AssetScale::Two,
+			url,
+			format: "png".to_string(),
+			width: 0,
+			height: 0,
+		});
+	}
+	if let Some(url) = badge.image_url_4x.clone() {
+		images.push(AssetImage {
+			scale: AssetScale::Four,
+			url,
+			format: "png".to_string(),
+			width: 0,
+			height: 0,
+		});
+	}
+
+	if images.is_empty() {
+		return None;
+	}
+
 	Some(AssetRef {
 		id: format!("twitch:{set_id}:{}", badge.id),
 		name: badge.title.unwrap_or_else(|| format!("{set_id}:{}", badge.id)),
-		image_url: url.clone(),
-		image_format: "png".to_string(),
-		width: 0,
-		height: 0,
+		images,
 	})
 }
 
@@ -240,22 +269,68 @@ fn get_cached_twitch_channel_badges(broadcaster_id: &str) -> Option<AssetBundle>
 }
 
 fn twitch_emote_to_asset(emote: TwitchEmote) -> Option<AssetRef> {
-	let (url, format) = if emote.format.iter().any(|f| f == "animated") {
-		(
-			format!("https://static-cdn.jtvnw.net/emoticons/v2/{}/animated/dark/1.0", emote.id),
-			"gif".to_string(),
-		)
+	let mut images = Vec::new();
+	if emote.format.iter().any(|f| f == "animated") {
+		let base = format!("https://static-cdn.jtvnw.net/emoticons/v2/{}/animated/dark", emote.id);
+		images.push(AssetImage {
+			scale: AssetScale::One,
+			url: format!("{base}/1.0"),
+			format: "gif".to_string(),
+			width: 0,
+			height: 0,
+		});
+		images.push(AssetImage {
+			scale: AssetScale::Two,
+			url: format!("{base}/2.0"),
+			format: "gif".to_string(),
+			width: 0,
+			height: 0,
+		});
+		images.push(AssetImage {
+			scale: AssetScale::Three,
+			url: format!("{base}/3.0"),
+			format: "gif".to_string(),
+			width: 0,
+			height: 0,
+		});
 	} else {
-		(emote.images.url_1x, "png".to_string())
-	};
+		if !emote.images.url_1x.is_empty() {
+			images.push(AssetImage {
+				scale: AssetScale::One,
+				url: emote.images.url_1x.clone(),
+				format: "png".to_string(),
+				width: 0,
+				height: 0,
+			});
+		}
+		if let Some(url) = emote.images.url_2x.clone() {
+			images.push(AssetImage {
+				scale: AssetScale::Two,
+				url,
+				format: "png".to_string(),
+				width: 0,
+				height: 0,
+			});
+		}
+		if let Some(url) = emote.images.url_4x.clone() {
+			images.push(AssetImage {
+				scale: AssetScale::Four,
+				url,
+				format: "png".to_string(),
+				width: 0,
+				height: 0,
+			});
+		}
+	}
+
+	if images.is_empty() {
+		return None;
+	}
 
 	Some(AssetRef {
 		id: format!("twitch:emote:{}", emote.id),
 		name: emote.name,
-		image_url: url,
-		image_format: format,
-		width: 0,
-		height: 0,
+		images,
 	})
 }
 
@@ -338,6 +413,12 @@ struct TwitchBadgeVersion {
 	title: Option<String>,
 	#[serde(rename = "image_url_1x")]
 	image_url_1x: String,
+	#[serde(rename = "image_url_2x")]
+	#[serde(default)]
+	image_url_2x: Option<String>,
+	#[serde(rename = "image_url_4x")]
+	#[serde(default)]
+	image_url_4x: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -358,4 +439,10 @@ struct TwitchEmote {
 struct TwitchEmoteImages {
 	#[serde(rename = "url_1x")]
 	url_1x: String,
+	#[serde(rename = "url_2x")]
+	#[serde(default)]
+	url_2x: Option<String>,
+	#[serde(rename = "url_4x")]
+	#[serde(default)]
+	url_4x: Option<String>,
 }

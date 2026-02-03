@@ -141,6 +141,7 @@ pub enum AdapterAuth {
 	TwitchUser {
 		client_id: String,
 		access_token: SecretString,
+		refresh_token: Option<SecretString>,
 		user_id: Option<String>,
 		username: Option<String>,
 		expires_in: Option<Duration>,
@@ -296,15 +297,42 @@ pub enum AssetScope {
 	Channel,
 }
 
+/// Asset image scale (1x..4x).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum AssetScale {
+	One,
+	Two,
+	Three,
+	Four,
+}
+
+impl AssetScale {
+	pub fn as_u8(self) -> u8 {
+		match self {
+			Self::One => 1,
+			Self::Two => 2,
+			Self::Three => 3,
+			Self::Four => 4,
+		}
+	}
+}
+
+/// Asset image with scale metadata.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetImage {
+	pub scale: AssetScale,
+	pub url: String,
+	pub format: String,
+	pub width: u32,
+	pub height: u32,
+}
+
 /// Normalized asset reference (emote/badge).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssetRef {
 	pub id: String,
 	pub name: String,
-	pub image_url: String,
-	pub image_format: String,
-	pub width: u32,
-	pub height: u32,
+	pub images: Vec<AssetImage>,
 }
 
 /// Asset bundle payload for a room or global scope.

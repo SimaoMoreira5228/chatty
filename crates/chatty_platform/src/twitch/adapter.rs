@@ -298,12 +298,16 @@ impl TwitchEventSubAdapter {
 			AdapterAuth::TwitchUser {
 				client_id,
 				access_token,
+				refresh_token,
 				user_id,
 				username: _,
 				expires_in,
 			} => {
 				self.cfg.client_id = client_id;
 				self.cfg.user_access_token = access_token;
+				if refresh_token.is_some() {
+					self.cfg.refresh_token = refresh_token;
+				}
 				self.token_user_id = user_id;
 				self.auth_expires_at = expires_in
 					.and_then(|d| SystemTime::now().checked_add(d))

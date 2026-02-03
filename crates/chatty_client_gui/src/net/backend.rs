@@ -16,7 +16,7 @@ use super::reconnect::{RECONNECT_RESET_AFTER, schedule_reconnect};
 use super::subscriptions::{reconcile_subscriptions_on_connect, topic_for_room, unsubscribe_topics};
 use super::types::UiEvent;
 use crate::net::{dev_default_topics, should_dev_auto_connect};
-use crate::ui::components::chat_message::AssetRefUi;
+use crate::ui::components::chat_message::{AssetImageUi, AssetRefUi, AssetScaleUi};
 
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(3);
 const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -444,6 +444,36 @@ async fn connect_session(cfg: ClientConfigV1, ui_tx: mpsc::UnboundedSender<UiEve
 	Some(Box::new(session))
 }
 
+fn map_asset_scale(scale: i32) -> AssetScaleUi {
+	match scale {
+		x if x == pb::AssetScale::AssetScale2x as i32 => AssetScaleUi::Two,
+		x if x == pb::AssetScale::AssetScale3x as i32 => AssetScaleUi::Three,
+		x if x == pb::AssetScale::AssetScale4x as i32 => AssetScaleUi::Four,
+		_ => AssetScaleUi::One,
+	}
+}
+
+fn map_asset_ref(emote: pb::AssetRef) -> AssetRefUi {
+	let mut images: Vec<AssetImageUi> = emote
+		.images
+		.into_iter()
+		.map(|img| AssetImageUi {
+			scale: map_asset_scale(img.scale),
+			url: img.url,
+			format: img.format,
+			width: img.width,
+			height: img.height,
+		})
+		.collect();
+	images.sort_by_key(|img| img.scale.as_u8());
+
+	AssetRefUi {
+		id: emote.id,
+		name: emote.name,
+		images,
+	}
+}
+
 fn map_event_envelope_to_ui_event(ev: pb::EventEnvelope) -> Option<UiEvent> {
 	let topic = ev.topic;
 
@@ -465,18 +495,7 @@ fn map_event_envelope_to_ui_event(ev: pb::EventEnvelope) -> Option<UiEvent> {
 					};
 					let text = m.text.clone();
 					let badges = m.badge_ids.clone();
-					let emotes = m
-						.emotes
-						.iter()
-						.map(|emote| AssetRefUi {
-							id: emote.id.clone(),
-							name: emote.name.clone(),
-							image_url: emote.image_url.clone(),
-							image_format: emote.image_format.clone(),
-							width: emote.width,
-							height: emote.height,
-						})
-						.collect();
+					let emotes = m.emotes.iter().cloned().map(map_asset_ref).collect();
 					(login, display, text, badges, emotes)
 				})
 				.unwrap_or_else(|| ("unknown".to_string(), None, "".to_string(), Vec::new(), Vec::new()));
@@ -547,30 +566,8 @@ fn map_event_envelope_to_ui_event(ev: pb::EventEnvelope) -> Option<UiEvent> {
 				bundle.cache_key
 			};
 			let etag = if bundle.etag.is_empty() { None } else { Some(bundle.etag) };
-			let emotes = bundle
-				.emotes
-				.into_iter()
-				.map(|emote| AssetRefUi {
-					id: emote.id,
-					name: emote.name,
-					image_url: emote.image_url,
-					image_format: emote.image_format,
-					width: emote.width,
-					height: emote.height,
-				})
-				.collect();
-			let badges = bundle
-				.badges
-				.into_iter()
-				.map(|badge| AssetRefUi {
-					id: badge.id,
-					name: badge.name,
-					image_url: badge.image_url,
-					image_format: badge.image_format,
-					width: badge.width,
-					height: badge.height,
-				})
-				.collect();
+			let emotes = bundle.emotes.into_iter().map(map_asset_ref).collect();
+			let badges = bundle.badges.into_iter().map(map_asset_ref).collect();
 
 			Some(UiEvent::AssetBundle {
 				topic,

@@ -545,13 +545,33 @@ fn twitch_emotes_from_fragments(fragments: &[ChannelChatMessageFragment]) -> Vec
 			continue;
 		}
 
+		let base = format!("https://static-cdn.jtvnw.net/emoticons/v2/{}/default/dark", emote.id);
 		emotes.push(crate::AssetRef {
 			id: emote.id.clone(),
 			name: fragment.text.clone(),
-			image_url: format!("https://static-cdn.jtvnw.net/emoticons/v2/{}/default/dark/1.0", emote.id),
-			image_format: "png".to_string(),
-			width: 28,
-			height: 28,
+			images: vec![
+				crate::AssetImage {
+					scale: crate::AssetScale::One,
+					url: format!("{base}/1.0"),
+					format: "png".to_string(),
+					width: 28,
+					height: 28,
+				},
+				crate::AssetImage {
+					scale: crate::AssetScale::Two,
+					url: format!("{base}/2.0"),
+					format: "png".to_string(),
+					width: 56,
+					height: 56,
+				},
+				crate::AssetImage {
+					scale: crate::AssetScale::Three,
+					url: format!("{base}/3.0"),
+					format: "png".to_string(),
+					width: 84,
+					height: 84,
+				},
+			],
 		});
 	}
 

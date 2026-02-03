@@ -41,10 +41,51 @@ pub struct SystemNoticeUi {
 pub struct AssetRefUi {
 	pub id: String,
 	pub name: String,
-	pub image_url: String,
-	pub image_format: String,
+	pub images: Vec<AssetImageUi>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssetScaleUi {
+	One,
+	Two,
+	Three,
+	Four,
+}
+
+impl AssetScaleUi {
+	pub fn as_u8(self) -> u8 {
+		match self {
+			Self::One => 1,
+			Self::Two => 2,
+			Self::Three => 3,
+			Self::Four => 4,
+		}
+	}
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct AssetImageUi {
+	pub scale: AssetScaleUi,
+	pub url: String,
+	pub format: String,
 	pub width: u32,
 	pub height: u32,
+}
+
+impl AssetRefUi {
+	pub fn pick_image(&self, preferred: AssetScaleUi) -> Option<&AssetImageUi> {
+		if self.images.is_empty() {
+			return None;
+		}
+		if let Some(img) = self.images.iter().find(|img| img.scale == preferred) {
+			return Some(img);
+		}
+		if let Some(img) = self.images.iter().find(|img| img.scale == AssetScaleUi::One) {
+			return Some(img);
+		}
+		self.images.first()
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -106,10 +147,11 @@ impl<'a> ChatMessageView<'a> {
 
 		if !m.badge_ids.is_empty() {
 			for bid in &m.badge_ids {
-				if let Some(badge) = self.badges_map.get(bid.as_str()) {
-					let badge_element = self.render_image(&badge.image_url, 18, 18, Some(&badge.name));
-					msg_row = msg_row.push(badge_element);
-				}
+				if let Some(badge) = self.badges_map.get(bid.as_str())
+					&& let Some(img) = badge.pick_image(AssetScaleUi::Two) {
+						let badge_element = self.render_image(&img.url, 18, 18, Some(&badge.name));
+						msg_row = msg_row.push(badge_element);
+					}
 			}
 		}
 
@@ -127,10 +169,11 @@ impl<'a> ChatMessageView<'a> {
 			let exact_emote = inline_emote(token.as_str())
 				.cloned()
 				.or_else(|| self.emotes_map.get(token.as_str()).cloned());
-			if let Some(emote) = exact_emote {
-				content_row = content_row.push(self.render_image(&emote.image_url, 20, 20, Some(&emote.name)));
-				continue;
-			}
+			if let Some(emote) = exact_emote
+				&& let Some(img) = emote.pick_image(AssetScaleUi::Two) {
+					content_row = content_row.push(self.render_image(&img.url, 20, 20, Some(&emote.name)));
+					continue;
+				}
 
 			let (core, prefix, suffix, has_word) = {
 				let mut start = None;
@@ -166,7 +209,13 @@ impl<'a> ChatMessageView<'a> {
 				let found_emote = inline_emote(core).cloned().or_else(|| self.emotes_map.get(core).cloned());
 
 				let core_el: Element<'_, Message> = if let Some(emote) = found_emote {
-					self.render_image(&emote.image_url, 20, 20, Some(&emote.name))
+					if let Some(img) = emote.pick_image(AssetScaleUi::Two) {
+						self.render_image(&img.url, 20, 20, Some(&emote.name))
+					} else {
+						text(core)
+							.color(if is_focused { palette.text } else { palette.text_dim })
+							.into()
+					}
 				} else {
 					text(core)
 						.color(if is_focused { palette.text } else { palette.text_dim })

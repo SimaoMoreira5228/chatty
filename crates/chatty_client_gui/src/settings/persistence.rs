@@ -104,6 +104,10 @@ pub fn load_from_disk() -> Option<GuiSettings> {
 		if let Some(val) = read_secret(&key) {
 			identity.oauth_token = val;
 		}
+		let refresh_key = format!("identity:{}:refresh", identity.id);
+		if let Some(val) = read_secret(&refresh_key) {
+			identity.refresh_token = val;
+		}
 	}
 
 	Some(settings)
@@ -124,6 +128,10 @@ pub fn persist_to_disk(cfg: &GuiSettings) {
 		if !id.oauth_token.trim().is_empty() {
 			let key = format!("identity:{}:oauth", id.id);
 			let _ = store_secret(&key, id.oauth_token.trim());
+		}
+		if !id.refresh_token.trim().is_empty() {
+			let key = format!("identity:{}:refresh", id.id);
+			let _ = store_secret(&key, id.refresh_token.trim());
 		}
 	}
 
@@ -191,6 +199,11 @@ pub fn build_client_config(settings: &GuiSettings) -> Result<ClientConfigV1, Str
 		let token = identity.oauth_token.trim();
 		if !token.is_empty() {
 			cfg.user_oauth_token = Some(token.to_string());
+		}
+
+		let refresh = identity.refresh_token.trim();
+		if !refresh.is_empty() {
+			cfg.twitch_refresh_token = Some(refresh.to_string());
 		}
 
 		let client_id = identity.client_id.trim();

@@ -43,8 +43,13 @@ export const GET: APIRoute = async ({ cookies, redirect, url }) => {
 			return new Response(`Twitch token exchange failed: ${text}`, { status: 502 });
 		}
 
-		const tokenJson = (await tokenResp.json()) as { access_token?: string };
+		const tokenJson = (await tokenResp.json()) as {
+			access_token?: string;
+			refresh_token?: string;
+			expires_in?: number;
+		};
 		const accessToken = tokenJson.access_token ?? "";
+		const refreshToken = tokenJson.refresh_token ?? "";
 		if (!accessToken) {
 			console.error("Twitch OAuth token missing in response");
 			return new Response("Twitch token missing", { status: 502 });
@@ -67,6 +72,7 @@ export const GET: APIRoute = async ({ cookies, redirect, url }) => {
 			user_id: user?.id ?? "",
 			client_id: clientId,
 			oauth_token: accessToken,
+			refresh_token: refreshToken,
 		});
 
 		cookies.delete("chatty_twitch_state", { path: "/" });

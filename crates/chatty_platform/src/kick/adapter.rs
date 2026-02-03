@@ -30,9 +30,9 @@ use crate::assets::{
 	fetch_kick_badge_bundle, fetch_kick_emote_bundle,
 };
 use crate::{
-	AdapterAuth, AdapterControl, AdapterControlRx, AdapterEvent, AdapterEventTx, AssetBundle, AssetProvider, AssetRef,
-	AssetScope, ChatMessage, CommandError, CommandRequest, IngestEvent, IngestPayload, ModerationAction, ModerationEvent,
-	PermissionsInfo, PlatformAdapter, SecretString, UserRef, new_session_id, status,
+	AdapterAuth, AdapterControl, AdapterControlRx, AdapterEvent, AdapterEventTx, AssetBundle, AssetImage, AssetProvider,
+	AssetRef, AssetScale, AssetScope, ChatMessage, CommandError, CommandRequest, IngestEvent, IngestPayload,
+	ModerationAction, ModerationEvent, PermissionsInfo, PlatformAdapter, SecretString, UserRef, new_session_id, status,
 };
 
 #[derive(Clone)]
@@ -751,10 +751,13 @@ async fn handle_kick_webhook(
 						chat_message.emotes.push(AssetRef {
 							id: format!("kick:emote:{}", kick_emote.emote_id),
 							name: name.to_string(),
-							image_url: format!("https://files.kick.com/emotes/{}/fullsize", kick_emote.emote_id),
-							image_format: "png".to_string(),
-							width: 0,
-							height: 0,
+							images: vec![AssetImage {
+								scale: AssetScale::One,
+								url: format!("https://files.kick.com/emotes/{}/fullsize", kick_emote.emote_id),
+								format: "png".to_string(),
+								width: 0,
+								height: 0,
+							}],
 						});
 					}
 				}

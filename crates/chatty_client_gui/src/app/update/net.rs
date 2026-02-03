@@ -410,16 +410,18 @@ impl Chatty {
 					let max_prefetch_emotes = 64usize;
 					let mut queued = 0usize;
 					for em in bundle.emotes.iter().take(max_prefetch_emotes) {
-						let url = em.image_url.clone();
-						let img_cache_cl = img_cache.clone();
-						if img_cache_cl.contains_key(&url) {
-							continue;
-						}
+						if let Some(img) = em.pick_image(crate::ui::components::chat_message::AssetScaleUi::Two) {
+							let url = img.url.clone();
+							let img_cache_cl = img_cache.clone();
+							if img_cache_cl.contains_key(&url) {
+								continue;
+							}
 
-						if sender.try_send(url).is_err() {
-							break;
+							if sender.try_send(url).is_err() {
+								break;
+							}
+							queued += 1;
 						}
-						queued += 1;
 					}
 
 					if queued > 0 {
@@ -427,14 +429,16 @@ impl Chatty {
 					}
 
 					for bd in &bundle.badges {
-						let url = bd.image_url.clone();
-						let img_cache_cl = img_cache.clone();
-						if img_cache_cl.contains_key(&url) {
-							continue;
-						}
+						if let Some(img) = bd.pick_image(crate::ui::components::chat_message::AssetScaleUi::Two) {
+							let url = img.url.clone();
+							let img_cache_cl = img_cache.clone();
+							if img_cache_cl.contains_key(&url) {
+								continue;
+							}
 
-						if sender.try_send(url).is_err() {
-							break;
+							if sender.try_send(url).is_err() {
+								break;
+							}
 						}
 					}
 				}

@@ -191,6 +191,8 @@ async fn main() -> anyhow::Result<()> {
 	let conn_settings = ConnectionSettings {
 		auth_token: server_cfg.auth_token.clone(),
 		auth_hmac_secret: server_cfg.server.auth_hmac_secret.clone(),
+		twitch_client_id: server_cfg.twitch.client_id.clone(),
+		twitch_client_secret: server_cfg.twitch.client_secret.clone(),
 		command_rate_limit_per_conn_burst: server_cfg.server.command_rate_limit_per_conn_burst,
 		command_rate_limit_per_conn_per_minute: server_cfg.server.command_rate_limit_per_conn_per_minute,
 		command_rate_limit_per_topic_burst: server_cfg.server.command_rate_limit_per_topic_burst,
