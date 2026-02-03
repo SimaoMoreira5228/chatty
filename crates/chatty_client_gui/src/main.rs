@@ -20,5 +20,5 @@ fn main() -> iced::Result {
 		.init();
 
 	rust_i18n::set_locale("en-US");
-	app::run()
+	app::run::run()
 }

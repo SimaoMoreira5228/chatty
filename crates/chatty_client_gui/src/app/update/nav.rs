@@ -1,6 +1,8 @@
 use iced::Task;
 
-use crate::app::{Chatty, Message, Page};
+use crate::app::message::Message;
+use crate::app::model::Chatty;
+use crate::app::types::Page;
 
 impl Chatty {
 	pub fn update_navigate(&mut self, page: Page) -> Task<Message> {

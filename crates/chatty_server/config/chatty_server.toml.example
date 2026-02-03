@@ -56,15 +56,16 @@ database_url = ""
 
 # Enable replay (cursor resume) when persistence is enabled.
 # Env override: CHATTY_REPLAY_ENABLED
-replay_enabled = true
+replay_enabled = false
 
 # Per-topic replay capacity (optional override).
 # Env override: CHATTY_REPLAY_CAPACITY
 replay_capacity = 2048
 
-# Optional replay retention window in seconds.
-# Env override: CHATTY_REPLAY_RETENTION_SECS
-replay_retention_secs = 0
+# Optional replay retention window in minutes.
+# Set to 0 to disable eviction (default).
+# Env override: CHATTY_REPLAY_RETENTION_MINUTES
+replay_retention_minutes = 0
 
 [twitch]
 # Twitch Helix client id (a.k.a. "Client ID").

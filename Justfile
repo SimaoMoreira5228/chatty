@@ -5,6 +5,7 @@ fmt *args:
 
 lint *args:
     cargo clippy --fix --allow-dirty --allow-staged --all-features --all-targets {{ args }}
+    python tools/i18n_audit.py
 
 build *args:
     cargo build {{ args }}

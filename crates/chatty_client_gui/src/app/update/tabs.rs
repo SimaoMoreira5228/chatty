@@ -1,9 +1,19 @@
 use iced::Task;
 
-use crate::app::{Chatty, Message};
+use crate::app::message::{Message, WindowMessage};
+use crate::app::model::Chatty;
 
 impl Chatty {
-	pub fn update_tab_selected(&mut self, id: crate::app::state::TabId) -> Task<Message> {
+	pub fn update_window_message(&mut self, message: WindowMessage) -> Task<Message> {
+		match message {
+			WindowMessage::Closed(id) => self.update_window_closed(id),
+			WindowMessage::Opened(_) => Task::none(),
+			WindowMessage::Resized(id, w, h) => self.update_window_resized(id, w, h),
+			WindowMessage::Moved(id, x, y) => self.update_window_moved(id, x, y),
+		}
+	}
+
+	pub fn update_tab_selected(&mut self, id: crate::app::features::tabs::TabId) -> Task<Message> {
 		if self.state.tabs.contains_key(&id) {
 			self.state.selected_tab_id = Some(id);
 		}
@@ -14,7 +24,7 @@ impl Chatty {
 		self.update_open_join_modal(crate::app::types::JoinTarget::NewTab)
 	}
 
-	pub fn update_close_tab_pressed(&mut self, id: crate::app::state::TabId) -> Task<Message> {
+	pub fn update_close_tab_pressed(&mut self, id: crate::app::features::tabs::TabId) -> Task<Message> {
 		self.state.tabs.remove(&id);
 		self.state.tab_order.retain(|&tid| tid != id);
 
@@ -25,7 +35,7 @@ impl Chatty {
 		Task::none()
 	}
 
-	pub fn update_pop_tab(&mut self, id: crate::app::state::TabId) -> Task<Message> {
+	pub fn update_pop_tab(&mut self, id: crate::app::features::tabs::TabId) -> Task<Message> {
 		if self.state.pop_tab(id).is_some() {
 			self.state.pending_popped_tabs.push_back(id);
 			let (id, task) = iced::window::open(iced::window::Settings {
@@ -41,8 +51,8 @@ impl Chatty {
 					.map(|t| t.title.clone())
 					.unwrap_or_else(|| "Chatty Popout".to_string());
 
-				let win_model = crate::app::state::WindowModel {
-					id: crate::app::state::WindowId(0),
+				let win_model = crate::app::features::window::WindowModel {
+					id: crate::app::features::window::WindowId(0),
 					title,
 					tabs: vec![tab_id],
 					active_tab: Some(tab_id),
@@ -53,7 +63,7 @@ impl Chatty {
 				};
 				self.state.popped_windows.insert(id, win_model);
 			}
-			return task.map(Message::WindowOpened);
+			return task.map(|id| Message::Window(WindowMessage::Opened(id)));
 		}
 		Task::none()
 	}

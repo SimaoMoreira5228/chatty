@@ -1,19 +1,20 @@
 #![forbid(unsafe_code)]
 
 pub mod assets;
+pub mod features;
 mod identities;
 pub mod images;
-mod message;
-mod model;
+pub mod message;
+mod message_format;
+pub mod model;
 mod net;
-mod run;
+pub mod room;
+pub mod run;
+mod services;
 mod split;
 pub mod state;
 mod subscription;
 pub(crate) mod types;
 mod update;
-
-pub use message::Message;
-pub use model::Chatty;
-pub use run::run;
-pub use types::{InsertTarget, Page, PlatformChoice, ShortcutKeyChoice, SplitLayoutChoice, ThemeChoice};
+pub mod view_models;
+pub mod vim;

@@ -80,8 +80,8 @@ pub struct PersistenceSettings {
 	pub replay_enabled: bool,
 	/// Per-topic replay capacity (optional override).
 	pub replay_capacity: Option<usize>,
-	/// Optional retention window (seconds) for replay events.
-	pub replay_retention_secs: Option<u64>,
+	/// Optional retention window (minutes) for replay events.
+	pub replay_retention_minutes: Option<u64>,
 }
 
 /// Twitch settings loaded by the server.
@@ -177,7 +177,7 @@ struct FilePersistenceSettings {
 	database_url: Option<String>,
 	replay_enabled: Option<bool>,
 	replay_capacity: Option<usize>,
-	replay_retention_secs: Option<u64>,
+	replay_retention_minutes: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -251,6 +251,8 @@ impl ServerConfig {
 			broadcaster_id_overrides: file.kick.broadcaster_id_overrides,
 		};
 
+		let replay_retention_minutes = file.persistence.replay_retention_minutes.filter(|v| *v > 0);
+
 		Self {
 			auth_token: file.auth_token.filter(|s| !s.trim().is_empty()).map(SecretString::new),
 			server: ServerSettings {
@@ -273,9 +275,9 @@ impl ServerConfig {
 			persistence: PersistenceSettings {
 				enabled: file.persistence.enabled.unwrap_or(false),
 				database_url: file.persistence.database_url.filter(|s| !s.trim().is_empty()),
-				replay_enabled: file.persistence.replay_enabled.unwrap_or(true),
+				replay_enabled: file.persistence.replay_enabled.unwrap_or(false),
 				replay_capacity: file.persistence.replay_capacity,
-				replay_retention_secs: file.persistence.replay_retention_secs.filter(|v| *v > 0),
+				replay_retention_minutes,
 			},
 		}
 	}
@@ -459,11 +461,11 @@ fn apply_env_overrides(cfg: &mut ServerConfig) {
 		info!(capacity, "persistence: replay_capacity overridden by env");
 	}
 
-	if let Ok(v) = std::env::var("CHATTY_REPLAY_RETENTION_SECS")
+	if let Ok(v) = std::env::var("CHATTY_REPLAY_RETENTION_MINUTES")
 		&& let Ok(retention) = v.trim().parse::<u64>()
 	{
-		cfg.persistence.replay_retention_secs = Some(retention);
-		info!(retention, "persistence: replay_retention_secs overridden by env");
+		cfg.persistence.replay_retention_minutes = Some(retention);
+		info!(retention, "persistence: replay_retention_minutes overridden by env");
 	}
 
 	if let Ok(v) = std::env::var("CHATTY_TWITCH_CLIENT_ID") {

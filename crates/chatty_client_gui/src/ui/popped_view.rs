@@ -1,7 +1,8 @@
 use iced::Element;
 
-use crate::app::state::TabId;
-use crate::app::{Chatty, Message};
+use crate::app::features::tabs::TabId;
+use crate::app::message::Message;
+use crate::app::model::Chatty;
 use crate::theme;
 
 pub fn view(app: &Chatty, tab_id: TabId) -> Element<'_, Message> {

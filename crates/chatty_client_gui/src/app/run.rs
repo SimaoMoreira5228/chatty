@@ -2,7 +2,8 @@
 
 use iced::Task;
 
-use crate::app::{Chatty, Message};
+use crate::app::message::Message;
+use crate::app::model::Chatty;
 
 pub fn run() -> iced::Result {
 	iced::daemon(Chatty::new, update, Chatty::view)

@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 use chatty_domain::{RoomKey, RoomTopic};
 use iced::Task;
@@ -6,14 +6,27 @@ use iced::widget::pane_grid;
 use rust_i18n::t;
 use tracing::info;
 
+use crate::app::message::Message;
+use crate::app::message::NetMessage;
+use crate::app::message_format::{build_message_key, tokenize_message_text};
+use crate::app::model::Chatty;
 use crate::app::net::recv_next;
-use crate::app::state::{ConnectionStatus, UiNotificationKind};
-use crate::app::{Chatty, Message};
+use crate::app::state::ConnectionStatus;
+use crate::app::view_models::{AssetBundleUi, ChatMessageUi};
 use crate::net::UiEvent;
 use crate::settings;
-use crate::ui::components::chat_message::{AssetBundleUi, ChatMessageUi};
 
 impl Chatty {
+	pub fn update_net_message(&mut self, message: NetMessage) -> Task<Message> {
+		match message {
+			NetMessage::ConnectPressed => self.update_connect_pressed(),
+			NetMessage::DisconnectPressed => self.update_disconnect_pressed(),
+			NetMessage::ConnectFinished(res) => self.update_connect_finished(res),
+			NetMessage::NetPolled(ev) => self.update_net_polled(ev),
+			NetMessage::AutoJoinCompleted(results) => self.update_auto_join_completed(results),
+		}
+	}
+
 	pub fn update_chat_message_prepared(&mut self, msg: ChatMessageUi) -> Task<Message> {
 		let key = msg.key.clone();
 		self.message_text_editors.entry(key).or_default();
@@ -36,10 +49,12 @@ impl Chatty {
 						None => true,
 					};
 
-					let recv_cmd = Task::perform(recv_next(self.net_rx.clone()), Message::NetPolled);
+					let recv_cmd = Task::perform(recv_next(self.net_rx.clone()), |ev| {
+						Message::Net(crate::app::message::NetMessage::NetPolled(ev))
+					});
 
 					if do_focus {
-						self.state.ui.last_focus = Some(Instant::now());
+						self.state.ui.last_focus = Some(self.clock.now());
 						let mut cmds = Vec::new();
 						for pane in panes_with_tab {
 							let id = format!("log-{:?}", pane);
@@ -77,20 +92,22 @@ impl Chatty {
 		let cfg = match settings::build_client_config(&gs) {
 			Ok(c) => c,
 			Err(e) => {
-				let t = self.toast(e.clone());
-				self.state.push_notification(UiNotificationKind::Error, e);
-				return t;
+				return self.report_error(e);
 			}
 		};
 
 		self.state.set_connection_status(ConnectionStatus::Connecting);
-		let net = self.net.clone();
-		Task::perform(async move { net.connect(cfg).await }, Message::ConnectFinished)
+		let net = self.net_effects.clone();
+		Task::perform(net.connect(cfg), |res| {
+			Message::Net(crate::app::message::NetMessage::ConnectFinished(res))
+		})
 	}
 
 	pub fn update_disconnect_pressed(&mut self) -> Task<Message> {
-		let net = self.net.clone();
-		Task::perform(async move { net.disconnect("user").await }, Message::ConnectFinished)
+		let net = self.net_effects.clone();
+		Task::perform(net.disconnect("user".to_string()), |res| {
+			Message::Net(crate::app::message::NetMessage::ConnectFinished(res))
+		})
 	}
 
 	pub fn update_connect_finished(&mut self, res: Result<(), String>) -> Task<Message> {
@@ -99,10 +116,10 @@ impl Chatty {
 				self.state.ui.active_overlay = None;
 			}
 			Err(e) => {
-				self.state.ui.active_overlay = Some(crate::ui::modals::ActiveOverlay::Layout(
-					crate::ui::modals::layout::LayoutModal::new_error(e.clone()),
+				self.state.ui.active_overlay = Some(crate::app::features::overlays::ActiveOverlay::Layout(
+					crate::app::features::overlays::LayoutModal::new_error(e.clone()),
 				));
-				self.state.push_notification(UiNotificationKind::Error, e);
+				return self.report_error(e);
 			}
 		}
 		Task::none()
@@ -113,8 +130,7 @@ impl Chatty {
 		for (room, res) in results {
 			if let Err(e) = res {
 				let msg = format!("{} {}: {}", t!("failed_to_subscribe"), RoomTopic::format(&room), e);
-				tasks.push(self.toast(msg.clone()));
-				self.state.push_notification(UiNotificationKind::Error, msg);
+				tasks.push(self.report_error(msg));
 			}
 		}
 		Task::batch(tasks)
@@ -122,9 +138,7 @@ impl Chatty {
 
 	pub(crate) fn update_net_polled(&mut self, ev: Option<UiEvent>) -> Task<Message> {
 		let Some(ev) = ev else {
-			self.state
-				.push_notification(UiNotificationKind::Warning, t!("network_event_stream_closed").to_string());
-			return Task::none();
+			return self.report_warning(t!("network_event_stream_closed").to_string());
 		};
 
 		let event_kind = match ev {
@@ -144,9 +158,9 @@ impl Chatty {
 		let mut pre_task: Option<Task<Message>> = None;
 		if let Some(room) = self.collect_orphaned_tab() {
 			info!(%room, "NetPolled: found orphaned tab; unsubscribing (continuing to process event)");
-			let net = self.net.clone();
+			let net = self.net_effects.clone();
 			pre_task = Some(Task::perform(
-				async move { (room.clone(), net.unsubscribe_room_key(room).await) },
+				async move { (room.clone(), net.unsubscribe_room_key(room.clone()).await) },
 				|(room, res)| Message::TabUnsubscribed(room, res),
 			));
 		}
@@ -164,7 +178,9 @@ impl Chatty {
 		};
 
 		let ev_task = ev_task_opt.unwrap_or_else(Task::none);
-		let recv_task = Task::perform(recv_next(self.net_rx.clone()), Message::NetPolled);
+		let recv_task = Task::perform(recv_next(self.net_rx.clone()), |ev| {
+			Message::Net(crate::app::message::NetMessage::NetPolled(ev))
+		});
 
 		if let Some(pre) = pre_task {
 			info!("scheduling recv_next and running pre-task");
@@ -213,7 +229,7 @@ impl Chatty {
 				}
 
 				if !rooms.is_empty() {
-					let net = self.net.clone();
+					let net = self.net_effects.clone();
 					Some(Task::perform(
 						async move {
 							let mut results = Vec::new();
@@ -223,7 +239,7 @@ impl Chatty {
 							}
 							results
 						},
-						Message::AutoJoinCompleted,
+						|results| Message::Net(crate::app::message::NetMessage::AutoJoinCompleted(results)),
 					))
 				} else {
 					None
@@ -250,12 +266,9 @@ impl Chatty {
 				message
 			};
 			if !msg.trim().is_empty() {
-				let t = self.toast(msg.clone());
-				self.state.push_notification(UiNotificationKind::Error, msg);
-				return Some(t);
+				return Some(self.report_error(msg));
 			}
-			self.state.push_notification(UiNotificationKind::Error, msg);
-			None
+			Some(self.report_error(msg))
 		} else {
 			None
 		}
@@ -298,9 +311,7 @@ impl Chatty {
 					};
 					Some(self.update_chat_message_prepared(msg))
 				} else {
-					self.state
-						.push_notification(UiNotificationKind::Warning, format!("{}: {topic}", t!("unparseable_topic")));
-					None
+					Some(self.report_warning(format!("{}: {topic}", t!("unparseable_topic"))))
 				}
 			}
 			_ => unreachable!("handle_chat_event called with non-chat event"),
@@ -324,7 +335,7 @@ impl Chatty {
 					if let Ok(room) = RoomTopic::parse(&topic) {
 						self.state.room_permissions.insert(
 							room,
-							crate::app::state::RoomPermissions {
+							crate::app::room::RoomPermissions {
 								can_send,
 								can_reply,
 								can_delete,
@@ -348,7 +359,7 @@ impl Chatty {
 				{
 					self.state.room_states.insert(
 						room,
-						crate::app::state::RoomStateUi {
+						crate::app::room::RoomStateUi {
 							emote_only,
 							subscribers_only,
 							unique_chat,
@@ -378,79 +389,34 @@ impl Chatty {
 		{
 			info!(topic = %topic, cache_key = %cache_key, emote_count = emotes.len(), badge_count = badges.len(), "received AssetBundle UiEvent");
 			let ck = cache_key.clone();
-			self.state.asset_bundles.insert(
-				ck.clone(),
-				AssetBundleUi {
-					cache_key: ck.clone(),
-					etag,
-					provider,
-					scope,
-					emotes,
-					badges,
-				},
-			);
+			let bundle = AssetBundleUi {
+				cache_key: ck.clone(),
+				etag,
+				provider,
+				scope,
+				emotes,
+				badges,
+			};
 
-			if scope == chatty_protocol::pb::AssetScope::Global as i32 {
-				if !self.state.global_asset_cache_keys.contains(&ck) {
+			let room = chatty_domain::RoomTopic::parse(&topic).ok();
+			let is_new = self.state.asset_catalog.register_bundle(bundle.clone(), scope, room);
+
+			if is_new {
+				if scope == chatty_protocol::pb::AssetScope::Global as i32 {
 					info!(cache_key = %ck, "registering global AssetBundle cache_key");
-					self.state.global_asset_cache_keys.push(ck.clone());
-				}
-			} else if let Ok(room) = chatty_domain::RoomTopic::parse(&topic) {
-				let keys = self.state.room_asset_cache_keys.entry(room.clone()).or_default();
-				if !keys.contains(&ck) {
+				} else if let Ok(room) = chatty_domain::RoomTopic::parse(&topic) {
 					info!(cache_key = %ck, room = %room, "registering room AssetBundle cache_key");
-					keys.push(ck.clone());
 				}
 			}
 
-			{
-				let img_cache = self.assets.image_cache.clone();
-				let sender = self.assets.image_fetch_sender.clone();
-				if let Some(bundle) = self.state.asset_bundles.get(&ck) {
-					let max_prefetch_emotes = 64usize;
-					let mut queued = 0usize;
-					for em in bundle.emotes.iter().take(max_prefetch_emotes) {
-						if let Some(img) = em.pick_image(crate::ui::components::chat_message::AssetScaleUi::Two) {
-							let url = img.url.clone();
-							let img_cache_cl = img_cache.clone();
-							if img_cache_cl.contains_key(&url) {
-								continue;
-							}
-
-							if sender.try_send(url).is_err() {
-								break;
-							}
-							queued += 1;
-						}
-					}
-
-					if queued > 0 {
-						tracing::debug!(cache_key = %ck, queued, "prefetched emote images");
-					}
-
-					for bd in &bundle.badges {
-						if let Some(img) = bd.pick_image(crate::ui::components::chat_message::AssetScaleUi::Two) {
-							let url = img.url.clone();
-							let img_cache_cl = img_cache.clone();
-							if img_cache_cl.contains_key(&url) {
-								continue;
-							}
-
-							if sender.try_send(url).is_err() {
-								break;
-							}
-						}
-					}
-				}
-			}
+			self.assets.prefetch_bundle(&bundle, 64);
 		}
 		None
 	}
 
 	fn handle_command_result_event(&mut self, ev: UiEvent) -> Option<Task<Message>> {
 		if let UiEvent::CommandResult { status, detail } = ev {
-			self.state
-				.push_notification(UiNotificationKind::Info, format!("command status={status}: {detail}"));
+			let _ = self.report_info(format!("command status={status}: {detail}"));
 
 			if status == chatty_protocol::pb::command_result::Status::Ok as i32 {
 				let _ = self.pending_commands.pop();
@@ -466,24 +432,4 @@ impl Chatty {
 		}
 		None
 	}
-}
-
-fn tokenize_message_text(text: &str) -> Vec<String> {
-	text.split_whitespace().map(|t| t.to_string()).collect()
-}
-
-fn build_message_key(
-	room: &RoomKey,
-	server_message_id: Option<&str>,
-	platform_message_id: Option<&str>,
-	time: SystemTime,
-) -> String {
-	let time = time.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
-	format!(
-		"{}:{}:{}:{}",
-		room,
-		server_message_id.unwrap_or(""),
-		platform_message_id.unwrap_or(""),
-		time
-	)
 }

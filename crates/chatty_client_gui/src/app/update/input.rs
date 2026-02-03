@@ -2,12 +2,13 @@ use chatty_domain::RoomTopic;
 use iced::{Task, keyboard};
 use rust_i18n::t;
 
+use crate::app::message::Message;
+use crate::app::model::Chatty;
 use crate::app::model::first_char_lower;
 use crate::app::net::recv_next;
-use crate::app::state::{ConnectionStatus, UiNotificationKind};
+use crate::app::state::ConnectionStatus;
 use crate::app::subscription::shortcut_match;
-use crate::app::types::JoinTarget;
-use crate::app::{Chatty, InsertTarget, Message};
+use crate::app::types::{InsertTarget, JoinTarget};
 use crate::settings;
 
 impl Chatty {
@@ -36,15 +37,15 @@ impl Chatty {
 				let cfg = match settings::build_client_config(&gs) {
 					Ok(c) => c,
 					Err(e) => {
-						let t = self.toast(e.clone());
-						self.state.push_notification(UiNotificationKind::Error, e);
-						return t;
+						return self.report_error(e);
 					}
 				};
 
 				self.state.set_connection_status(ConnectionStatus::Connecting);
-				let net = self.net.clone();
-				return Task::perform(async move { net.connect(cfg).await }, Message::ConnectFinished);
+				let net = self.net_effects.clone();
+				return Task::perform(net.connect(cfg), |res| {
+					Message::Net(crate::app::message::NetMessage::ConnectFinished(res))
+				});
 			}
 		}
 
@@ -92,7 +93,9 @@ impl Chatty {
 				self.state.ui.vim.enter_insert_mode(InsertTarget::Composer);
 				let toast_cmd = self.toast(t!("insert_mode").to_string());
 				let focus_cmd = iced::widget::operation::focus(format!("composer-{:?}", focused));
-				let recv_cmd = Task::perform(recv_next(self.net_rx.clone()), Message::NetPolled);
+				let recv_cmd = Task::perform(recv_next(self.net_rx.clone()), |ev| {
+					Message::Net(crate::app::message::NetMessage::NetPolled(ev))
+				});
 				return Task::batch(vec![toast_cmd, focus_cmd, recv_cmd]);
 			}
 
@@ -132,7 +135,7 @@ impl Chatty {
 
 		if let Some((tid, room)) = tid_to_remove {
 			self.state.tabs.remove(&tid);
-			let net = self.net.clone();
+			let net = self.net_effects.clone();
 			return Task::perform(async move { net.unsubscribe_room_key(room).await }, |res| match res {
 				Ok(_) => Message::DismissToast,
 				Err(e) => {
@@ -149,7 +152,8 @@ impl Chatty {
 		use iced::keyboard::key::Named;
 		match named {
 			Named::Escape => {
-				if let Some(crate::ui::modals::ActiveOverlay::MessageAction(_)) = &self.state.ui.active_overlay {
+				if let Some(crate::app::features::overlays::ActiveOverlay::MessageAction(_)) = &self.state.ui.active_overlay
+				{
 					self.state.ui.active_overlay = None;
 					return Task::none();
 				}
@@ -161,7 +165,9 @@ impl Chatty {
 
 					let unfocus_cmd =
 						iced::advanced::widget::operate(iced::advanced::widget::operation::focusable::unfocus());
-					let recv_cmd = Task::perform(recv_next(self.net_rx.clone()), Message::NetPolled);
+					let recv_cmd = Task::perform(recv_next(self.net_rx.clone()), |ev| {
+						Message::Net(crate::app::message::NetMessage::NetPolled(ev))
+					});
 					return Task::batch(vec![toast_cmd, unfocus_cmd, recv_cmd]);
 				}
 				Task::none()
@@ -205,10 +211,10 @@ impl Chatty {
 										)),
 									};
 
-									let net = self.net.clone();
+									let net = self.net_effects.clone();
 									return Task::perform(
 										async move { net.send_command(cmd).await.map_err(|e| e.to_string()) },
-										Message::Sent,
+										|res| Message::Chat(crate::app::message::ChatMessage::Sent(res)),
 									);
 								}
 							}
@@ -222,7 +228,8 @@ impl Chatty {
 				}
 			}
 			Named::Backspace => {
-				if self.state.ui.vim.insert_mode {
+				if let Some(crate::app::features::overlays::ActiveOverlay::MessageAction(_)) = &self.state.ui.active_overlay
+				{
 					let focused = self.selected_tab().and_then(|t| t.focused_pane);
 					let Some(focused) = focused else {
 						return Task::none();

@@ -6,14 +6,33 @@ use iced::Task;
 use iced::widget::{pane_grid, scrollable};
 use rust_i18n::t;
 
+use crate::app::features::chat::ChatPaneMessage;
+use crate::app::message::LayoutMessage;
+use crate::app::message::Message;
+use crate::app::model::Chatty;
 use crate::app::net::recv_next;
-use crate::app::state::JoinRequest;
+use crate::app::room::JoinRequest;
 use crate::app::types::JoinTarget;
-use crate::app::{Chatty, Message};
 use crate::settings::SplitLayoutKind;
-use crate::ui::components::chat_pane::ChatPaneMessage;
 
 impl Chatty {
+	pub fn update_layout_message(&mut self, message: LayoutMessage) -> Task<Message> {
+		match message {
+			LayoutMessage::ChatLogScrolled(pane, viewport) => self.update_chat_log_scrolled(pane, viewport),
+			LayoutMessage::PaneClicked(pane) => self.update_pane_focus_changed(pane),
+			LayoutMessage::PaneResized(ev) => self.update_pane_resized(ev),
+			LayoutMessage::PaneDragged(ev) => self.update_pane_dragged(ev),
+			LayoutMessage::SplitSpiral => self.update_split_spiral(),
+			LayoutMessage::SplitMasonry => self.update_split_masonry(),
+			LayoutMessage::SplitPressed => self.update_split_pressed(),
+			LayoutMessage::CloseFocused => self.update_close_focused(),
+			LayoutMessage::NavigatePaneLeft => self.update_navigate_pane_left(),
+			LayoutMessage::NavigatePaneDown => self.update_navigate_pane_down(),
+			LayoutMessage::NavigatePaneUp => self.update_navigate_pane_up(),
+			LayoutMessage::NavigatePaneRight => self.update_navigate_pane_right(),
+		}
+	}
+
 	pub fn update_chat_log_scrolled(&mut self, _pane: pane_grid::Pane, viewport: scrollable::Viewport) -> Task<Message> {
 		let bounds = viewport.bounds();
 		let content = viewport.content_bounds();
@@ -40,9 +59,7 @@ impl Chatty {
 
 	pub fn update_pane_subscribed(&mut self, _pane: pane_grid::Pane, res: Result<(), String>) -> Task<Message> {
 		if let Err(e) = res {
-			let t = self.toast(e.clone());
-			self.state.push_notification(crate::app::state::UiNotificationKind::Error, e);
-			return t;
+			return self.report_error(e);
 		} else {
 			self.save_ui_layout();
 		}
@@ -58,16 +75,15 @@ impl Chatty {
 				chatty_domain::RoomTopic::format(&room),
 				e
 			);
-			let t = self.toast(msg.clone());
-			self.state
-				.push_notification(crate::app::state::UiNotificationKind::Error, msg);
-			return t;
+			return self.report_error(msg);
 		} else {
 			// unsubscribed successfully; nothing else to do
 		}
 
 		tracing::info!("TabUnsubscribed handled; resuming network event polling");
-		Task::perform(recv_next(self.net_rx.clone()), Message::NetPolled)
+		Task::perform(recv_next(self.net_rx.clone()), |ev| {
+			Message::Net(crate::app::message::NetMessage::NetPolled(ev))
+		})
 	}
 
 	pub fn update_pane_send_pressed(&mut self, pane: pane_grid::Pane) -> Task<Message> {
@@ -135,9 +151,9 @@ impl Chatty {
 			})),
 		};
 
-		let net = self.net.clone();
+		let net = self.net_effects.clone();
 		Task::perform(async move { net.send_command(cmd).await.map_err(|e: String| e) }, |res| {
-			Message::Sent(res)
+			Message::Chat(crate::app::message::ChatMessage::Sent(res))
 		})
 	}
 
@@ -192,13 +208,13 @@ impl Chatty {
 
 	pub fn update_open_join_modal(&mut self, target: JoinTarget) -> Task<Message> {
 		self.state.ui.pending_join_target = Some(target);
-		self.state.ui.active_overlay = Some(crate::ui::modals::ActiveOverlay::Join(crate::ui::modals::JoinModal::new(
-			self.state.default_platform,
-		)));
+		self.state.ui.active_overlay = Some(crate::app::features::overlays::ActiveOverlay::Join(
+			crate::app::features::overlays::JoinModal::new(self.state.default_platform),
+		));
 		Task::none()
 	}
 
-	pub fn update_join_modal_submit(&mut self, modal: crate::ui::modals::JoinModal) -> Task<Message> {
+	pub fn update_join_modal_submit(&mut self, modal: crate::app::features::overlays::JoinModal) -> Task<Message> {
 		let raw_input = modal.input.trim().to_string();
 		if raw_input.is_empty() {
 			return Task::none();
@@ -285,8 +301,7 @@ impl Chatty {
 
 				if let Some(tab) = self.selected_tab_mut() {
 					if tab.panes.iter().next().is_none() {
-						let (panes, pane) =
-							pane_grid::State::new(crate::ui::components::chat_pane::ChatPane::new(Some(tid)));
+						let (panes, pane) = pane_grid::State::new(crate::app::features::chat::ChatPane::new(Some(tid)));
 						tab.panes = panes;
 						tab.focused_pane = Some(pane);
 						if let Some(p) = tab.panes.get_mut(pane) {
@@ -297,7 +312,7 @@ impl Chatty {
 							return Task::none();
 						};
 
-						let mut new_state = crate::ui::components::chat_pane::ChatPane::new(Some(tid));
+						let mut new_state = crate::app::features::chat::ChatPane::new(Some(tid));
 						new_state.join_raw = join_raw;
 
 						match split_layout {
@@ -394,7 +409,7 @@ impl Chatty {
 			}
 		}
 
-		let net = self.net.clone();
+		let net = self.net_effects.clone();
 		Task::perform(
 			async move {
 				let mut results = Vec::new();
@@ -404,7 +419,7 @@ impl Chatty {
 				}
 				results
 			},
-			Message::AutoJoinCompleted,
+			|results| Message::Net(crate::app::message::NetMessage::AutoJoinCompleted(results)),
 		)
 	}
 
@@ -438,7 +453,7 @@ impl Chatty {
 
 		if let Some(tid) = tid_to_remove {
 			self.state.tabs.remove(&tid);
-			let net = self.net.clone();
+			let net = self.net_effects.clone();
 			return Task::perform(
 				async move {
 					let mut results = Vec::new();
@@ -462,8 +477,8 @@ impl Chatty {
 	}
 
 	pub fn update_dismiss_toast(&mut self) -> Task<Message> {
-		let mut toaster = std::mem::replace(&mut self.state.ui.toaster, crate::ui::components::toaster::Toaster::new());
-		let task = toaster.update(self, crate::ui::components::toaster::ToasterMessage::Dismiss);
+		let mut toaster = std::mem::replace(&mut self.state.ui.toaster, crate::app::features::toaster::Toaster::new());
+		let task = toaster.update(self, crate::app::features::toaster::ToasterMessage::Dismiss);
 		self.state.ui.toaster = toaster;
 		task
 	}

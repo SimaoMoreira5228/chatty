@@ -3,7 +3,8 @@
 use chatty_domain::Platform;
 use iced::Task;
 
-use crate::app::{Chatty, Message};
+use crate::app::message::Message;
+use crate::app::model::Chatty;
 use crate::settings;
 
 impl Chatty {
@@ -43,7 +44,7 @@ impl Chatty {
 		}
 
 		self.state.set_gui_settings(gs);
-		Task::done(Message::ConnectPressed)
+		Task::done(Message::Net(crate::app::message::NetMessage::ConnectPressed))
 	}
 
 	pub(crate) fn upsert_identity_from_kick_blob(&mut self, raw: String) -> Task<Message> {
@@ -80,6 +81,6 @@ impl Chatty {
 		}
 
 		self.state.set_gui_settings(gs);
-		Task::done(Message::ConnectPressed)
+		Task::done(Message::Net(crate::app::message::NetMessage::ConnectPressed))
 	}
 }

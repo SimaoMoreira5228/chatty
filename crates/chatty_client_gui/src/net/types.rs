@@ -1,4 +1,4 @@
-use crate::ui::components::chat_message::AssetRefUi;
+use crate::app::view_models::AssetRefUi;
 
 /// UI-level events emitted by the networking layer.
 #[derive(Debug, Clone)]

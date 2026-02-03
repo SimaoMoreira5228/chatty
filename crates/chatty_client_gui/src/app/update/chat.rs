@@ -1,9 +1,25 @@
 use iced::Task;
 
-use crate::app::types::PendingCommand;
-use crate::app::{Chatty, InsertTarget, Message};
+use crate::app::message::ChatMessage;
+use crate::app::message::Message;
+use crate::app::model::Chatty;
+use crate::app::types::{InsertTarget, PendingCommand};
 
 impl Chatty {
+	pub fn update_chat_message(&mut self, message: ChatMessage) -> Task<Message> {
+		match message {
+			ChatMessage::MessageActionButtonPressed(room, s_id, p_id, a_id) => {
+				self.update_message_action_button_pressed(room, s_id, p_id, a_id)
+			}
+			ChatMessage::ReplyToMessage(room, s_id, p_id) => self.update_reply_to_message(room, s_id, p_id),
+			ChatMessage::DeleteMessage(room, s_id, p_id) => self.update_delete_message(room, s_id, p_id),
+			ChatMessage::TimeoutUser(room, user_id) => self.update_timeout_user(room, user_id),
+			ChatMessage::BanUser(room, user_id) => self.update_ban_user(room, user_id),
+			ChatMessage::Sent(res) => self.update_sent(res),
+			ChatMessage::MessageTextEdit(key, action) => self.update_message_text_edit(key, action),
+		}
+	}
+
 	pub fn update_message_action_button_pressed(
 		&mut self,
 		room: chatty_domain::RoomKey,
@@ -11,8 +27,8 @@ impl Chatty {
 		platform_msg_id: Option<String>,
 		author_id: Option<String>,
 	) -> Task<Message> {
-		self.state.ui.active_overlay = Some(crate::ui::modals::ActiveOverlay::MessageAction(
-			crate::ui::modals::message_action::MessageActionMenu::new(
+		self.state.ui.active_overlay = Some(crate::app::features::overlays::ActiveOverlay::MessageAction(
+			crate::app::features::overlays::MessageActionMenu::new(
 				room,
 				server_msg_id,
 				platform_msg_id,
@@ -21,11 +37,6 @@ impl Chatty {
 			),
 		));
 
-		Task::none()
-	}
-
-	pub fn update_dismiss_message_action(&mut self) -> Task<Message> {
-		self.state.ui.active_overlay = None;
 		Task::none()
 	}
 
@@ -64,8 +75,8 @@ impl Chatty {
 		server_msg_id: Option<String>,
 		platform_msg_id: Option<String>,
 	) -> Task<Message> {
-		self.state.ui.active_overlay = Some(crate::ui::modals::ActiveOverlay::Confirm(
-			crate::ui::modals::confirm::ConfirmModal::new_delete(room, server_msg_id, platform_msg_id),
+		self.state.ui.active_overlay = Some(crate::app::features::overlays::ActiveOverlay::Confirm(
+			crate::app::features::overlays::ConfirmModal::new_delete(room, server_msg_id, platform_msg_id),
 		));
 		Task::none()
 	}
@@ -87,7 +98,7 @@ impl Chatty {
 			)),
 		};
 
-		let net = self.net.clone();
+		let net = self.net_effects.clone();
 		self.state.ui.active_overlay = None;
 		self.pending_commands.push(PendingCommand::Delete {
 			room: room.clone(),
@@ -99,15 +110,15 @@ impl Chatty {
 		Task::perform(
 			async move {
 				let res: Result<(), String> = net.send_command(cmd).await.map_err(|e| e.to_string());
-				Message::Sent(res)
+				Message::Chat(crate::app::message::ChatMessage::Sent(res))
 			},
 			|m| m,
 		)
 	}
 
 	pub fn update_timeout_user(&mut self, room: chatty_domain::RoomKey, user_id: String) -> Task<Message> {
-		self.state.ui.active_overlay = Some(crate::ui::modals::ActiveOverlay::Confirm(
-			crate::ui::modals::confirm::ConfirmModal::new_timeout(room, user_id),
+		self.state.ui.active_overlay = Some(crate::app::features::overlays::ActiveOverlay::Confirm(
+			crate::app::features::overlays::ConfirmModal::new_timeout(room, user_id),
 		));
 		Task::none()
 	}
@@ -124,7 +135,7 @@ impl Chatty {
 				},
 			)),
 		};
-		let net = self.net.clone();
+		let net = self.net_effects.clone();
 		self.state.ui.active_overlay = None;
 		self.pending_commands.push(PendingCommand::Timeout {
 			room: room.clone(),
@@ -133,15 +144,15 @@ impl Chatty {
 		Task::perform(
 			async move {
 				let res: Result<(), String> = net.send_command(cmd).await.map_err(|e| e.to_string());
-				Message::Sent(res)
+				Message::Chat(crate::app::message::ChatMessage::Sent(res))
 			},
 			|m| m,
 		)
 	}
 
 	pub fn update_ban_user(&mut self, room: chatty_domain::RoomKey, user_id: String) -> Task<Message> {
-		self.state.ui.active_overlay = Some(crate::ui::modals::ActiveOverlay::Confirm(
-			crate::ui::modals::confirm::ConfirmModal::new_ban(room, user_id),
+		self.state.ui.active_overlay = Some(crate::app::features::overlays::ActiveOverlay::Confirm(
+			crate::app::features::overlays::ConfirmModal::new_ban(room, user_id),
 		));
 		Task::none()
 	}
@@ -157,7 +168,7 @@ impl Chatty {
 				},
 			)),
 		};
-		let net = self.net.clone();
+		let net = self.net_effects.clone();
 		self.state.ui.active_overlay = None;
 		self.pending_commands.push(PendingCommand::Ban {
 			room: room.clone(),
@@ -166,31 +177,32 @@ impl Chatty {
 		Task::perform(
 			async move {
 				let res: Result<(), String> = net.send_command(cmd).await.map_err(|e| e.to_string());
-				Message::Sent(res)
+				Message::Chat(crate::app::message::ChatMessage::Sent(res))
 			},
 			|m| m,
 		)
 	}
 
-	pub fn update_confirm_modal_confirmed(&mut self, modal: crate::ui::modals::confirm::ConfirmModal) -> Task<Message> {
+	pub fn update_confirm_modal_confirmed(&mut self, modal: crate::app::features::overlays::ConfirmModal) -> Task<Message> {
 		let room = modal.room;
 		let kind = modal.kind;
 		let server_msg_id = modal.server_message_id;
 		let platform_msg_id = modal.platform_message_id;
 
 		match kind {
-			crate::ui::modals::confirm::ConfirmModalKind::DeleteMessage => {
+			crate::app::features::overlays::ConfirmModalKind::DeleteMessage => {
 				self.execute_delete_message(room, server_msg_id, platform_msg_id)
 			}
-			crate::ui::modals::confirm::ConfirmModalKind::TimeoutUser(user_id) => self.execute_timeout_user(room, user_id),
-			crate::ui::modals::confirm::ConfirmModalKind::BanUser(user_id) => self.execute_ban_user(room, user_id),
+			crate::app::features::overlays::ConfirmModalKind::TimeoutUser(user_id) => {
+				self.execute_timeout_user(room, user_id)
+			}
+			crate::app::features::overlays::ConfirmModalKind::BanUser(user_id) => self.execute_ban_user(room, user_id),
 		}
 	}
 
 	pub fn update_sent(&mut self, res: Result<(), String>) -> Task<Message> {
 		if let Err(e) = res {
-			let t = self.toast(e.clone());
-			self.state.push_notification(crate::app::state::UiNotificationKind::Error, e);
+			let t = self.report_error(e);
 			let _ = self.pending_commands.pop();
 			self.rebuild_pending_delete_keys();
 			return t;

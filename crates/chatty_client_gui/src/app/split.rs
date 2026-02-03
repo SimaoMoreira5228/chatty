@@ -2,8 +2,8 @@
 
 use iced::widget::pane_grid;
 
-use crate::app::Chatty;
-use crate::ui::components::chat_pane::ChatPane;
+use crate::app::features::chat::ChatPane;
+use crate::app::model::Chatty;
 
 impl Chatty {
 	pub(crate) fn split_spiral(&mut self) {

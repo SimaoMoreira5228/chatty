@@ -2,10 +2,18 @@ use chatty_domain::Platform;
 use iced::Task;
 use rust_i18n::t;
 
+use crate::app::message::Message;
+use crate::app::model::Chatty;
 use crate::app::types::{ClipboardTarget, PlatformChoice, ShortcutKeyChoice, SplitLayoutChoice, ThemeChoice};
-use crate::app::{Chatty, Message};
 
 impl Chatty {
+	pub fn update_settings_message(&mut self, message: crate::app::features::settings::SettingsMessage) -> Task<Message> {
+		let mut sv = self.state.ui.settings_view.clone();
+		let task = sv.update(self, message);
+		self.state.ui.settings_view = sv;
+		task
+	}
+
 	pub fn update_platform_selected(&mut self, choice: PlatformChoice) -> Task<Message> {
 		let mut gs = self.state.gui_settings().clone();
 		gs.default_platform = choice.0;
@@ -25,7 +33,7 @@ impl Chatty {
 				tab.log.max_items = n;
 				while tab.log.items.len() > n {
 					if let Some(removed) = tab.log.items.pop_front()
-						&& let crate::ui::components::tab::ChatItem::ChatMessage(m) = removed
+						&& let crate::app::features::tabs::ChatItem::ChatMessage(m) = removed
 						&& let Some(count) = tab.user_counts.get_mut(&m.user_login)
 					{
 						*count = count.saturating_sub(1);

@@ -1,21 +1,18 @@
 #![forbid(unsafe_code)]
 
-pub mod components;
-pub mod layout;
+pub mod features;
 mod main_view;
-pub mod modals;
 
 pub mod popped_view;
-pub mod settings;
 pub mod tab_view;
 mod topbar;
-pub mod users_view;
-pub mod vim;
 
 use iced::widget::{column, container, stack};
 use iced::{Background, Border, Element, Length, Shadow};
 
-use crate::app::{Chatty, Message, Page};
+use crate::app::message::Message;
+use crate::app::model::Chatty;
+use crate::app::types::Page;
 use crate::theme;
 
 pub fn view(app: &Chatty, window: iced::window::Id) -> Element<'_, Message> {

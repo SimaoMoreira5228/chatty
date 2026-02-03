@@ -4,21 +4,22 @@
 use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 
+use crate::app::assets::AssetCatalog;
 use chatty_client_core::ClientConfigV1;
 use chatty_domain::{Platform, RoomKey};
 use iced::keyboard;
 use iced::widget::pane_grid;
 use tracing::{debug, info};
 
+use crate::app::features::chat::ChatPane;
+use crate::app::features::tabs::{ChatItem, ChatLog, TabId, TabModel, TabTarget};
+use crate::app::features::toaster::{UiNotification, UiNotificationKind};
+use crate::app::features::window::{WindowId, WindowModel};
+use crate::app::room::{JoinRequest, RoomPermissions, RoomStateUi};
 use crate::app::types::{JoinTarget, Page, SettingsCategory};
+use crate::app::view_models::ChatMessageUi;
 use crate::settings;
 use crate::settings::GuiSettings;
-pub use crate::ui::components::chat_message::ChatMessageUi;
-use crate::ui::components::chat_pane::ChatPane;
-pub use crate::ui::components::room::{JoinRequest, RoomPermissions, RoomStateUi};
-pub use crate::ui::components::tab::{ChatItem, ChatLog, TabId, TabModel, TabTarget};
-pub use crate::ui::components::toaster::{UiNotification, UiNotificationKind};
-pub use crate::ui::components::window::{WindowId, WindowModel};
 
 #[derive(Debug, Clone)]
 pub enum ConnectionStatus {
@@ -43,20 +44,20 @@ pub struct UiState {
 	pub modifiers: keyboard::Modifiers,
 	pub window_size: Option<(f32, f32)>,
 	pub last_cursor_pos: Option<(f32, f32)>,
-	pub toaster: crate::ui::components::toaster::Toaster,
+	pub toaster: crate::app::features::toaster::Toaster,
 	pub animation_start: std::time::Instant,
 	pub animation_clock: std::time::Instant,
 	pub follow_end: bool,
 	pub last_focus: Option<std::time::Instant>,
-	pub vim: crate::ui::vim::VimState,
+	pub vim: crate::app::vim::VimState,
 	pub server_endpoint_quic: String,
 	pub server_auth_token: String,
 	pub max_log_items_raw: String,
-	pub users_view: crate::ui::users_view::UsersView,
-	pub active_overlay: Option<crate::ui::modals::ActiveOverlay>,
+	pub users_view: crate::app::features::users::UsersView,
+	pub active_overlay: Option<crate::app::features::overlays::ActiveOverlay>,
 	pub overlay_dismissed: bool,
 	pub main_window_id: Option<iced::window::Id>,
-	pub settings_view: crate::ui::settings::SettingsView,
+	pub settings_view: crate::app::features::settings::SettingsView,
 	pub pending_auto_connect_cfg: Option<ClientConfigV1>,
 	pub pending_join_target: Option<JoinTarget>,
 }
@@ -70,20 +71,20 @@ impl Default for UiState {
 			modifiers: keyboard::Modifiers::default(),
 			window_size: None,
 			last_cursor_pos: None,
-			toaster: crate::ui::components::toaster::Toaster::new(),
+			toaster: crate::app::features::toaster::Toaster::new(),
 			animation_start: Instant::now(),
 			animation_clock: Instant::now(),
 			follow_end: true,
 			last_focus: None,
-			vim: crate::ui::vim::VimState::default(),
+			vim: crate::app::vim::VimState::default(),
 			server_endpoint_quic: String::new(),
 			server_auth_token: String::new(),
 			max_log_items_raw: String::new(),
-			users_view: crate::ui::users_view::UsersView::new(),
+			users_view: crate::app::features::users::UsersView::new(),
 			active_overlay: None,
 			overlay_dismissed: false,
 			main_window_id: None,
-			settings_view: crate::ui::settings::SettingsView::new(SettingsCategory::General),
+			settings_view: crate::app::features::settings::SettingsView::new(SettingsCategory::General),
 			pending_auto_connect_cfg: None,
 			pending_join_target: None,
 		}
@@ -107,16 +108,14 @@ pub struct AppState {
 	pub settings: GuiSettings,
 	pub room_permissions: HashMap<RoomKey, RoomPermissions>,
 	pub room_states: HashMap<RoomKey, RoomStateUi>,
-	pub asset_bundles: HashMap<String, crate::ui::components::chat_message::AssetBundleUi>,
+	pub asset_catalog: AssetCatalog,
 	pub selected_tab_id: Option<TabId>,
 	pub tab_order: Vec<TabId>,
-	pub room_asset_cache_keys: HashMap<RoomKey, Vec<String>>,
-	pub global_asset_cache_keys: Vec<String>,
 	pub notifications: Vec<UiNotification>,
 	pub popped_windows: HashMap<iced::window::Id, WindowModel>,
 	pub pending_popped_tabs: VecDeque<TabId>,
 	pub pending_restore_windows: Vec<WindowModel>,
-	pub main_window_geometry: crate::ui::layout::WindowGeometry,
+	pub main_window_geometry: crate::app::features::layout::WindowGeometry,
 	pub custom_themes: HashMap<String, crate::theme::Palette>,
 	next_window_id: u64,
 	next_tab_id: u64,
@@ -143,17 +142,15 @@ impl AppState {
 			notifications: Vec::new(),
 			room_permissions: HashMap::new(),
 			room_states: HashMap::new(),
-			asset_bundles: HashMap::new(),
+			asset_catalog: AssetCatalog::new(),
 			selected_tab_id: None,
 			tab_order: Vec::new(),
-			room_asset_cache_keys: HashMap::new(),
-			global_asset_cache_keys: Vec::new(),
 			next_window_id: 1,
 			next_tab_id: 1,
 			popped_windows: HashMap::new(),
 			pending_popped_tabs: VecDeque::new(),
 			pending_restore_windows: Vec::new(),
-			main_window_geometry: crate::ui::layout::WindowGeometry {
+			main_window_geometry: crate::app::features::layout::WindowGeometry {
 				width: 800,
 				height: 600,
 				x: -1,
@@ -339,5 +336,94 @@ impl AppState {
 
 	pub fn take_notifications(&mut self) -> Vec<UiNotification> {
 		std::mem::take(&mut self.notifications)
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use std::time::SystemTime;
+
+	fn make_message(room: RoomKey, user_login: &str, server_id: &str) -> ChatMessageUi {
+		ChatMessageUi {
+			time: SystemTime::UNIX_EPOCH,
+			platform: room.platform,
+			room,
+			key: format!("key-{server_id}"),
+			server_message_id: Some(server_id.to_string()),
+			author_id: None,
+			user_login: user_login.to_string(),
+			user_display: None,
+			display_name: user_login.to_string(),
+			text: "hi".to_string(),
+			tokens: vec!["hi".to_string()],
+			badge_ids: Vec::new(),
+			emotes: Vec::new(),
+			platform_message_id: None,
+		}
+	}
+
+	#[test]
+	fn create_tab_for_rooms_sets_order_and_focus() {
+		let mut state = AppState::new();
+		let room = RoomKey::new(Platform::Twitch, chatty_domain::RoomId::new("r1").expect("room id"));
+		let id = state.create_tab_for_rooms("room", vec![room.clone()]);
+		assert_eq!(state.tab_order, vec![id]);
+		let tab = state.tabs.get(&id).expect("tab");
+		assert!(tab.focused_pane.is_some());
+		assert_eq!(tab.target.0, vec![room]);
+	}
+
+	#[test]
+	fn push_and_remove_message_updates_user_counts() {
+		let mut state = AppState::new();
+		let room = RoomKey::new(Platform::Twitch, chatty_domain::RoomId::new("r2").expect("room id"));
+		let tab_id = state.create_tab_for_rooms("room", vec![room.clone()]);
+
+		let msg = make_message(room.clone(), "alice", "srv-1");
+		state.push_message(msg);
+
+		let tab = state.tabs.get(&tab_id).expect("tab");
+		assert_eq!(tab.user_counts.get("alice").copied(), Some(1));
+		assert_eq!(tab.log.items.len(), 1);
+
+		state.remove_message(&room, Some("srv-1"), None);
+		let tab = state.tabs.get(&tab_id).expect("tab");
+		assert_eq!(tab.user_counts.get("alice"), None);
+		assert_eq!(tab.log.items.len(), 0);
+	}
+
+	#[test]
+	fn pop_tab_updates_order_and_selection() {
+		let mut state = AppState::new();
+		let room_a = RoomKey::new(Platform::Twitch, chatty_domain::RoomId::new("a").expect("room id"));
+		let room_b = RoomKey::new(Platform::Twitch, chatty_domain::RoomId::new("b").expect("room id"));
+		let id_a = state.create_tab_for_rooms("a", vec![room_a]);
+		let id_b = state.create_tab_for_rooms("b", vec![room_b]);
+		state.selected_tab_id = Some(id_a);
+
+		let popped = state.pop_tab(id_a);
+		assert!(popped.is_some());
+		assert!(!state.tab_order.contains(&id_a));
+		assert_eq!(state.selected_tab_id, Some(id_b));
+	}
+
+	#[test]
+	fn push_message_eviction_keeps_counts_consistent() {
+		let mut state = AppState::new();
+		let room = RoomKey::new(Platform::Twitch, chatty_domain::RoomId::new("evict").expect("room id"));
+		let tab_id = state.create_tab_for_rooms("room", vec![room.clone()]);
+		if let Some(tab) = state.tabs.get_mut(&tab_id) {
+			tab.log.max_items = 1;
+		}
+
+		let first = make_message(room.clone(), "alice", "srv-1");
+		let second = make_message(room.clone(), "alice", "srv-2");
+		state.push_message(first);
+		state.push_message(second);
+
+		let tab = state.tabs.get(&tab_id).expect("tab");
+		assert_eq!(tab.log.items.len(), 1);
+		assert_eq!(tab.user_counts.get("alice").copied(), Some(1));
 	}
 }

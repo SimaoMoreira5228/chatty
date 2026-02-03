@@ -56,6 +56,28 @@ impl ReplayStore {
 		let buf = client.buffer_by_topic.entry(topic.to_string()).or_default();
 		buf.push_back(env.clone());
 
+		if let Some(retention) = cfg.retention_secs {
+			let now_ms = if env.server_time_unix_ms > 0 {
+				env.server_time_unix_ms
+			} else {
+				std::time::SystemTime::now()
+					.duration_since(std::time::UNIX_EPOCH)
+					.unwrap_or_default()
+					.as_millis() as i64
+			};
+			let threshold_ms = now_ms.saturating_sub((retention as i64).saturating_mul(1000));
+			while let Some(front) = buf.front() {
+				if front.server_time_unix_ms == 0 {
+					break;
+				}
+				if front.server_time_unix_ms < threshold_ms {
+					buf.pop_front();
+				} else {
+					break;
+				}
+			}
+		}
+
 		while buf.len() > cfg.per_topic_capacity {
 			buf.pop_front();
 		}

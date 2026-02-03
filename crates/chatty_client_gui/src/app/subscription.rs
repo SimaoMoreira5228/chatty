@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use iced::{Subscription, keyboard};
 
-use crate::app::{Chatty, Message};
+use crate::app::message::Message;
+use crate::app::model::Chatty;
 use crate::settings::ShortcutKey;
 
 impl Chatty {
@@ -27,11 +28,17 @@ impl Chatty {
 			}
 			iced::Event::Mouse(iced::mouse::Event::WheelScrolled { .. }) => Some(Message::UserScrolled),
 			iced::Event::Window(event) => match event {
-				iced::window::Event::CloseRequested => Some(Message::WindowClosed(id)),
-				iced::window::Event::Resized(size) => {
-					Some(Message::WindowResized(id, size.width as u32, size.height as u32))
-				}
-				iced::window::Event::Moved(point) => Some(Message::WindowMoved(id, point.x as i32, point.y as i32)),
+				iced::window::Event::CloseRequested => Some(Message::Window(crate::app::message::WindowMessage::Closed(id))),
+				iced::window::Event::Resized(size) => Some(Message::Window(crate::app::message::WindowMessage::Resized(
+					id,
+					size.width as u32,
+					size.height as u32,
+				))),
+				iced::window::Event::Moved(point) => Some(Message::Window(crate::app::message::WindowMessage::Moved(
+					id,
+					point.x as i32,
+					point.y as i32,
+				))),
 				_ => None,
 			},
 			_ => None,

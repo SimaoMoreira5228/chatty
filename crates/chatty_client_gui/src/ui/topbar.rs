@@ -4,43 +4,75 @@ use iced::widget::{button, container, row, rule, space, svg, text};
 use iced::{Alignment, Background, Border, Element, Length, Shadow};
 use rust_i18n::t;
 
+use crate::app::message::Message;
+use crate::app::model::Chatty;
 use crate::app::state::ConnectionStatus;
-use crate::app::{Chatty, Message, Page};
+use crate::app::types::Page;
 use crate::assets::svg_handle;
 use crate::theme;
 
 pub fn view(app: &Chatty, palette: theme::Palette) -> Element<'_, Message> {
-	let icon_button = |icon: &'static str, msg: Message| button(svg(svg_handle(icon)).width(16).height(16)).on_press(msg);
+	let icon_button = |icon: &'static str, msg: Message| {
+		let text_color = palette.text.clone();
+		button(svg(svg_handle(icon)).width(16).height(16).style(move |_, _| svg::Style {
+			color: Some(text_color.clone()),
+		}))
+		.on_press(msg)
+	};
 
 	let conn_button = match &app.state.connection {
 		ConnectionStatus::Disconnected { .. } => button(
 			row![
-				svg(svg_handle("connect.svg")).width(16).height(16),
+				svg(svg_handle("connect.svg"))
+					.width(16)
+					.height(16)
+					.style(move |_, _| svg::Style {
+						color: Some(palette.text),
+					}),
 				text(t!("settings.connect"))
 			]
 			.spacing(4),
 		)
-		.on_press(Message::ConnectPressed),
-		ConnectionStatus::Connecting => {
-			button(row![svg(svg_handle("spinner.svg")).width(16).height(16), text(t!("cancel_label"))].spacing(4))
-				.on_press(Message::DisconnectPressed)
-		}
+		.on_press(Message::Net(crate::app::message::NetMessage::ConnectPressed)),
+		ConnectionStatus::Connecting => button(
+			row![
+				svg(svg_handle("spinner.svg"))
+					.width(16)
+					.height(16)
+					.style(move |_, _| svg::Style {
+						color: Some(palette.text),
+					}),
+				text(t!("cancel_label"))
+			]
+			.spacing(4),
+		)
+		.on_press(Message::Net(crate::app::message::NetMessage::DisconnectPressed)),
 		ConnectionStatus::Reconnecting { .. } => button(
 			row![
-				svg(svg_handle("refresh.svg")).width(16).height(16),
+				svg(svg_handle("refresh.svg"))
+					.width(16)
+					.height(16)
+					.style(move |_, _| svg::Style {
+						color: Some(palette.text),
+					}),
 				text(t!("settings.reconnect"))
 			]
 			.spacing(4),
 		)
-		.on_press(Message::ConnectPressed),
+		.on_press(Message::Net(crate::app::message::NetMessage::ConnectPressed)),
 		ConnectionStatus::Connected { .. } => button(
 			row![
-				svg(svg_handle("disconnect.svg")).width(16).height(16),
+				svg(svg_handle("disconnect.svg"))
+					.width(16)
+					.height(16)
+					.style(move |_, _| svg::Style {
+						color: Some(palette.text),
+					}),
 				text(t!("settings.disconnect"))
 			]
 			.spacing(4),
 		)
-		.on_press(Message::DisconnectPressed),
+		.on_press(Message::Net(crate::app::message::NetMessage::DisconnectPressed)),
 	};
 
 	let insert_chip = if app.state.ui.vim.insert_mode {
@@ -67,8 +99,14 @@ pub fn view(app: &Chatty, palette: theme::Palette) -> Element<'_, Message> {
 	}
 
 	right = right
-		.push(icon_button("split.svg", Message::SplitPressed))
-		.push(icon_button("close.svg", Message::CloseFocused))
+		.push(icon_button(
+			"split.svg",
+			Message::Layout(crate::app::message::LayoutMessage::SplitPressed),
+		))
+		.push(icon_button(
+			"close.svg",
+			Message::Layout(crate::app::message::LayoutMessage::CloseFocused),
+		))
 		.push(icon_button("users.svg", Message::Navigate(Page::Users)))
 		.push(icon_button("settings.svg", Message::Navigate(Page::Settings)))
 		.push(rule::vertical(1))

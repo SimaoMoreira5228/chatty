@@ -15,8 +15,8 @@ use super::controller::NetCommand;
 use super::reconnect::{RECONNECT_RESET_AFTER, schedule_reconnect};
 use super::subscriptions::{reconcile_subscriptions_on_connect, topic_for_room, unsubscribe_topics};
 use super::types::UiEvent;
+use crate::app::view_models::{AssetImageUi, AssetRefUi, AssetScaleUi};
 use crate::net::{dev_default_topics, should_dev_auto_connect};
-use crate::ui::components::chat_message::{AssetImageUi, AssetRefUi, AssetScaleUi};
 
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(3);
 const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(10);

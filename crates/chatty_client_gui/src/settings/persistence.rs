@@ -191,7 +191,7 @@ pub fn build_client_config(settings: &GuiSettings) -> Result<ClientConfigV1, Str
 					kick_identity = Some(identity);
 				}
 			}
-			Platform::YouTube => {}
+			_ => {}
 		}
 	}
 

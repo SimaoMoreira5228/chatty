@@ -11,16 +11,20 @@ use tokio::sync::Semaphore;
 use tokio::sync::{Mutex, mpsc};
 
 use crate::app::assets::AssetManager;
+use crate::app::features::tabs::TabId;
 use crate::app::message::Message;
 use crate::app::net::{UiEventReceiver, recv_next};
-use crate::app::state::{AppState, JoinRequest, UiNotificationKind};
+use crate::app::room::JoinRequest;
+use crate::app::services::{FileLayoutStore, RealNetEffects, SharedClock, SharedLayoutStore, SharedNetEffects, SystemClock};
+use crate::app::state::AppState;
 use crate::app::types::PendingCommand;
-use crate::net::{self, NetController};
+use crate::net;
 use crate::settings::ShortcutKey;
-use crate::ui::components::tab::TabId;
 
 pub struct Chatty {
-	pub(crate) net: NetController,
+	pub(crate) net_effects: SharedNetEffects,
+	pub(crate) layout_store: SharedLayoutStore,
+	pub(crate) clock: SharedClock,
 	pub(crate) net_rx: Arc<Mutex<UiEventReceiver>>,
 	pub(crate) shutdown: Option<net::ShutdownHandle>,
 
@@ -102,7 +106,9 @@ impl Chatty {
 		state.ui.max_log_items_raw = gs.max_log_items.to_string();
 
 		let mut instance = Self {
-			net,
+			net_effects: Arc::new(RealNetEffects::new(net.clone())),
+			layout_store: Arc::new(FileLayoutStore),
+			clock: Arc::new(SystemClock),
 			net_rx: net_rx.clone(),
 			shutdown: Some(shutdown),
 
@@ -222,7 +228,7 @@ impl Chatty {
 			});
 		}
 
-		if let Some(layout) = crate::ui::layout::load_ui_layout() {
+		if let Some(layout) = instance.layout_store.load() {
 			instance.apply_ui_root(layout);
 			instance.save_ui_layout();
 		}
@@ -234,23 +240,27 @@ impl Chatty {
 					instance
 						.state
 						.set_connection_status(crate::app::state::ConnectionStatus::Connecting);
-					let net_clone = instance.net.clone();
+					let net_clone = instance.net_effects.clone();
 					let rx_clone = net_rx.clone();
 					Task::perform(
 						async move {
 							let _ = net_clone.connect(cfg).await;
 							recv_next(rx_clone).await
 						},
-						Message::NetPolled,
+						|ev| Message::Net(crate::app::message::NetMessage::NetPolled(ev)),
 					)
 				}
 				Err(e) => {
-					instance.state.push_notification(UiNotificationKind::Error, e);
-					Task::perform(recv_next(net_rx.clone()), Message::NetPolled)
+					let _ = instance.report_error(e);
+					Task::perform(recv_next(net_rx.clone()), |ev| {
+						Message::Net(crate::app::message::NetMessage::NetPolled(ev))
+					})
 				}
 			}
 		} else {
-			Task::perform(recv_next(net_rx), Message::NetPolled)
+			Task::perform(recv_next(net_rx), |ev| {
+				Message::Net(crate::app::message::NetMessage::NetPolled(ev))
+			})
 		};
 
 		let restore_tasks = Task::batch(instance.state.pending_restore_windows.drain(..).map(|win_model| {
@@ -270,7 +280,7 @@ impl Chatty {
 			});
 
 			instance.state.popped_windows.insert(wid, win_model);
-			task.map(Message::WindowOpened)
+			task.map(|id| Message::Window(crate::app::message::WindowMessage::Opened(id)))
 		}));
 
 		let geo = &instance.state.main_window_geometry;
@@ -285,13 +295,13 @@ impl Chatty {
 			..Default::default()
 		});
 		instance.state.ui.main_window_id = Some(main_wid);
-		let main_window_task = main_window_task.map(Message::WindowOpened);
+		let main_window_task = main_window_task.map(|id| Message::Window(crate::app::message::WindowMessage::Opened(id)));
 
 		(instance, Task::batch(vec![initial_task, restore_tasks, main_window_task]))
 	}
 
 	pub fn collect_orphaned_tab(&mut self) -> Option<chatty_domain::RoomKey> {
-		let mut to_remove: Vec<crate::app::state::TabId> = Vec::new();
+		let mut to_remove: Vec<crate::app::features::tabs::TabId> = Vec::new();
 		for (tid, tab) in &self.state.tabs {
 			let referenced = tab.panes.iter().any(|(_, p)| p.tab_id == Some(*tid));
 			if !referenced && !tab.pinned {
@@ -343,25 +353,25 @@ impl Chatty {
 		self.state.selected_tab_id
 	}
 
-	pub fn selected_tab(&self) -> Option<&crate::app::state::TabModel> {
+	pub fn selected_tab(&self) -> Option<&crate::app::features::tabs::TabModel> {
 		self.selected_tab_id().and_then(|id| self.state.tabs.get(&id))
 	}
 
-	pub fn selected_tab_mut(&mut self) -> Option<&mut crate::app::state::TabModel> {
+	pub fn selected_tab_mut(&mut self) -> Option<&mut crate::app::features::tabs::TabModel> {
 		self.selected_tab_id().and_then(|id| self.state.tabs.get_mut(&id))
 	}
 
-	pub fn capture_ui_root(&self) -> crate::ui::layout::UiRootState {
-		crate::ui::layout::UiRootState::from_app(self)
+	pub fn capture_ui_root(&self) -> crate::app::features::layout::UiRootState {
+		crate::app::features::layout::UiRootState::from_app(self)
 	}
 
-	pub fn apply_ui_root(&mut self, root: crate::ui::layout::UiRootState) {
+	pub fn apply_ui_root(&mut self, root: crate::app::features::layout::UiRootState) {
 		root.apply_to(self);
 	}
 
 	pub fn save_ui_layout(&self) {
 		let root = self.capture_ui_root();
-		crate::ui::layout::save_ui_layout(&root);
+		self.layout_store.save(&root);
 	}
 
 	pub fn view(&self, window: iced::window::Id) -> iced::Element<'_, Message> {
@@ -495,7 +505,7 @@ mod tests {
 		std::fs::write(&p, json_s).expect("write");
 
 		let loaded_s = std::fs::read_to_string(&p).expect("read");
-		let loaded = serde_json::from_str::<crate::ui::layout::UiRootState>(&loaded_s).expect("loaded");
+		let loaded = serde_json::from_str::<crate::app::features::layout::UiRootState>(&loaded_s).expect("loaded");
 		let a = serde_json::to_value(&root).unwrap();
 		let b = serde_json::to_value(&loaded).unwrap();
 		assert_eq!(a, b, "roundtrip must preserve layout");
