@@ -729,6 +729,7 @@ async fn handle_kick_webhook(
 				display: Some(payload.sender.username.clone()),
 			};
 			let mut chat_message = ChatMessage::new(author, payload.content.clone());
+			let room_id = room.room_id.as_str();
 			chat_message.badges = payload
 				.sender
 				.identity
@@ -737,7 +738,14 @@ async fn handle_kick_webhook(
 					identity
 						.badges
 						.iter()
-						.filter_map(|badge| badge.badge_type.as_ref().map(|t| format!("kick:{t}")))
+						.filter_map(|badge| {
+							badge.badge_type.as_ref().and_then(|t| match t.as_str() {
+								"subscriber" => Some(format!("kick:subscriber:{room_id}")),
+								"moderator" => Some("kick:moderator".to_string()),
+								"vip" => Some("kick:vip".to_string()),
+								_ => Some(format!("kick:{t}")),
+							})
+						})
 						.collect::<Vec<_>>()
 				})
 				.unwrap_or_default();

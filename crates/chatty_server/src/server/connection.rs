@@ -16,6 +16,7 @@ use chatty_platform::{
 };
 use chatty_protocol::framing::{DEFAULT_MAX_FRAME_SIZE, encode_frame};
 use chatty_protocol::pb;
+use prost::Message;
 use tokio::sync::{Mutex, RwLock, mpsc};
 use tracing::{debug, error, info, warn};
 
@@ -86,6 +87,122 @@ fn compute_asset_bundle_etag(bundle: &AssetBundle) -> String {
 		key.hash(&mut hasher);
 	}
 	format!("{:016x}", hasher.finish())
+}
+
+fn asset_bundle_envelope_len(topic: &str, assets: &pb::AssetBundleEvent) -> usize {
+	let env = pb::Envelope {
+		version: PROTOCOL_VERSION,
+		request_id: String::new(),
+		msg: Some(pb::envelope::Msg::Event(pb::EventEnvelope {
+			topic: topic.to_string(),
+			cursor: 0,
+			server_time_unix_ms: 0,
+			event: Some(pb::event_envelope::Event::AssetBundle(assets.clone())),
+		})),
+	};
+
+	env.encoded_len()
+}
+
+struct AssetBundleChunkResult {
+	events: Vec<pb::AssetBundleEvent>,
+	dropped_emotes: usize,
+	dropped_badges: usize,
+}
+
+fn chunk_asset_refs_for_frame(
+	topic: &str,
+	base: &pb::AssetBundleEvent,
+	refs: &[pb::AssetRef],
+	is_emotes: bool,
+	max_frame_size: usize,
+) -> (Vec<Vec<pb::AssetRef>>, usize) {
+	let mut chunks: Vec<Vec<pb::AssetRef>> = Vec::new();
+	let mut current: Vec<pb::AssetRef> = Vec::new();
+	let mut dropped = 0usize;
+
+	for asset in refs.iter().cloned() {
+		current.push(asset.clone());
+		let mut candidate = base.clone();
+		if is_emotes {
+			candidate.emotes = current.clone();
+			candidate.badges.clear();
+		} else {
+			candidate.badges = current.clone();
+			candidate.emotes.clear();
+		}
+
+		if asset_bundle_envelope_len(topic, &candidate) > max_frame_size {
+			current.pop();
+			if current.is_empty() {
+				dropped += 1;
+				continue;
+			}
+
+			chunks.push(current);
+			current = vec![asset];
+			let mut candidate = base.clone();
+			if is_emotes {
+				candidate.emotes = current.clone();
+				candidate.badges.clear();
+			} else {
+				candidate.badges = current.clone();
+				candidate.emotes.clear();
+			}
+
+			if asset_bundle_envelope_len(topic, &candidate) > max_frame_size {
+				current.clear();
+				dropped += 1;
+			}
+		}
+	}
+
+	if !current.is_empty() {
+		chunks.push(current);
+	}
+
+	(chunks, dropped)
+}
+
+fn build_asset_bundle_chunks(topic: &str, assets: &pb::AssetBundleEvent, max_frame_size: usize) -> AssetBundleChunkResult {
+	if asset_bundle_envelope_len(topic, assets) <= max_frame_size {
+		return AssetBundleChunkResult {
+			events: vec![assets.clone()],
+			dropped_emotes: 0,
+			dropped_badges: 0,
+		};
+	}
+
+	let base = pb::AssetBundleEvent {
+		origin: assets.origin.clone(),
+		provider: assets.provider,
+		scope: assets.scope,
+		cache_key: assets.cache_key.clone(),
+		etag: assets.etag.clone(),
+		emotes: Vec::new(),
+		badges: Vec::new(),
+	};
+
+	let (badge_chunks, dropped_badges) = chunk_asset_refs_for_frame(topic, &base, &assets.badges, false, max_frame_size);
+	let (emote_chunks, dropped_emotes) = chunk_asset_refs_for_frame(topic, &base, &assets.emotes, true, max_frame_size);
+
+	let mut events = Vec::with_capacity(badge_chunks.len().saturating_add(emote_chunks.len()));
+	for chunk in badge_chunks {
+		let mut out = base.clone();
+		out.badges = chunk;
+		events.push(out);
+	}
+	for chunk in emote_chunks {
+		let mut out = base.clone();
+		out.emotes = chunk;
+		events.push(out);
+	}
+
+	AssetBundleChunkResult {
+		events,
+		dropped_emotes,
+		dropped_badges,
+	}
 }
 
 /// Per-connection server settings.
@@ -851,17 +968,6 @@ pub async fn handle_connection(
 								})
 								.collect();
 
-							info!(
-								conn_id,
-								topic = %topic,
-								cache_key = %bundle.cache_key,
-								provider = ?bundle.provider,
-								scope = ?bundle.scope,
-								emote_count = emotes.len(),
-								badge_count = badges.len(),
-								"buffering AssetBundle event until events stream opens"
-							);
-
 							let assets = pb::AssetBundleEvent {
 								origin: Some(origin),
 								provider,
@@ -872,20 +978,67 @@ pub async fn handle_connection(
 								badges,
 							};
 
-							let env = pb::EventEnvelope {
-								topic: topic.clone(),
-								cursor: 0,
-								server_time_unix_ms: unix_ms_now(),
-								event: Some(pb::event_envelope::Event::AssetBundle(assets)),
-							};
+							let original_emotes = assets.emotes.len();
+							let original_badges = assets.badges.len();
+							let chunks = build_asset_bundle_chunks(&topic, &assets, DEFAULT_MAX_FRAME_SIZE);
+							if chunks.events.is_empty() {
+								warn!(
+									conn_id,
+									topic = %topic,
+									cache_key = %assets.cache_key,
+									provider = assets.provider,
+									scope = assets.scope,
+									original_emotes,
+									original_badges,
+									dropped_emotes = chunks.dropped_emotes,
+									dropped_badges = chunks.dropped_badges,
+									"dropping AssetBundle; no chunk fits within max frame size"
+								);
+								continue;
+							}
 
-							let env = replay_service_for_task
-								.push_event(&client_id_for_task, &topic, env)
-								.await
-								.context("persist replay event")?;
+							if chunks.dropped_emotes > 0 || chunks.dropped_badges > 0 {
+								warn!(
+									conn_id,
+									topic = %topic,
+									cache_key = %assets.cache_key,
+									provider = assets.provider,
+									scope = assets.scope,
+									original_emotes,
+									original_badges,
+									dropped_emotes = chunks.dropped_emotes,
+									dropped_badges = chunks.dropped_badges,
+									"some AssetBundle entries dropped; too large for max frame size"
+								);
+							}
 
-							let mut pending = pending_replay_for_task.lock().await;
-							pending.push(env);
+							for assets in chunks.events {
+								info!(
+									conn_id,
+									topic = %topic,
+									cache_key = %assets.cache_key,
+									provider = assets.provider,
+									scope = assets.scope,
+									emote_count = assets.emotes.len(),
+									badge_count = assets.badges.len(),
+									"buffering AssetBundle event until events stream opens"
+								);
+
+								let env = pb::EventEnvelope {
+									topic: topic.clone(),
+									cursor: 0,
+									server_time_unix_ms: unix_ms_now(),
+									event: Some(pb::event_envelope::Event::AssetBundle(assets)),
+								};
+
+								let env = replay_service_for_task
+									.push_event(&client_id_for_task, &topic, env)
+									.await
+									.context("persist replay event")?;
+
+								let mut pending = pending_replay_for_task.lock().await;
+								pending.push(env);
+							}
 							continue;
 						}
 
@@ -956,17 +1109,6 @@ pub async fn handle_connection(
 							})
 							.collect();
 
-						info!(
-							conn_id,
-							topic = %topic,
-							cache_key = %bundle.cache_key,
-							provider = ?bundle.provider,
-							scope = ?bundle.scope,
-							emote_count = emotes.len(),
-							badge_count = badges.len(),
-							"emitting AssetBundle event"
-						);
-
 						let assets = pb::AssetBundleEvent {
 							origin: Some(origin),
 							provider,
@@ -977,35 +1119,82 @@ pub async fn handle_connection(
 							badges,
 						};
 
-						let env = pb::EventEnvelope {
-							topic: topic.clone(),
-							cursor: 0,
-							server_time_unix_ms: unix_ms_now(),
-							event: Some(pb::event_envelope::Event::AssetBundle(assets)),
-						};
+						let original_emotes = assets.emotes.len();
+						let original_badges = assets.badges.len();
+						let chunks = build_asset_bundle_chunks(&topic, &assets, DEFAULT_MAX_FRAME_SIZE);
+						if chunks.events.is_empty() {
+							warn!(
+								conn_id,
+								topic = %topic,
+								cache_key = %assets.cache_key,
+								provider = assets.provider,
+								scope = assets.scope,
+								original_emotes,
+								original_badges,
+								dropped_emotes = chunks.dropped_emotes,
+								dropped_badges = chunks.dropped_badges,
+								"dropping AssetBundle; no chunk fits within max frame size"
+							);
+							continue;
+						}
 
-						let env = replay_service_for_task
-							.push_event(&client_id_for_task, &topic, env)
-							.await
-							.context("persist replay event")?;
+						if chunks.dropped_emotes > 0 || chunks.dropped_badges > 0 {
+							warn!(
+								conn_id,
+								topic = %topic,
+								cache_key = %assets.cache_key,
+								provider = assets.provider,
+								scope = assets.scope,
+								original_emotes,
+								original_badges,
+								dropped_emotes = chunks.dropped_emotes,
+								dropped_badges = chunks.dropped_badges,
+								"some AssetBundle entries dropped; too large for max frame size"
+							);
+						}
 
-						let frame = match encode_frame(
-							&pb::Envelope {
-								version: PROTOCOL_VERSION,
-								request_id: String::new(),
-								msg: Some(pb::envelope::Msg::Event(env)),
-							},
-							DEFAULT_MAX_FRAME_SIZE,
-						) {
-							Ok(f) => f,
-							Err(e) => {
-								error!(conn_id, error = %e, "failed to encode asset bundle frame");
-								return Err::<(), anyhow::Error>(anyhow!(e));
+						for assets in chunks.events {
+							info!(
+								conn_id,
+								topic = %topic,
+								cache_key = %assets.cache_key,
+								provider = assets.provider,
+								scope = assets.scope,
+								emote_count = assets.emotes.len(),
+								badge_count = assets.badges.len(),
+								"emitting AssetBundle event"
+							);
+
+							let env = pb::EventEnvelope {
+								topic: topic.clone(),
+								cursor: 0,
+								server_time_unix_ms: unix_ms_now(),
+								event: Some(pb::event_envelope::Event::AssetBundle(assets)),
+							};
+
+							let env = replay_service_for_task
+								.push_event(&client_id_for_task, &topic, env)
+								.await
+								.context("persist replay event")?;
+
+							let frame = match encode_frame(
+								&pb::Envelope {
+									version: PROTOCOL_VERSION,
+									request_id: String::new(),
+									msg: Some(pb::envelope::Msg::Event(env)),
+								},
+								DEFAULT_MAX_FRAME_SIZE,
+							) {
+								Ok(f) => f,
+								Err(e) => {
+									error!(conn_id, error = %e, "failed to encode asset bundle frame");
+									return Err::<(), anyhow::Error>(anyhow!(e));
+								}
+							};
+
+							if let Err(e) = events_send.write_all(&frame).await {
+								return Err(anyhow!(e).context("events stream write failed"));
 							}
-						};
-
-						if let Err(e) = events_send.write_all(&frame).await {
-							return Err(anyhow!(e).context("events stream write failed"));
 						}
 					}
 					IngestPayload::RoomState(state) => {

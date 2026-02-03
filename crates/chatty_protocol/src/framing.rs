@@ -5,7 +5,7 @@ use prost::Message;
 use thiserror::Error;
 
 /// Default maximum frame payload size for v1.
-pub const DEFAULT_MAX_FRAME_SIZE: usize = 1024 * 1024; // 1 MiB
+pub const DEFAULT_MAX_FRAME_SIZE: usize = 2 * 1024 * 1024; // 2 MiB
 
 #[derive(Debug, Error)]
 pub enum FramingError {
