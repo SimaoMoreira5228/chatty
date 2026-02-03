@@ -1,3 +1,4 @@
+use chatty_domain::Platform;
 use iced::widget::{button, column, container, pick_list, row, rule, text, text_input};
 use iced::{Alignment, Background, Border, Element, Length, Shadow};
 use rust_i18n::t;
@@ -6,7 +7,6 @@ use super::overlay::wrap_overlay;
 use crate::app::features::overlays::{JoinModal, JoinModalMessage, OverlayMessage};
 use crate::app::message::Message;
 use crate::theme;
-use chatty_domain::Platform;
 
 const PLATFORM_OPTIONS: [Platform; 2] = [Platform::Twitch, Platform::Kick];
 

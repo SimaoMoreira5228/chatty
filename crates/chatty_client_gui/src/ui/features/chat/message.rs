@@ -1,10 +1,11 @@
+use iced::widget::{column, container, image, mouse_area, row, svg, text, tooltip};
+use iced::{Alignment, Background, Border, Element, Length, Shadow};
+
 use crate::app::assets::AssetManager;
 use crate::app::message::Message;
 use crate::app::view_models::{AssetScaleUi, ChatMessageViewModel};
 use crate::assets::svg_handle;
 use crate::theme::Palette;
-use iced::widget::{column, container, image, mouse_area, row, svg, text, tooltip};
-use iced::{Alignment, Background, Border, Element, Length, Shadow};
 
 pub struct ChatMessageView<'a> {
 	model: ChatMessageViewModel<'a>,

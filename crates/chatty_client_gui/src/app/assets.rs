@@ -213,9 +213,10 @@ impl AssetCatalog {
 
 #[cfg(test)]
 mod tests {
-	use super::*;
 	use chatty_domain::{Platform, RoomId, RoomKey};
 	use chatty_protocol::pb::AssetScope;
+
+	use super::*;
 
 	fn make_ref(id: &str, name: &str) -> AssetRefUi {
 		AssetRefUi {

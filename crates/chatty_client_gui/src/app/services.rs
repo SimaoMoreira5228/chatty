@@ -4,11 +4,11 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::app::features::layout::UiRootState;
 use chatty_client_core::ClientConfigV1;
 use chatty_domain::RoomKey;
 use chatty_protocol::pb;
 
+use crate::app::features::layout::UiRootState;
 use crate::net::NetController;
 
 pub type NetFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;

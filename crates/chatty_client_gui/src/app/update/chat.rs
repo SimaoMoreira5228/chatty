@@ -1,7 +1,6 @@
 use iced::Task;
 
-use crate::app::message::ChatMessage;
-use crate::app::message::Message;
+use crate::app::message::{ChatMessage, Message};
 use crate::app::model::Chatty;
 use crate::app::types::{InsertTarget, PendingCommand};
 

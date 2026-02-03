@@ -156,10 +156,7 @@ pub fn build_chat_pane_view_model<'a>(
 
 	let mut warnings = Vec::new();
 	let mut log_items = Vec::new();
-	let tab_ref = state
-		.tab_id
-		.and_then(|tid| app.state.tabs.get(&tid))
-		.unwrap_or(tab);
+	let tab_ref = state.tab_id.and_then(|tid| app.state.tabs.get(&tid)).unwrap_or(tab);
 	let rooms = tab_ref.target.0.clone();
 	let can_send = rooms
 		.iter()

@@ -26,8 +26,9 @@ pub fn build_message_key(
 
 #[cfg(test)]
 mod tests {
-	use super::*;
 	use std::time::Duration;
+
+	use super::*;
 
 	#[test]
 	fn tokenize_message_text_splits_whitespace() {

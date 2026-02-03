@@ -6,8 +6,7 @@ use iced::widget::pane_grid;
 use rust_i18n::t;
 use tracing::info;
 
-use crate::app::message::Message;
-use crate::app::message::NetMessage;
+use crate::app::message::{Message, NetMessage};
 use crate::app::message_format::{build_message_key, tokenize_message_text};
 use crate::app::model::Chatty;
 use crate::app::net::recv_next;

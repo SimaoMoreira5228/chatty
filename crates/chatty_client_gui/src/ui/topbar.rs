@@ -13,10 +13,13 @@ use crate::theme;
 
 pub fn view(app: &Chatty, palette: theme::Palette) -> Element<'_, Message> {
 	let icon_button = |icon: &'static str, msg: Message| {
-		let text_color = palette.text.clone();
-		button(svg(svg_handle(icon)).width(16).height(16).style(move |_, _| svg::Style {
-			color: Some(text_color.clone()),
-		}))
+		let text_color = palette.text;
+		button(
+			svg(svg_handle(icon))
+				.width(16)
+				.height(16)
+				.style(move |_, _| svg::Style { color: Some(text_color) }),
+		)
 		.on_press(msg)
 	};
 

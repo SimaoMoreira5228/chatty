@@ -3,8 +3,7 @@ use iced::{Task, keyboard};
 use rust_i18n::t;
 
 use crate::app::message::Message;
-use crate::app::model::Chatty;
-use crate::app::model::first_char_lower;
+use crate::app::model::{Chatty, first_char_lower};
 use crate::app::net::recv_next;
 use crate::app::state::ConnectionStatus;
 use crate::app::subscription::shortcut_match;

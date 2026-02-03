@@ -4,13 +4,13 @@
 use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 
-use crate::app::assets::AssetCatalog;
 use chatty_client_core::ClientConfigV1;
 use chatty_domain::{Platform, RoomKey};
 use iced::keyboard;
 use iced::widget::pane_grid;
 use tracing::{debug, info};
 
+use crate::app::assets::AssetCatalog;
 use crate::app::features::chat::ChatPane;
 use crate::app::features::tabs::{ChatItem, ChatLog, TabId, TabModel, TabTarget};
 use crate::app::features::toaster::{UiNotification, UiNotificationKind};
@@ -341,8 +341,9 @@ impl AppState {
 
 #[cfg(test)]
 mod tests {
-	use super::*;
 	use std::time::SystemTime;
+
+	use super::*;
 
 	fn make_message(room: RoomKey, user_login: &str, server_id: &str) -> ChatMessageUi {
 		ChatMessageUi {

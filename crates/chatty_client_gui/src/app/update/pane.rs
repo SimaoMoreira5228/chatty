@@ -7,8 +7,7 @@ use iced::widget::{pane_grid, scrollable};
 use rust_i18n::t;
 
 use crate::app::features::chat::ChatPaneMessage;
-use crate::app::message::LayoutMessage;
-use crate::app::message::Message;
+use crate::app::message::{LayoutMessage, Message};
 use crate::app::model::Chatty;
 use crate::app::net::recv_next;
 use crate::app::room::JoinRequest;

@@ -739,11 +739,11 @@ async fn handle_kick_webhook(
 						.badges
 						.iter()
 						.filter_map(|badge| {
-							badge.badge_type.as_ref().and_then(|t| match t.as_str() {
-								"subscriber" => Some(format!("kick:subscriber:{room_id}")),
-								"moderator" => Some("kick:moderator".to_string()),
-								"vip" => Some("kick:vip".to_string()),
-								_ => Some(format!("kick:{t}")),
+							badge.badge_type.as_ref().map(|t| match t.as_str() {
+								"subscriber" => format!("kick:subscriber:{room_id}"),
+								"moderator" => "kick:moderator".to_string(),
+								"vip" => "kick:vip".to_string(),
+								_ => format!("kick:{t}"),
 							})
 						})
 						.collect::<Vec<_>>()

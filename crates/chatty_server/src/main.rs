@@ -209,10 +209,7 @@ async fn main() -> anyhow::Result<()> {
 		} else {
 			0
 		},
-		retention_secs: server_cfg
-			.persistence
-			.replay_retention_minutes
-			.map(|v| v.saturating_mul(60)),
+		retention_secs: server_cfg.persistence.replay_retention_minutes.map(|v| v.saturating_mul(60)),
 	};
 
 	let replay_service = if server_cfg.persistence.enabled {
