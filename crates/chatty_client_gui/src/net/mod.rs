@@ -20,9 +20,7 @@ pub fn start_networking() -> (NetController, mpsc::UnboundedReceiver<UiEvent>, S
 	let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
 	let controller = NetController::new(cmd_tx);
-	let shutdown = ShutdownHandle::new(shutdown_tx);
-
-	std::thread::Builder::new()
+	let join_handle = std::thread::Builder::new()
 		.name("chatty-network".to_string())
 		.spawn(move || {
 			let rt = tokio::runtime::Builder::new_multi_thread()
@@ -34,6 +32,8 @@ pub fn start_networking() -> (NetController, mpsc::UnboundedReceiver<UiEvent>, S
 			rt.block_on(backend::run_network_task(cmd_rx, ui_tx, shutdown_rx));
 		})
 		.expect("failed to spawn network thread");
+
+	let shutdown = ShutdownHandle::new(shutdown_tx, join_handle);
 
 	(controller, ui_rx, shutdown)
 }

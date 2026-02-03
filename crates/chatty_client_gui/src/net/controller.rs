@@ -69,18 +69,20 @@ impl NetController {
 }
 
 pub struct ShutdownHandle {
-	pub(super) _shutdown_tx: oneshot::Sender<()>,
+	pub(super) shutdown_tx: oneshot::Sender<()>,
+	pub(super) join_handle: std::thread::JoinHandle<()>,
 }
 
 impl ShutdownHandle {
-	pub fn new(shutdown_tx: oneshot::Sender<()>) -> Self {
+	pub fn new(shutdown_tx: oneshot::Sender<()>, join_handle: std::thread::JoinHandle<()>) -> Self {
 		Self {
-			_shutdown_tx: shutdown_tx,
+			shutdown_tx,
+			join_handle,
 		}
 	}
 
-	#[allow(dead_code)]
 	pub fn shutdown(self) {
-		let _ = self._shutdown_tx.send(());
+		let _ = self.shutdown_tx.send(());
+		let _ = self.join_handle.join();
 	}
 }

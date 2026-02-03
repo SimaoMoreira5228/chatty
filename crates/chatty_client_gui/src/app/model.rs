@@ -275,7 +275,7 @@ impl Chatty {
 
 		let geo = &instance.state.main_window_geometry;
 		let (main_wid, main_window_task) = iced::window::open(iced::window::Settings {
-			exit_on_close_request: true,
+			exit_on_close_request: false,
 			size: iced::Size::new(geo.width as f32, geo.height as f32),
 			position: if geo.x >= 0 && geo.y >= 0 {
 				iced::window::Position::Specific(iced::Point::new(geo.x as f32, geo.y as f32))
