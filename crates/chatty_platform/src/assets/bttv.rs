@@ -169,21 +169,21 @@ fn bttv_emote_to_asset(emote: &BttvEmote) -> Option<AssetRef> {
 		images: vec![
 			AssetImage {
 				scale: AssetScale::One,
-				url: format!("https://cdn.betterttv.net/emote/{}/1x", emote.id),
+				url: format!("https://cdn.betterttv.net/emote/{}/1x.{format}", emote.id),
 				format: format.clone(),
 				width: 0,
 				height: 0,
 			},
 			AssetImage {
 				scale: AssetScale::Two,
-				url: format!("https://cdn.betterttv.net/emote/{}/2x", emote.id),
+				url: format!("https://cdn.betterttv.net/emote/{}/2x.{format}", emote.id),
 				format: format.clone(),
 				width: 0,
 				height: 0,
 			},
 			AssetImage {
 				scale: AssetScale::Three,
-				url: format!("https://cdn.betterttv.net/emote/{}/3x", emote.id),
+				url: format!("https://cdn.betterttv.net/emote/{}/3x.{format}", emote.id),
 				format,
 				width: 0,
 				height: 0,

@@ -109,25 +109,14 @@ refresh_buffer_secs = 60
 # Env override: CHATTY_KICK_BASE_URL
 base_url = "https://api.kick.com"
 
-# Kick system access token (bearer) used for webhook subscriptions.
-# Env override: CHATTY_KICK_SYSTEM_ACCESS_TOKEN
-system_access_token = ""
+# Kick Pusher websocket URL override.
+# Env override: CHATTY_KICK_PUSHER_WS_URL
+pusher_ws_url = "wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679"
 
-# Webhook bind for Kick events (host:port).
-# Env override: CHATTY_KICK_WEBHOOK_BIND
-webhook_bind = "0.0.0.0:18206"
-
-# Webhook path for Kick events.
-# Env override: CHATTY_KICK_WEBHOOK_PATH
-webhook_path = "/kick/events"
-
-# Kick webhook public key PEM file path (optional override; defaults to bundled Kick key).
-# Env override: CHATTY_KICK_WEBHOOK_PUBLIC_KEY_PATH
-webhook_public_key_path = ""
-
-# Verify webhook signatures.
-# Env override: CHATTY_KICK_WEBHOOK_VERIFY_SIGNATURES
-webhook_verify_signatures = true
+# Reconnect backoff tuning (milliseconds).
+# Env override: CHATTY_KICK_RECONNECT_MIN_DELAY_MS / CHATTY_KICK_RECONNECT_MAX_DELAY_MS
+reconnect_min_delay_ms = 500
+reconnect_max_delay_ms = 30000
 
 # Optional overrides: channel slug -> broadcaster id.
 [kick.broadcaster_id_overrides]

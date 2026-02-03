@@ -1,4 +1,5 @@
 use iced::Task;
+use std::time::Duration;
 
 use crate::app::message::Message;
 use crate::app::model::Chatty;
@@ -44,6 +45,16 @@ impl Chatty {
 		match message {
 			Message::AnimationTick(instant) => {
 				self.state.ui.animation_clock = instant;
+				if cfg!(debug_assertions) {
+					self.state.ui.fps_frame_count = self.state.ui.fps_frame_count.saturating_add(1);
+					let elapsed = instant.duration_since(self.state.ui.fps_last_instant);
+					if elapsed >= Duration::from_secs(1) {
+						let fps = ((self.state.ui.fps_frame_count as f64) / elapsed.as_secs_f64()).round() as u32;
+						self.state.ui.fps_value = fps;
+						self.state.ui.fps_frame_count = 0;
+						self.state.ui.fps_last_instant = instant;
+					}
+				}
 				Task::none()
 			}
 			Message::CursorMoved(x, y) => self.update_cursor_moved(x, y),

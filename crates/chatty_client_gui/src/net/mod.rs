@@ -19,6 +19,7 @@ pub fn start_networking() -> (NetController, mpsc::UnboundedReceiver<UiEvent>, S
 	let (ui_tx, ui_rx) = mpsc::unbounded_channel::<UiEvent>();
 	let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
+	let cmd_tx_for_backend = cmd_tx.clone();
 	let controller = NetController::new(cmd_tx);
 	let join_handle = std::thread::Builder::new()
 		.name("chatty-network".to_string())
@@ -29,7 +30,7 @@ pub fn start_networking() -> (NetController, mpsc::UnboundedReceiver<UiEvent>, S
 				.thread_name("chatty-network-worker")
 				.build()
 				.expect("failed to build tokio runtime for networking");
-			rt.block_on(backend::run_network_task(cmd_rx, ui_tx, shutdown_rx));
+			rt.block_on(backend::run_network_task(cmd_rx, cmd_tx_for_backend, ui_tx, shutdown_rx));
 		})
 		.expect("failed to spawn network thread");
 

@@ -156,6 +156,17 @@ pub(crate) fn prune_caches() {
 	}
 }
 
+fn normalize_ffz_url(url: &str, format: &str) -> String {
+	let trimmed = url.trim();
+	if trimmed.is_empty() {
+		return trimmed.to_string();
+	}
+	if trimmed.rsplit('/').next().is_some_and(|seg| seg.contains('.')) {
+		return trimmed.to_string();
+	}
+	format!("{trimmed}.{format}")
+}
+
 fn ffz_emote_to_asset(emote: &FfzEmote) -> Option<AssetRef> {
 	fn scale_from_str(scale: &str) -> Option<AssetScale> {
 		match scale {
@@ -179,9 +190,10 @@ fn ffz_emote_to_asset(emote: &FfzEmote) -> Option<AssetRef> {
 			.cloned()
 			.unwrap_or_else(|| url.clone());
 		let format = guess_format(&chosen_url);
+		let normalized_url = normalize_ffz_url(&chosen_url, &format);
 		images.push(AssetImage {
 			scale,
-			url: chosen_url,
+			url: normalized_url,
 			format,
 			width: emote.width.unwrap_or(0.0).round() as u32,
 			height: emote.height.unwrap_or(0.0).round() as u32,
@@ -229,13 +241,16 @@ fn ffz_badge_from_urls(id: &str, name: &str, urls: &HashMap<String, String>) -> 
 			"4" => Some(AssetScale::Four),
 			_ => None,
 		};
+
 		let Some(scale) = scale else {
 			continue;
 		};
+
+		let format = guess_format(url);
 		images.push(AssetImage {
 			scale,
-			url: url.clone(),
-			format: guess_format(url),
+			url: normalize_ffz_url(url, &format),
+			format,
 			width: 0,
 			height: 0,
 		});
@@ -264,13 +279,16 @@ fn ffz_badge_to_asset(badge: FfzBadge) -> Option<AssetRef> {
 			"4" => Some(AssetScale::Four),
 			_ => None,
 		};
+
 		let Some(scale) = scale else {
 			continue;
 		};
+
+		let format = guess_format(url);
 		images.push(AssetImage {
 			scale,
-			url: url.clone(),
-			format: guess_format(url),
+			url: normalize_ffz_url(url, &format),
+			format,
 			width: 0,
 			height: 0,
 		});

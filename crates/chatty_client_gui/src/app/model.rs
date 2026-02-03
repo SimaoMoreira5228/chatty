@@ -411,6 +411,7 @@ impl Chatty {
 		Vec::new()
 	}
 
+	#[allow(dead_code)]
 	pub(crate) fn ensure_tab_for_rooms(&mut self, rooms: Vec<RoomKey>) -> TabId {
 		if rooms.is_empty() {
 			return TabId(0);

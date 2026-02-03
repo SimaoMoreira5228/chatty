@@ -17,15 +17,24 @@ impl Chatty {
 			let oauth_token = parsed.oauth_token.clone();
 			let refresh_token = parsed.refresh_token.clone();
 
-			if !username.is_empty() && !oauth_token.is_empty() {
+			if !oauth_token.is_empty() && (!username.is_empty() || !user_id.is_empty()) {
 				let id = if !user_id.is_empty() {
 					format!("twitch:{}", user_id)
-				} else {
+				} else if !username.is_empty() {
 					format!("twitch:{}", username)
+				} else {
+					"twitch:unknown".to_string()
+				};
+				let display_name = if !username.is_empty() {
+					username.clone()
+				} else if !user_id.is_empty() {
+					user_id.clone()
+				} else {
+					"Twitch".to_string()
 				};
 				let identity = settings::Identity {
 					id: id.clone(),
-					display_name: username.clone(),
+					display_name,
 					platform: Platform::Twitch,
 					username,
 					user_id,
@@ -54,15 +63,24 @@ impl Chatty {
 			let user_id = parsed.user_id.clone();
 			let oauth_token = parsed.oauth_token.clone();
 
-			if !username.is_empty() && !oauth_token.is_empty() {
+			if !oauth_token.is_empty() && (!username.is_empty() || !user_id.is_empty()) {
 				let id = if !user_id.is_empty() {
 					format!("kick:{}", user_id)
-				} else {
+				} else if !username.is_empty() {
 					format!("kick:{}", username)
+				} else {
+					"kick:unknown".to_string()
+				};
+				let display_name = if !username.is_empty() {
+					username.clone()
+				} else if !user_id.is_empty() {
+					user_id.clone()
+				} else {
+					"Kick".to_string()
 				};
 				let identity = settings::Identity {
 					id: id.clone(),
-					display_name: username.clone(),
+					display_name,
 					platform: Platform::Kick,
 					username,
 					user_id,

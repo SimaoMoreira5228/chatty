@@ -119,16 +119,11 @@ pub struct TwitchSettings {
 pub struct KickSettings {
 	/// Kick API base URL.
 	pub base_url: Option<String>,
-	/// Kick system access token (bearer) used for webhook subscription management.
-	pub system_access_token: Option<SecretString>,
-	/// Webhook bind address for Kick events (host:port).
-	pub webhook_bind: Option<String>,
-	/// Webhook path for Kick events (e.g. /kick/events).
-	pub webhook_path: Option<String>,
-	/// Optional PEM public key file path for Kick webhook signature verification.
-	pub webhook_public_key_path: Option<String>,
-	/// Whether to verify Kick webhook signatures.
-	pub webhook_verify_signatures: Option<bool>,
+	/// Kick Pusher websocket URL override.
+	pub pusher_ws_url: Option<String>,
+	/// Reconnect backoff min/max (optional).
+	pub reconnect_min_delay: Option<Duration>,
+	pub reconnect_max_delay: Option<Duration>,
 	/// Optional overrides: channel slug -> broadcaster id.
 	pub broadcaster_id_overrides: BTreeMap<String, String>,
 }
@@ -200,11 +195,9 @@ struct FileTwitchSettings {
 #[derive(Debug, Clone, Default, Deserialize)]
 struct FileKickSettings {
 	base_url: Option<String>,
-	system_access_token: Option<String>,
-	webhook_bind: Option<String>,
-	webhook_path: Option<String>,
-	webhook_public_key_path: Option<String>,
-	webhook_verify_signatures: Option<bool>,
+	pusher_ws_url: Option<String>,
+	reconnect_min_delay_ms: Option<u64>,
+	reconnect_max_delay_ms: Option<u64>,
 
 	#[serde(default)]
 	broadcaster_id_overrides: BTreeMap<String, String>,
@@ -239,15 +232,9 @@ impl ServerConfig {
 
 		let kick = KickSettings {
 			base_url: file.kick.base_url.filter(|s| !s.trim().is_empty()),
-			system_access_token: file
-				.kick
-				.system_access_token
-				.filter(|s| !s.trim().is_empty())
-				.map(SecretString::new),
-			webhook_bind: file.kick.webhook_bind.filter(|s| !s.trim().is_empty()),
-			webhook_path: file.kick.webhook_path.filter(|s| !s.trim().is_empty()),
-			webhook_public_key_path: file.kick.webhook_public_key_path.filter(|s| !s.trim().is_empty()),
-			webhook_verify_signatures: file.kick.webhook_verify_signatures,
+			pusher_ws_url: file.kick.pusher_ws_url.filter(|s| !s.trim().is_empty()),
+			reconnect_min_delay: file.kick.reconnect_min_delay_ms.map(Duration::from_millis),
+			reconnect_max_delay: file.kick.reconnect_max_delay_ms.map(Duration::from_millis),
 			broadcaster_id_overrides: file.kick.broadcaster_id_overrides,
 		};
 
@@ -377,43 +364,26 @@ fn apply_env_overrides(cfg: &mut ServerConfig) {
 		}
 	}
 
-	if let Ok(v) = std::env::var("CHATTY_KICK_SYSTEM_ACCESS_TOKEN") {
+	if let Ok(v) = std::env::var("CHATTY_KICK_PUSHER_WS_URL") {
 		let v = v.trim().to_string();
 		if !v.is_empty() {
-			cfg.kick.system_access_token = Some(SecretString::new(v));
-			info!("kick config: system_access_token overridden by env");
+			cfg.kick.pusher_ws_url = Some(v);
+			info!("kick config: pusher_ws_url overridden by env");
 		}
 	}
 
-	if let Ok(v) = std::env::var("CHATTY_KICK_WEBHOOK_BIND") {
-		let v = v.trim().to_string();
-		if !v.is_empty() {
-			cfg.kick.webhook_bind = Some(v);
-			info!("kick config: webhook_bind overridden by env");
-		}
-	}
-
-	if let Ok(v) = std::env::var("CHATTY_KICK_WEBHOOK_PATH") {
-		let v = v.trim().to_string();
-		if !v.is_empty() {
-			cfg.kick.webhook_path = Some(v);
-			info!("kick config: webhook_path overridden by env");
-		}
-	}
-
-	if let Ok(v) = std::env::var("CHATTY_KICK_WEBHOOK_PUBLIC_KEY_PATH") {
-		let v = v.trim().to_string();
-		if !v.is_empty() {
-			cfg.kick.webhook_public_key_path = Some(v);
-			info!("kick config: webhook_public_key_path overridden by env");
-		}
-	}
-
-	if let Ok(v) = std::env::var("CHATTY_KICK_WEBHOOK_VERIFY_SIGNATURES")
-		&& let Some(enabled) = parse_env_bool(&v)
+	if let Ok(v) = std::env::var("CHATTY_KICK_RECONNECT_MIN_DELAY_MS")
+		&& let Ok(min_ms) = v.trim().parse::<u64>()
 	{
-		cfg.kick.webhook_verify_signatures = Some(enabled);
-		info!(enabled, "kick config: webhook_verify_signatures overridden by env");
+		cfg.kick.reconnect_min_delay = Some(Duration::from_millis(min_ms));
+		info!(min_ms, "kick config: reconnect_min_delay overridden by env");
+	}
+
+	if let Ok(v) = std::env::var("CHATTY_KICK_RECONNECT_MAX_DELAY_MS")
+		&& let Ok(max_ms) = v.trim().parse::<u64>()
+	{
+		cfg.kick.reconnect_max_delay = Some(Duration::from_millis(max_ms));
+		info!(max_ms, "kick config: reconnect_max_delay overridden by env");
 	}
 
 	if let Ok(v) = std::env::var("CHATTY_METRICS_BIND") {

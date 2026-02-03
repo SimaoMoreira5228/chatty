@@ -6,6 +6,7 @@ use tokio::sync::mpsc;
 
 use super::api::BoxedSessionControl;
 use super::backend::ensure_events_loop_started;
+use super::controller::NetCommand;
 use super::types::UiEvent;
 use crate::net::map_core_err;
 
@@ -18,6 +19,7 @@ pub async fn reconcile_subscriptions_on_connect(
 	topics_refcounts: &HashMap<String, usize>,
 	cursor_by_topic: &Arc<Mutex<HashMap<String, u64>>>,
 	ui_tx: &mpsc::UnboundedSender<UiEvent>,
+	cmd_tx: &mpsc::Sender<NetCommand>,
 	events_task: &mut Option<tokio::task::JoinHandle<()>>,
 ) -> Result<(), String> {
 	let topics: Vec<String> = topics_refcounts
@@ -43,7 +45,7 @@ pub async fn reconcile_subscriptions_on_connect(
 		.await
 		.map_err(|e| format!("subscribe failed: {}", map_core_err(e)))?;
 
-	ensure_events_loop_started(session, events_task, ui_tx, cursor_by_topic).await
+	ensure_events_loop_started(session, events_task, ui_tx, cmd_tx, cursor_by_topic).await
 }
 
 pub async fn unsubscribe_topics(

@@ -40,7 +40,11 @@ pub fn parse_twitch_oauth_blob(blob: &str) -> Option<TwitchOAuthInfo> {
 		}
 	}
 
-	if username.is_empty() || user_id.is_empty() || client_id.is_empty() || oauth_token.is_empty() {
+	if oauth_token.is_empty() {
+		return None;
+	}
+
+	if username.is_empty() && user_id.is_empty() {
 		return None;
 	}
 
@@ -55,10 +59,28 @@ pub fn parse_twitch_oauth_blob(blob: &str) -> Option<TwitchOAuthInfo> {
 
 pub fn parse_kick_oauth_blob(blob: &str) -> Option<KickOAuthInfo> {
 	let value: JsonValue = serde_json::from_str(blob).ok()?;
-	let username = value.get("username")?.as_str()?.trim().to_string();
-	let user_id = value.get("user_id")?.as_str()?.trim().to_string();
-	let oauth_token = value.get("oauth_token")?.as_str()?.trim().to_string();
-	if username.is_empty() || user_id.is_empty() || oauth_token.is_empty() {
+	let username = value
+		.get("username")
+		.and_then(|v| v.as_str())
+		.unwrap_or_default()
+		.trim()
+		.to_string();
+	let user_id = value
+		.get("user_id")
+		.and_then(|v| v.as_str())
+		.unwrap_or_default()
+		.trim()
+		.to_string();
+	let oauth_token = value
+		.get("oauth_token")
+		.and_then(|v| v.as_str())
+		.unwrap_or_default()
+		.trim()
+		.to_string();
+	if oauth_token.is_empty() {
+		return None;
+	}
+	if username.is_empty() && user_id.is_empty() {
 		return None;
 	}
 	Some(KickOAuthInfo {

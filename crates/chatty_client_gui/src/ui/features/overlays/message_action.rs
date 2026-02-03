@@ -2,7 +2,7 @@ use iced::widget::{button, column, container, text};
 use iced::{Background, Border, Element, Length, Shadow};
 use rust_i18n::t;
 
-use super::overlay::wrap_overlay;
+use super::overlay::wrap_overlay_at;
 use crate::app::features::overlays::{MessageActionMenu, MessageActionMenuMessage, OverlayMessage};
 use crate::app::message::Message;
 use crate::theme;
@@ -62,12 +62,8 @@ impl MessageActionMenu {
 			snap: false,
 		});
 
-		let content = if let Some((_x, _y)) = vm.cursor_pos {
-			container_el.width(Length::Shrink).height(Length::Shrink).into()
-		} else {
-			container_el.width(Length::Shrink).height(Length::Shrink).into()
-		};
+		let content = container_el.width(Length::Shrink).height(Length::Shrink).into();
 
-		wrap_overlay(content, palette)
+		wrap_overlay_at(content, palette, vm.cursor_pos)
 	}
 }

@@ -18,7 +18,6 @@ impl Chatty {
 	}
 
 	pub fn update_user_scrolled(&mut self) -> Task<Message> {
-		self.state.ui.follow_end = false;
 		Task::none()
 	}
 }

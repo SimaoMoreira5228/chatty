@@ -1,9 +1,10 @@
+use chatty_domain::Platform;
 use iced::widget::{column, container, image, mouse_area, row, svg, text, tooltip};
 use iced::{Alignment, Background, Border, Element, Length, Shadow};
 
 use crate::app::assets::AssetManager;
 use crate::app::message::Message;
-use crate::app::view_models::{AssetScaleUi, ChatMessageViewModel};
+use crate::app::view_models::{AssetImageUi, AssetScaleUi, ChatMessageViewModel};
 use crate::assets::svg_handle;
 use crate::theme::Palette;
 
@@ -23,6 +24,12 @@ impl<'a> ChatMessageView<'a> {
 		let is_focused = self.model.is_focused;
 
 		let mut msg_row = row![].spacing(6).align_y(Alignment::Start);
+
+		if self.model.show_platform_badge
+			&& let Some(icon) = platform_icon(self.model.platform)
+		{
+			msg_row = msg_row.push(svg(svg_handle(icon)).width(14).height(14));
+		}
 
 		if !m.badge_ids.is_empty() {
 			for bid in &m.badge_ids {
@@ -52,7 +59,8 @@ impl<'a> ChatMessageView<'a> {
 			if let Some(emote) = exact_emote
 				&& let Some(img) = emote.pick_image(AssetScaleUi::Two)
 			{
-				content_row = content_row.push(self.render_image(&img.url, 20, 20, Some(&emote.name)));
+				let (width, height) = self.emote_size(img, 32);
+				content_row = content_row.push(self.render_image(&img.url, width, height, Some(&emote.name)));
 				continue;
 			}
 
@@ -105,7 +113,8 @@ impl<'a> ChatMessageView<'a> {
 
 				let core_el: Element<'_, Message> = if let Some(emote) = found_emote {
 					if let Some(img) = emote.pick_image(AssetScaleUi::Two) {
-						self.render_image(&img.url, 20, 20, Some(&emote.name))
+						let (width, height) = self.emote_size(img, 20);
+						self.render_image(&img.url, width, height, Some(&emote.name))
 					} else {
 						text(core)
 							.color(if is_focused { palette.text } else { palette.text_dim })
@@ -230,5 +239,30 @@ impl<'a> ChatMessageView<'a> {
 				}
 			}
 		}
+	}
+
+	fn emote_size(&self, img: &AssetImageUi, fallback: u32) -> (u32, u32) {
+		let scale = img.scale.as_u8().max(1) as f32;
+		let width = if img.width == 0 {
+			fallback
+		} else {
+			((img.width as f32) / scale).round().max(1.0) as u32
+		};
+
+		let height = if img.height == 0 {
+			fallback
+		} else {
+			((img.height as f32) / scale).round().max(1.0) as u32
+		};
+
+		(width, height)
+	}
+}
+
+fn platform_icon(platform: Platform) -> Option<&'static str> {
+	match platform {
+		Platform::Twitch => Some("platform-icons/twitch.svg"),
+		Platform::Kick => Some("platform-icons/kick.svg"),
+		Platform::YouTube => Some("platform-icons/youtube.svg"),
 	}
 }

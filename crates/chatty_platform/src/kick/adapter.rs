@@ -1,33 +1,26 @@
 #![forbid(unsafe_code)]
 
 use std::collections::{HashMap, HashSet};
-use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Context;
 use async_trait::async_trait;
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use bytes::Bytes;
-use chatty_domain::{Platform, RoomId, RoomKey};
-use http_body_util::{BodyExt, Full};
-use hyper::body::Incoming;
-use hyper::server::conn::http1;
-use hyper::service::service_fn;
-use hyper::{Method, Request, Response, StatusCode};
-use hyper_util::rt::TokioIo;
-use rsa::RsaPublicKey;
-use rsa::pkcs8::DecodePublicKey;
-use sha2::{Digest, Sha256};
-use tokio::net::TcpListener;
+use chatty_domain::{Platform, RoomKey};
+use futures_util::{SinkExt, StreamExt};
+use serde::Deserialize;
+use serde::de::DeserializeOwned;
+use serde_json::Value as JsonValue;
 use tokio::sync::RwLock;
+use tokio_tungstenite::tungstenite::protocol::Message;
 use tracing::{debug, info, warn};
+use url::Url;
 
 use super::client::KickClient;
 use crate::assets::{
-	SevenTvPlatform, ensure_asset_cache_pruner, fetch_7tv_badges_bundle, fetch_7tv_bundle, fetch_7tv_channel_badges_bundle,
-	fetch_kick_badge_bundle, fetch_kick_emote_bundle,
+	DispatchType, SevenTvCacheMode, SevenTvPlatform, SevenTvSubscription, ensure_asset_cache_pruner,
+	ensure_seventv_event_api, fetch_7tv_badges_bundle, fetch_7tv_bundle_with_sets, fetch_7tv_channel_badges_bundle,
+	fetch_kick_badge_bundle, fetch_kick_emote_bundles,
 };
 use crate::{
 	AdapterAuth, AdapterControl, AdapterControlRx, AdapterEvent, AdapterEventTx, AssetBundle, AssetImage, AssetProvider,
@@ -38,13 +31,11 @@ use crate::{
 #[derive(Clone)]
 pub struct KickConfig {
 	pub base_url: String,
-	pub system_access_token: Option<SecretString>,
 	pub broadcaster_id_overrides: HashMap<String, String>,
 	pub resolve_cache_ttl: Duration,
-	pub webhook_bind: Option<SocketAddr>,
-	pub webhook_path: String,
-	pub webhook_public_key_path: Option<PathBuf>,
-	pub webhook_verify_signatures: bool,
+	pub pusher_ws_url: String,
+	pub reconnect_min_delay: Duration,
+	pub reconnect_max_delay: Duration,
 }
 
 impl Default for KickConfig {
@@ -57,20 +48,18 @@ impl KickConfig {
 	pub fn new() -> Self {
 		Self {
 			base_url: "https://api.kick.com".to_string(),
-			system_access_token: None,
 			broadcaster_id_overrides: HashMap::new(),
 			resolve_cache_ttl: Duration::from_secs(300),
-			webhook_bind: None,
-			webhook_path: "/kick/events".to_string(),
-			webhook_public_key_path: None,
-			webhook_verify_signatures: true,
+			pusher_ws_url: "wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679".to_string(),
+			reconnect_min_delay: Duration::from_millis(500),
+			reconnect_max_delay: Duration::from_secs(30),
 		}
 	}
 }
 
-const KICK_BASE_EVENTS: [&str; 1] = ["chat.message.sent"];
-const KICK_MODERATOR_EVENTS: [&str; 1] = ["moderation.banned"];
-const KICK_WEBHOOK_RECONCILE_INTERVAL_SECS: u64 = 120;
+const KICK_PUSHER_PROTOCOL: &str = "7";
+const KICK_PUSHER_CLIENT: &str = "js";
+const KICK_PUSHER_VERSION: &str = "8.4.0";
 
 pub struct KickEventAdapter {
 	cfg: KickConfig,
@@ -79,9 +68,9 @@ pub struct KickEventAdapter {
 	auth_user_ids: Arc<RwLock<HashSet<u64>>>,
 	user_scopes: Arc<RwLock<HashMap<u64, HashSet<String>>>>,
 	broadcaster_id_by_room: HashMap<RoomKey, (u64, std::time::Instant)>,
-	#[allow(dead_code)]
-	emote_ids_by_room: Arc<RwLock<HashMap<RoomKey, HashSet<String>>>>,
-	user_tokens: Arc<RwLock<HashMap<String, SecretString>>>,
+	chatroom_id_by_room: HashMap<RoomKey, (u64, std::time::Instant)>,
+	room_by_chatroom_id: HashMap<u64, RoomKey>,
+	seventv_subscriptions: Arc<RwLock<HashMap<RoomKey, Vec<SevenTvSubscription>>>>,
 	last_auth_error_notice: Option<String>,
 }
 
@@ -94,19 +83,11 @@ impl KickEventAdapter {
 			auth_user_ids: Arc::new(RwLock::new(HashSet::new())),
 			user_scopes: Arc::new(RwLock::new(HashMap::new())),
 			broadcaster_id_by_room: HashMap::new(),
-			emote_ids_by_room: Arc::new(RwLock::new(HashMap::new())),
-			user_tokens: Arc::new(RwLock::new(HashMap::new())),
+			chatroom_id_by_room: HashMap::new(),
+			room_by_chatroom_id: HashMap::new(),
+			seventv_subscriptions: Arc::new(RwLock::new(HashMap::new())),
 			last_auth_error_notice: None,
 		}
-	}
-
-	fn normalize_public_key_pem(raw_key: &str) -> String {
-		let trimmed = raw_key.trim();
-		if trimmed.contains("BEGIN PUBLIC KEY") {
-			return trimmed.to_string();
-		}
-
-		format!("-----BEGIN PUBLIC KEY-----\n{}\n-----END PUBLIC KEY-----", trimmed)
 	}
 
 	fn platform(&self) -> Platform {
@@ -124,38 +105,20 @@ impl KickEventAdapter {
 		KickClient::new(self.cfg.base_url.clone(), token.expose().to_string())
 	}
 
-	async fn room_has_moderator(&self, room: &RoomKey) -> bool {
-		let guard = self.moderator_rooms.read().await;
-		guard.values().any(|rooms| rooms.contains(room))
+	fn pusher_url(&self) -> anyhow::Result<Url> {
+		let mut url = Url::parse(&self.cfg.pusher_ws_url).context("parse kick pusher ws url")?;
+		url.query_pairs_mut()
+			.append_pair("protocol", KICK_PUSHER_PROTOCOL)
+			.append_pair("client", KICK_PUSHER_CLIENT)
+			.append_pair("version", KICK_PUSHER_VERSION)
+			.append_pair("flash", "false");
+		Ok(url)
 	}
 
-	async fn desired_webhook_events(&self, room: &RoomKey) -> Vec<super::client::KickEventSpec> {
-		let mut events: Vec<super::client::KickEventSpec> = KICK_BASE_EVENTS
-			.iter()
-			.map(|name| super::client::KickEventSpec::new(*name, 1))
-			.collect();
-
-		if self.room_has_moderator(room).await {
-			events.extend(
-				KICK_MODERATOR_EVENTS
-					.iter()
-					.map(|name| super::client::KickEventSpec::new(*name, 1)),
-			);
-		}
-
-		events
-	}
-
-	async fn pick_any_token(&self) -> Option<SecretString> {
-		let guard = self.user_tokens.read().await;
-		guard.values().next().cloned()
-	}
-
-	async fn pick_subscription_token(&self) -> Option<SecretString> {
-		if let Some(token) = self.cfg.system_access_token.clone() {
-			return Some(token);
-		}
-		self.pick_any_token().await
+	async fn connect_ws(&self) -> anyhow::Result<KickWs> {
+		let url = self.pusher_url()?.to_string();
+		let (ws, _) = tokio_tungstenite::connect_async(url).await.context("kick ws connect")?;
+		Ok(ws)
 	}
 
 	async fn apply_auth_update(&mut self, auth: AdapterAuth) {
@@ -164,13 +127,6 @@ impl KickEventAdapter {
 		} = auth
 		{
 			self.last_auth_error_notice = None;
-
-			let token_key = user_id
-				.clone()
-				.filter(|id| !id.trim().is_empty())
-				.unwrap_or_else(|| access_token.expose().to_string());
-			let mut tokens = self.user_tokens.write().await;
-			tokens.insert(token_key, access_token.clone());
 
 			let parsed_user_id = user_id.as_deref().and_then(|id| id.trim().parse::<u64>().ok());
 			{
@@ -243,6 +199,34 @@ impl KickEventAdapter {
 		Ok(id)
 	}
 
+	async fn resolve_chatroom_id(&mut self, room: &RoomKey) -> Result<u64, CommandError> {
+		if room.platform != Platform::Kick {
+			return Err(CommandError::InvalidTopic(None));
+		}
+
+		if let Some((cached, ts)) = self.chatroom_id_by_room.get(room)
+			&& ts.elapsed() < self.cfg.resolve_cache_ttl
+		{
+			return Ok(*cached);
+		}
+
+		let slug = room.room_id.as_str();
+		let id = if slug.chars().all(|c| c.is_ascii_digit()) {
+			slug.parse::<u64>().map_err(|_| CommandError::InvalidTopic(None))?
+		} else {
+			let client = KickClient::new(self.cfg.base_url.clone(), "");
+			let resolved = client
+				.resolve_chatroom_id(slug)
+				.await
+				.map_err(|e| CommandError::Internal(e.to_string()))?;
+			resolved.ok_or(CommandError::InvalidTopic(None))?
+		};
+
+		self.chatroom_id_by_room.insert(room.clone(), (id, std::time::Instant::now()));
+		self.room_by_chatroom_id.insert(id, room.clone());
+		Ok(id)
+	}
+
 	fn command_auth(auth: Option<AdapterAuth>) -> Option<(SecretString, Option<String>)> {
 		match auth {
 			Some(AdapterAuth::UserAccessToken {
@@ -270,6 +254,7 @@ impl KickEventAdapter {
 			)));
 		};
 		let broadcaster_id = self.resolve_broadcaster_id(room, &token).await?;
+		let chatroom_id = self.resolve_chatroom_id(room).await.ok();
 		let is_broadcaster = auth_user_id
 			.as_deref()
 			.and_then(|id| if id.trim().is_empty() { None } else { Some(id) })
@@ -289,10 +274,16 @@ impl KickEventAdapter {
 				text,
 				reply_to_platform_message_id,
 				..
-			} => client
-				.send_chat_message(broadcaster_id, &text, reply_to_platform_message_id.as_deref())
-				.await
-				.map_err(map_kick_error)?,
+			} => {
+				let Some(chatroom_id) = chatroom_id else {
+					return Err(CommandError::InvalidTopic(Some("kick chatroom id unresolved".to_string())));
+				};
+				let message_ref = chrono::Utc::now().timestamp_millis().to_string();
+				client
+					.send_chat_message(chatroom_id, &text, &message_ref, reply_to_platform_message_id.as_deref())
+					.await
+					.map_err(map_kick_error)?
+			}
 			CommandRequest::DeleteMessage { platform_message_id, .. } => {
 				if !can_moderate {
 					return Err(CommandError::NotAuthorized(None));
@@ -371,44 +362,277 @@ impl KickEventAdapter {
 		guard.get(&uid).map(|rooms| rooms.contains(room)).unwrap_or(false)
 	}
 
-	async fn ensure_webhook_subscription(&mut self, room: &RoomKey) -> Result<(), CommandError> {
-		let Some(token) = self.pick_subscription_token().await else {
-			return Err(CommandError::NotAuthorized(Some(
-				"kick auth missing access token".to_string(),
-			)));
+	fn backoff_delay(attempt: u32, min: Duration, max: Duration) -> Duration {
+		let min_ms = min.as_millis() as u64;
+		let max_ms = max.as_millis() as u64;
+		let exp = 2u64.saturating_pow(attempt.min(10));
+		let delay_ms = min_ms.saturating_mul(exp).min(max_ms);
+		Duration::from_millis(delay_ms)
+	}
+
+	async fn send_pusher_subscribe(
+		&self,
+		ws_tx: &mut futures_util::stream::SplitSink<KickWs, Message>,
+		chatroom_id: u64,
+	) -> anyhow::Result<()> {
+		let payload = serde_json::json!({
+			"event": "pusher:subscribe",
+			"data": { "auth": "", "channel": format!("chatrooms.{chatroom_id}.v2") }
+		});
+		ws_tx
+			.send(Message::Text(payload.to_string().into()))
+			.await
+			.context("kick ws subscribe")
+	}
+
+	async fn send_pusher_unsubscribe(
+		&self,
+		ws_tx: &mut futures_util::stream::SplitSink<KickWs, Message>,
+		chatroom_id: u64,
+	) -> anyhow::Result<()> {
+		let payload = serde_json::json!({
+			"event": "pusher:unsubscribe",
+			"data": { "channel": format!("chatrooms.{chatroom_id}.v2") }
+		});
+		ws_tx
+			.send(Message::Text(payload.to_string().into()))
+			.await
+			.context("kick ws unsubscribe")
+	}
+
+	async fn send_pusher_pong(&self, ws_tx: &mut futures_util::stream::SplitSink<KickWs, Message>) -> anyhow::Result<()> {
+		let payload = serde_json::json!({
+			"event": "pusher:pong",
+			"data": {}
+		});
+		ws_tx
+			.send(Message::Text(payload.to_string().into()))
+			.await
+			.context("kick ws pong")
+	}
+
+	async fn handle_pusher_event(&mut self, envelope: KickPusherEvent, events_tx: &AdapterEventTx) -> anyhow::Result<()> {
+		match envelope.event.as_str() {
+			"App\\Events\\ChatMessageEvent" => {
+				if let Some(payload) = parse_pusher_payload::<KickWsChatMessage>(envelope.data) {
+					self.handle_chat_message(payload, envelope.channel.as_deref(), events_tx)
+						.await;
+				}
+			}
+			"App\\Events\\MessageDeletedEvent" => {
+				if let Some(payload) = parse_pusher_payload::<KickWsMessageDeleted>(envelope.data) {
+					self.handle_message_deleted(payload, envelope.channel.as_deref(), events_tx)
+						.await;
+				}
+			}
+			"App\\Events\\UserBannedEvent" => {
+				if let Some(payload) = parse_pusher_payload::<KickWsUserBan>(envelope.data) {
+					self.handle_user_banned(payload, envelope.channel.as_deref(), events_tx).await;
+				}
+			}
+			"App\\Events\\UserUnbannedEvent" => {
+				if let Some(payload) = parse_pusher_payload::<KickWsUserUnban>(envelope.data) {
+					self.handle_user_unbanned(payload, envelope.channel.as_deref(), events_tx)
+						.await;
+				}
+			}
+			_ => {}
+		}
+		Ok(())
+	}
+
+	async fn handle_chat_message(&mut self, payload: KickWsChatMessage, channel: Option<&str>, events_tx: &AdapterEventTx) {
+		let room = self.room_by_chatroom_id.get(&payload.chatroom_id).cloned().or_else(|| {
+			channel
+				.and_then(chatroom_id_from_channel)
+				.and_then(|id| self.room_by_chatroom_id.get(&id).cloned())
+		});
+		let Some(room) = room else {
+			warn!(chatroom_id = payload.chatroom_id, channel = ?channel, "kick ws message for unknown room");
+			return;
 		};
 
-		let broadcaster_id = self.resolve_broadcaster_id(room, &token).await?;
-		let desired_events = self.desired_webhook_events(room).await;
-		let client = self.client_for_token(&token);
-
-		let existing = client
-			.list_event_subscriptions(Some(broadcaster_id))
-			.await
-			.map_err(|e| CommandError::Internal(e.to_string()))?;
-
-		let mut missing = Vec::new();
-		for desired in desired_events {
-			let found = existing
-				.iter()
-				.any(|s| s.event == desired.name && s.version == desired.version);
-
-			if !found {
-				missing.push(desired);
+		if self.auth_user_ids.read().await.contains(&payload.sender.id) {
+			let has_mod_badge = payload
+				.sender
+				.identity
+				.as_ref()
+				.map(|identity| {
+					identity
+						.badges
+						.iter()
+						.any(|badge| matches!(badge.badge_type.as_str(), "moderator" | "broadcaster"))
+				})
+				.unwrap_or(false);
+			let mut guard = self.moderator_rooms.write().await;
+			let entry = guard.entry(payload.sender.id).or_insert_with(HashSet::new);
+			if has_mod_badge {
+				entry.insert(room.clone());
+			} else {
+				entry.remove(&room);
 			}
 		}
 
-		if missing.is_empty() {
-			return Ok(());
+		let author = UserRef {
+			id: payload.sender.id.to_string(),
+			login: payload.sender.username.clone(),
+			display: Some(payload.sender.username.clone()),
+		};
+		let (normalized, emotes) = normalize_kick_content(&payload.content);
+		let mut chat_message = ChatMessage::new(author, normalized);
+		let room_id = room.room_id.as_str();
+		chat_message.badges = payload
+			.sender
+			.identity
+			.as_ref()
+			.map(|identity| {
+				identity
+					.badges
+					.iter()
+					.map(|badge| match badge.badge_type.as_str() {
+						"subscriber" => format!("kick:subscriber:{room_id}"),
+						"moderator" => "kick:moderator".to_string(),
+						"vip" => "kick:vip".to_string(),
+						"broadcaster" => "kick:broadcaster".to_string(),
+						_ => format!("kick:{}", badge.badge_type),
+					})
+					.collect::<Vec<_>>()
+			})
+			.unwrap_or_default();
+		chat_message.ids.platform_id = Some(payload.id.clone());
+		chat_message.emotes = emotes;
+
+		let mut ingest = IngestEvent::new(Platform::Kick, room.room_id.clone(), IngestPayload::ChatMessage(chat_message));
+		if let Ok(platform_id) = chatty_domain::PlatformMessageId::new(payload.id.clone()) {
+			ingest.platform_message_id = Some(platform_id);
+		}
+		if let Some(ts) = payload.created_at.as_deref()
+			&& let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(ts)
+		{
+			let utc = parsed.with_timezone(&chrono::Utc);
+			let st = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(utc.timestamp_millis() as u64);
+			ingest.platform_time = Some(st);
 		}
 
-		metrics::counter!("chatty_kick_webhook_subscribe_requests_total").increment(1);
-		client
-			.create_event_subscriptions(Some(broadcaster_id), missing)
-			.await
-			.map_err(|e| CommandError::Internal(e.to_string()))?;
-		metrics::counter!("chatty_kick_webhook_subscribe_success_total").increment(1);
-		Ok(())
+		if events_tx.try_send(AdapterEvent::Ingest(Box::new(ingest))).is_err() {
+			warn!("kick ws ingest channel closed");
+		}
+	}
+
+	async fn handle_message_deleted(
+		&mut self,
+		payload: KickWsMessageDeleted,
+		channel: Option<&str>,
+		events_tx: &AdapterEventTx,
+	) {
+		let chatroom_id = channel.and_then(chatroom_id_from_channel);
+		let room = chatroom_id.and_then(|id| self.room_by_chatroom_id.get(&id).cloned());
+		let Some(room) = room else {
+			return;
+		};
+		let Some(message) = payload.message else {
+			return;
+		};
+
+		let mod_event = ModerationEvent {
+			kind: "delete".to_string(),
+			actor: None,
+			target: None,
+			target_message_platform_id: Some(message.id.clone()),
+			notes: None,
+			action: Some(ModerationAction::DeleteMessage { message_id: message.id }),
+		};
+		let ingest = IngestEvent::new(
+			Platform::Kick,
+			room.room_id.clone(),
+			IngestPayload::Moderation(Box::new(mod_event)),
+		);
+		let _ = events_tx.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+	}
+
+	async fn handle_user_banned(&mut self, payload: KickWsUserBan, channel: Option<&str>, events_tx: &AdapterEventTx) {
+		let chatroom_id = channel.and_then(chatroom_id_from_channel);
+		let room = chatroom_id.and_then(|id| self.room_by_chatroom_id.get(&id).cloned());
+		let Some(room) = room else {
+			return;
+		};
+
+		let expires_at = payload
+			.expires_at
+			.as_deref()
+			.and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+			.map(|dt| dt.with_timezone(&chrono::Utc))
+			.map(std::time::SystemTime::from);
+		let is_timeout = expires_at.is_some();
+
+		let mod_event = ModerationEvent {
+			kind: if is_timeout {
+				"timeout".to_string()
+			} else {
+				"ban".to_string()
+			},
+			actor: Some(UserRef {
+				id: payload.banned_by.id.to_string(),
+				login: payload.banned_by.username.clone(),
+				display: Some(payload.banned_by.username.clone()),
+			}),
+			target: Some(UserRef {
+				id: payload.user.id.to_string(),
+				login: payload.user.username.clone(),
+				display: Some(payload.user.username.clone()),
+			}),
+			target_message_platform_id: None,
+			notes: None,
+			action: Some(if is_timeout {
+				ModerationAction::Timeout {
+					duration_seconds: None,
+					expires_at,
+					reason: None,
+				}
+			} else {
+				ModerationAction::Ban {
+					is_permanent: Some(true),
+					reason: None,
+				}
+			}),
+		};
+		let ingest = IngestEvent::new(
+			Platform::Kick,
+			room.room_id.clone(),
+			IngestPayload::Moderation(Box::new(mod_event)),
+		);
+		let _ = events_tx.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+	}
+
+	async fn handle_user_unbanned(&mut self, payload: KickWsUserUnban, channel: Option<&str>, events_tx: &AdapterEventTx) {
+		let chatroom_id = channel.and_then(chatroom_id_from_channel);
+		let room = chatroom_id.and_then(|id| self.room_by_chatroom_id.get(&id).cloned());
+		let Some(room) = room else {
+			return;
+		};
+
+		let mod_event = ModerationEvent {
+			kind: "unban".to_string(),
+			actor: Some(UserRef {
+				id: payload.unbanned_by.id.to_string(),
+				login: payload.unbanned_by.username.clone(),
+				display: Some(payload.unbanned_by.username.clone()),
+			}),
+			target: Some(UserRef {
+				id: payload.user.id.to_string(),
+				login: payload.user.username.clone(),
+				display: Some(payload.user.username.clone()),
+			}),
+			target_message_platform_id: None,
+			notes: None,
+			action: Some(ModerationAction::Unban {}),
+		};
+		let ingest = IngestEvent::new(
+			Platform::Kick,
+			room.room_id.clone(),
+			IngestPayload::Moderation(Box::new(mod_event)),
+		);
+		let _ = events_tx.try_send(AdapterEvent::Ingest(Box::new(ingest)));
 	}
 }
 
@@ -429,505 +653,141 @@ fn parse_numeric_id(value: &str) -> Result<u64, CommandError> {
 		.map_err(|_| CommandError::InvalidCommand(Some("kick invalid numeric id".to_string())))
 }
 
-const KICK_PUBLIC_KEY_PEM: &str = include_str!("public_key.pem");
-const MAX_KICK_WEBHOOK_BODY_BYTES: usize = 1_048_576; // 1 MiB
+pub(crate) type KickWs = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
-#[derive(Debug, serde::Deserialize)]
-struct KickWebhookChatMessage {
-	message_id: String,
+#[derive(Debug, Deserialize)]
+struct KickPusherEvent {
+	event: String,
+	data: JsonValue,
+	#[serde(default)]
+	channel: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct KickWsChatMessage {
+	id: String,
+	chatroom_id: u64,
 	content: String,
+	#[serde(default)]
 	created_at: Option<String>,
-	sender: KickWebhookUser,
-	broadcaster: Option<KickWebhookUser>,
-	#[serde(default)]
-	emotes: Vec<KickWebhookEmote>,
+	sender: KickWsUser,
 }
 
-#[derive(Debug, serde::Deserialize)]
-struct KickWebhookUser {
-	user_id: u64,
+#[derive(Debug, Deserialize)]
+struct KickWsUser {
+	id: u64,
 	username: String,
-	channel_slug: String,
-	identity: Option<KickWebhookIdentity>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct KickWebhookIdentity {
 	#[serde(default)]
-	badges: Vec<KickWebhookBadge>,
+	identity: Option<KickWsIdentity>,
 }
 
-#[derive(Debug, serde::Deserialize)]
-struct KickWebhookBadge {
+#[derive(Debug, Deserialize)]
+struct KickWsIdentity {
+	#[serde(default)]
+	badges: Vec<KickWsBadge>,
+}
+
+#[derive(Debug, Deserialize)]
+struct KickWsBadge {
 	#[serde(rename = "type")]
-	badge_type: Option<String>,
+	badge_type: String,
 }
 
-#[allow(dead_code)]
-#[derive(Debug, serde::Deserialize)]
-struct KickWebhookEmote {
-	emote_id: String,
-	positions: Vec<KickWebhookEmotePosition>,
+#[derive(Debug, Deserialize)]
+struct KickWsMessageDeleted {
+	#[serde(default)]
+	message: Option<KickWsMessageRef>,
 }
 
-#[allow(dead_code)]
-#[derive(Debug, serde::Deserialize)]
-struct KickWebhookEmotePosition {
-	s: u32,
-	e: u32,
+#[derive(Debug, Deserialize)]
+struct KickWsMessageRef {
+	id: String,
 }
 
-#[derive(Clone)]
-struct KickWebhookState {
-	path: String,
-	verify_signatures: bool,
-	public_key: Option<RsaPublicKey>,
-	joined_rooms: Arc<RwLock<HashSet<RoomKey>>>,
-	moderator_rooms: Arc<RwLock<HashMap<u64, HashSet<RoomKey>>>>,
-	auth_user_ids: Arc<RwLock<HashSet<u64>>>,
-	emote_ids_by_room: Arc<RwLock<HashMap<RoomKey, HashSet<String>>>>,
-	events_tx: AdapterEventTx,
+#[derive(Debug, Deserialize)]
+struct KickWsUserBan {
+	user: KickWsActor,
+	banned_by: KickWsActor,
+	#[serde(default)]
+	expires_at: Option<String>,
 }
 
-async fn run_kick_webhook_server(
-	bind: SocketAddr,
-	state: KickWebhookState,
-	mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
-) -> anyhow::Result<()> {
-	let listener = TcpListener::bind(bind).await?;
-	loop {
-		tokio::select! {
-			biased;
-			_ = shutdown_rx.changed() => {
-				info!(%bind, "kick webhook server shutting down");
-				break;
-			}
-			accept = listener.accept() => {
-				match accept {
-					Ok((stream, _addr)) => {
-						let io = TokioIo::new(stream);
-						let state = state.clone();
-						tokio::spawn(async move {
-							let service = service_fn(move |req| handle_kick_webhook(req, state.clone()));
-							if let Err(err) = http1::Builder::new().serve_connection(io, service).await {
-								warn!(error = %err, "kick webhook connection error");
-							}
-						});
-					}
-					Err(err) => {
-						warn!(error = %err, "kick webhook accept failed");
-						tokio::time::sleep(Duration::from_millis(100)).await;
-					}
-				}
-			}
-		}
-	}
-	Ok(())
+#[derive(Debug, Deserialize)]
+struct KickWsUserUnban {
+	user: KickWsActor,
+	unbanned_by: KickWsActor,
 }
 
-async fn handle_kick_webhook(
-	req: Request<Incoming>,
-	state: KickWebhookState,
-) -> Result<Response<Full<Bytes>>, hyper::Error> {
-	let (parts, body) = req.into_parts();
+#[derive(Debug, Deserialize)]
+struct KickWsActor {
+	id: u64,
+	username: String,
+}
 
-	if parts.method != Method::POST {
-		return Ok(Response::builder()
-			.status(StatusCode::METHOD_NOT_ALLOWED)
-			.body(Full::new(Bytes::new()))
-			.unwrap());
+fn parse_pusher_payload<T: DeserializeOwned>(data: JsonValue) -> Option<T> {
+	if let Some(s) = data.as_str() {
+		serde_json::from_str(s).ok()
+	} else {
+		serde_json::from_value(data).ok()
 	}
+}
 
-	if parts.uri.path() != state.path {
-		return Ok(Response::builder()
-			.status(StatusCode::NOT_FOUND)
-			.body(Full::new(Bytes::new()))
-			.unwrap());
-	}
-
-	metrics::counter!("chatty_kick_webhook_requests_total").increment(1);
-
-	let headers = parts.headers;
-	let event_type = headers.get("Kick-Event-Type").and_then(|v| v.to_str().ok()).unwrap_or("");
-	let message_id = headers
-		.get("Kick-Event-Message-Id")
-		.and_then(|v| v.to_str().ok())
-		.unwrap_or("");
-	let timestamp = headers
-		.get("Kick-Event-Message-Timestamp")
-		.and_then(|v| v.to_str().ok())
-		.unwrap_or("");
-	let signature = headers
-		.get("Kick-Event-Signature")
-		.and_then(|v| v.to_str().ok())
-		.unwrap_or("");
-
-	let body_bytes = match body.collect().await {
-		Ok(collected) => collected.to_bytes(),
-		Err(err) => {
-			warn!(error = %err, "kick webhook body read failed");
-			metrics::counter!("chatty_kick_webhook_body_errors_total").increment(1);
-			return Ok(Response::builder()
-				.status(StatusCode::BAD_REQUEST)
-				.body(Full::new(Bytes::new()))
-				.unwrap());
-		}
-	};
-
-	if body_bytes.len() > MAX_KICK_WEBHOOK_BODY_BYTES {
-		metrics::counter!("chatty_kick_webhook_body_too_large_total").increment(1);
-		return Ok(Response::builder()
-			.status(StatusCode::PAYLOAD_TOO_LARGE)
-			.body(Full::new(Bytes::new()))
-			.unwrap());
-	}
-
-	if state.verify_signatures {
-		if state.public_key.is_none() {
-			warn!("kick webhook signature verification enabled but no public key is configured");
-			metrics::counter!("chatty_kick_webhook_signature_missing_total").increment(1);
-			return Ok(Response::builder()
-				.status(StatusCode::UNAUTHORIZED)
-				.body(Full::new(Bytes::new()))
-				.unwrap());
-		}
-		if message_id.is_empty() || timestamp.is_empty() || signature.is_empty() {
-			metrics::counter!("chatty_kick_webhook_signature_missing_total").increment(1);
-			return Ok(Response::builder()
-				.status(StatusCode::UNAUTHORIZED)
-				.body(Full::new(Bytes::new()))
-				.unwrap());
-		}
-
-		match chrono::DateTime::parse_from_rfc3339(timestamp) {
-			Ok(parsed_ts) => {
-				let parsed_utc = parsed_ts.with_timezone(&chrono::Utc);
-				let now = chrono::Utc::now();
-				let age_secs = (now.signed_duration_since(parsed_utc)).num_seconds().abs();
-				if age_secs > 300 {
-					metrics::counter!("chatty_kick_webhook_stale_timestamp_total").increment(1);
-					return Ok(Response::builder()
-						.status(StatusCode::UNAUTHORIZED)
-						.body(Full::new(Bytes::new()))
-						.unwrap());
-				}
-			}
-			Err(_) => {
-				metrics::counter!("chatty_kick_webhook_timestamp_invalid_total").increment(1);
-				return Ok(Response::builder()
-					.status(StatusCode::UNAUTHORIZED)
-					.body(Full::new(Bytes::new()))
-					.unwrap());
-			}
-		}
-
-		let mut signed = Vec::new();
-		signed.extend_from_slice(message_id.as_bytes());
-		signed.push(b'.');
-		signed.extend_from_slice(timestamp.as_bytes());
-		signed.push(b'.');
-		signed.extend_from_slice(body_bytes.as_ref());
-		let hash = Sha256::digest(&signed);
-		let signature_bytes = match BASE64_STANDARD.decode(signature) {
-			Ok(sig) => sig,
-			Err(_) => {
-				metrics::counter!("chatty_kick_webhook_signature_invalid_total").increment(1);
-				return Ok(Response::builder()
-					.status(StatusCode::UNAUTHORIZED)
-					.body(Full::new(Bytes::new()))
-					.unwrap());
-			}
-		};
-		if let Some(public_key) = state.public_key.as_ref()
-			&& public_key
-				.verify(rsa::pkcs1v15::Pkcs1v15Sign::new::<Sha256>(), &hash, &signature_bytes)
-				.is_err()
-		{
-			metrics::counter!("chatty_kick_webhook_signature_invalid_total").increment(1);
-			return Ok(Response::builder()
-				.status(StatusCode::UNAUTHORIZED)
-				.body(Full::new(Bytes::new()))
-				.unwrap());
-		}
-	}
-
-	if event_type != "chat.message.sent" && event_type != "chat.message.deleted" && event_type != "moderation.banned" {
-		metrics::counter!("chatty_kick_webhook_ignored_total").increment(1);
-		return Ok(Response::builder()
-			.status(StatusCode::NO_CONTENT)
-			.body(Full::new(Bytes::new()))
-			.unwrap());
-	}
-
-	let ingest = match event_type {
-		"chat.message.sent" => {
-			let payload: KickWebhookChatMessage = match serde_json::from_slice(&body_bytes) {
-				Ok(v) => v,
-				Err(err) => {
-					warn!(error = %err, "kick webhook payload parse failed (chat.message.sent)");
-					metrics::counter!("chatty_kick_webhook_parse_errors_total").increment(1);
-					return Ok(Response::builder()
-						.status(StatusCode::BAD_REQUEST)
-						.body(Full::new(Bytes::new()))
-						.unwrap());
-				}
-			};
-
-			let channel_slug = payload
-				.broadcaster
-				.as_ref()
-				.map(|b| b.channel_slug.as_str())
-				.unwrap_or(payload.sender.channel_slug.as_str());
-			let room_id = match RoomId::new(channel_slug.to_string()) {
-				Ok(v) => v,
-				Err(_) => {
-					return Ok(Response::builder()
-						.status(StatusCode::BAD_REQUEST)
-						.body(Full::new(Bytes::new()))
-						.unwrap());
-				}
-			};
-			let room = RoomKey::new(Platform::Kick, room_id);
-
-			let is_joined = {
-				let guard = state.joined_rooms.read().await;
-				guard.contains(&room)
-			};
-			if !is_joined {
-				metrics::counter!("chatty_kick_webhook_unsubscribed_total").increment(1);
-				return Ok(Response::builder()
-					.status(StatusCode::NO_CONTENT)
-					.body(Full::new(Bytes::new()))
-					.unwrap());
-			}
-
-			if state.auth_user_ids.read().await.contains(&payload.sender.user_id) {
-				let has_mod_badge = payload
-					.sender
-					.identity
-					.as_ref()
-					.map(|identity| {
-						identity
-							.badges
-							.iter()
-							.any(|badge| badge.badge_type.as_deref() == Some("moderator"))
-					})
-					.unwrap_or(false);
-				let mut guard = state.moderator_rooms.write().await;
-				let entry = guard.entry(payload.sender.user_id).or_insert_with(HashSet::new);
-
-				if has_mod_badge {
-					entry.insert(room.clone());
-				} else {
-					entry.remove(&room);
-				}
-			}
-
-			let author = UserRef {
-				id: payload.sender.user_id.to_string(),
-				login: payload.sender.username.clone(),
-				display: Some(payload.sender.username.clone()),
-			};
-			let mut chat_message = ChatMessage::new(author, payload.content.clone());
-			let room_id = room.room_id.as_str();
-			chat_message.badges = payload
-				.sender
-				.identity
-				.as_ref()
-				.map(|identity| {
-					identity
-						.badges
-						.iter()
-						.filter_map(|badge| {
-							badge.badge_type.as_ref().map(|t| match t.as_str() {
-								"subscriber" => format!("kick:subscriber:{room_id}"),
-								"moderator" => "kick:moderator".to_string(),
-								"vip" => "kick:vip".to_string(),
-								_ => format!("kick:{t}"),
-							})
-						})
-						.collect::<Vec<_>>()
-				})
-				.unwrap_or_default();
-			chat_message.ids.platform_id = Some(payload.message_id.clone());
-
-			for kick_emote in &payload.emotes {
-				if let Some(pos) = kick_emote.positions.first() {
-					let start = pos.s as usize;
-					let end = pos.e as usize;
-					if let Some(name) = payload.content.get(start..=end) {
-						chat_message.emotes.push(AssetRef {
-							id: format!("kick:emote:{}", kick_emote.emote_id),
+fn normalize_kick_content(content: &str) -> (String, Vec<AssetRef>) {
+	let mut output = String::with_capacity(content.len());
+	let mut emotes = Vec::new();
+	let mut seen = HashSet::new();
+	let mut idx = 0;
+	while idx < content.len() {
+		let remaining = &content[idx..];
+		if let Some(start) = remaining.find("[emote:") {
+			let abs_start = idx + start;
+			output.push_str(&content[idx..abs_start]);
+			let rest = &content[abs_start + 7..];
+			if let Some(end_rel) = rest.find(']') {
+				let inside = &rest[..end_rel];
+				let mut parts = inside.splitn(2, ':');
+				let id = parts.next().unwrap_or("").trim();
+				let name = parts.next().unwrap_or("").trim();
+				if !id.is_empty() && !name.is_empty() {
+					output.push_str(name);
+					if seen.insert(id.to_string()) {
+						emotes.push(AssetRef {
+							id: format!("kick:emote:{}", id),
 							name: name.to_string(),
 							images: vec![AssetImage {
 								scale: AssetScale::One,
-								url: format!("https://files.kick.com/emotes/{}/fullsize", kick_emote.emote_id),
+								url: format!("https://files.kick.com/emotes/{}/fullsize", id),
 								format: "png".to_string(),
 								width: 0,
 								height: 0,
 							}],
 						});
 					}
+					idx = abs_start + 7 + end_rel + 1;
+					continue;
 				}
 			}
-
-			let mut ingest =
-				IngestEvent::new(Platform::Kick, room.room_id.clone(), IngestPayload::ChatMessage(chat_message));
-			if let Some(ts) = payload.created_at.as_deref()
-				&& let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(ts)
-			{
-				let utc = parsed.with_timezone(&chrono::Utc);
-				let st = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(utc.timestamp_millis() as u64);
-				ingest.platform_time = Some(st);
-			}
-
-			let emote_ids: Vec<String> = payload.emotes.iter().map(|e| e.emote_id.clone()).collect();
-			if !emote_ids.is_empty() {
-				let mut guard = state.emote_ids_by_room.write().await;
-				let room_emotes = guard.entry(room.clone()).or_insert_with(HashSet::new);
-				let old_len = room_emotes.len();
-				for id in emote_ids {
-					room_emotes.insert(id);
-				}
-				let new_len = room_emotes.len();
-				if new_len > old_len {
-					let emote_ids_vec: Vec<String> = room_emotes.iter().cloned().collect();
-					drop(guard);
-					let room_for_emotes = room.clone();
-					let events_tx = state.events_tx.clone();
-
-					tokio::spawn(async move {
-						if let Some(bundle) = fetch_kick_emote_bundle(room_for_emotes.room_id.as_str(), &emote_ids_vec).await
-						{
-							let ingest = IngestEvent::new(
-								Platform::Kick,
-								room_for_emotes.room_id.clone(),
-								IngestPayload::AssetBundle(bundle),
-							);
-							let _ = events_tx.try_send(AdapterEvent::Ingest(Box::new(ingest)));
-						}
-					});
-				}
-			}
-			ingest
 		}
-		"moderation.banned" => {
-			let payload: serde_json::Value = match serde_json::from_slice(&body_bytes) {
-				Ok(v) => v,
-				Err(_) => {
-					return Ok(Response::builder()
-						.status(StatusCode::BAD_REQUEST)
-						.body(Full::new(Bytes::new()))
-						.unwrap());
-				}
-			};
 
-			let banned_user = payload.get("banned_user");
-			let user_id = banned_user
-				.and_then(|v| v.get("user_id"))
-				.and_then(|v| v.as_u64())
-				.map(|v| v.to_string())
-				.unwrap_or_default();
-			let username = banned_user
-				.and_then(|v| v.get("username"))
-				.and_then(|v| v.as_str())
-				.unwrap_or("");
-
-			let moderator = payload.get("moderator");
-			let actor_id = moderator
-				.and_then(|v| v.get("user_id"))
-				.and_then(|v| v.as_u64())
-				.map(|v| v.to_string())
-				.unwrap_or_default();
-			let actor_username = moderator
-				.and_then(|v| v.get("username"))
-				.and_then(|v| v.as_str())
-				.unwrap_or("");
-
-			let metadata = payload.get("metadata");
-			let reason = metadata
-				.and_then(|v| v.get("reason"))
-				.and_then(|v| v.as_str())
-				.map(|v| v.to_string());
-			let created_at_str = metadata.and_then(|v| v.get("created_at")).and_then(|v| v.as_str());
-			let expires_at_str = metadata.and_then(|v| v.get("expires_at")).and_then(|v| v.as_str());
-
-			let created_at = created_at_str
-				.and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-				.map(|dt| dt.with_timezone(&chrono::Utc));
-
-			let expires_at = expires_at_str
-				.and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-				.map(|dt| dt.with_timezone(&chrono::Utc));
-
-			let duration_seconds = if let (Some(c), Some(e)) = (created_at, expires_at) {
-				let diff = e.signed_duration_since(c);
-				if diff.num_seconds() > 0 {
-					Some(diff.num_seconds() as u64)
-				} else {
-					None
-				}
-			} else {
-				None
-			};
-
-			let channel_slug = payload
-				.get("broadcaster")
-				.and_then(|v| v.get("channel_slug"))
-				.and_then(|v| v.as_str())
-				.unwrap_or("");
-			let room_id =
-				RoomId::new(channel_slug.to_string()).unwrap_or_else(|_| RoomId::new("unknown".to_string()).unwrap());
-
-			let is_timeout = expires_at.is_some();
-
-			let mod_event = ModerationEvent {
-				kind: if is_timeout {
-					"timeout".to_string()
-				} else {
-					"ban".to_string()
-				},
-				actor: Some(UserRef {
-					id: actor_id,
-					login: actor_username.to_string(),
-					display: Some(actor_username.to_string()),
-				}),
-				target: Some(UserRef {
-					id: user_id,
-					login: username.to_string(),
-					display: Some(username.to_string()),
-				}),
-				target_message_platform_id: None,
-				notes: reason.clone(),
-				action: Some(if is_timeout {
-					ModerationAction::Timeout {
-						duration_seconds,
-						expires_at: expires_at.map(std::time::SystemTime::from),
-						reason: reason.clone(),
-					}
-				} else {
-					ModerationAction::Ban {
-						is_permanent: Some(true),
-						reason,
-					}
-				}),
-			};
-			IngestEvent::new(Platform::Kick, room_id, IngestPayload::Moderation(Box::new(mod_event)))
-		}
-		_ => unreachable!(),
-	};
-
-	if state.events_tx.send(AdapterEvent::Ingest(Box::new(ingest))).await.is_err() {
-		warn!("kick webhook ingest channel closed");
-		metrics::counter!("chatty_kick_webhook_ingest_errors_total").increment(1);
-	} else {
-		metrics::counter!("chatty_kick_webhook_ingest_total").increment(1);
+		let ch = content[idx..].chars().next().unwrap();
+		output.push(ch);
+		idx += ch.len_utf8();
 	}
 
-	Ok(Response::builder()
-		.status(StatusCode::OK)
-		.body(Full::new(Bytes::new()))
-		.unwrap())
+	(output, emotes)
+}
+
+fn chatroom_id_from_channel(channel: &str) -> Option<u64> {
+	if let Some(stripped) = channel.strip_prefix("chatrooms.") {
+		let mut parts = stripped.split('.');
+		if let Some(id) = parts.next() {
+			return id.parse::<u64>().ok();
+		}
+	}
+	if let Some(stripped) = channel.strip_prefix("chatroom_") {
+		return stripped.parse::<u64>().ok();
+	}
+	None
 }
 
 #[async_trait]
@@ -942,123 +802,130 @@ impl PlatformAdapter for KickEventAdapter {
 		let session_id = new_session_id();
 		let platform = this.platform();
 
-		if this.pick_subscription_token().await.is_none() {
-			warn!(
-				"kick webhook auto-subscribe enabled but no user access token is available yet; webhooks will not be registered until a user signs in"
-			);
-		}
-
-		let mut webhook_shutdown_tx: Option<tokio::sync::watch::Sender<bool>> = None;
-
-		if let Some(bind) = this.cfg.webhook_bind {
-			let public_key_pem = if let Some(path) = this.cfg.webhook_public_key_path.clone() {
-				match std::fs::read_to_string(&path) {
-					Ok(contents) => contents,
-					Err(err) => {
-						warn!(error = %err, path = %path.display(), "failed to read kick webhook public key; using bundled key");
-						KICK_PUBLIC_KEY_PEM.to_string()
-					}
-				}
-			} else {
-				let client = KickClient::new(this.cfg.base_url.clone(), "");
-				match client.fetch_public_key().await {
-					Ok(key) => Self::normalize_public_key_pem(&key),
-					Err(err) => {
-						warn!(error = %err, "failed to fetch kick webhook public key; using bundled key");
-						KICK_PUBLIC_KEY_PEM.to_string()
-					}
-				}
-			};
-			let public_key = RsaPublicKey::from_public_key_pem(&public_key_pem)
-				.or_else(|_| RsaPublicKey::from_public_key_pem(KICK_PUBLIC_KEY_PEM))
-				.ok();
-			let state = KickWebhookState {
-				path: this.cfg.webhook_path.clone(),
-				verify_signatures: this.cfg.webhook_verify_signatures,
-				public_key,
-				joined_rooms: Arc::clone(&this.joined_rooms),
-				moderator_rooms: Arc::clone(&this.moderator_rooms),
-				auth_user_ids: Arc::clone(&this.auth_user_ids),
-				emote_ids_by_room: Arc::new(RwLock::new(HashMap::new())),
-				events_tx: events_tx.clone(),
-			};
-
-			let status_detail = format!("kick webhook listening on {bind}{}", this.cfg.webhook_path);
-			let _ = events_tx.try_send(status(platform, true, status_detail));
-
-			let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-			webhook_shutdown_tx = Some(shutdown_tx.clone());
-
-			tokio::spawn(async move {
-				if let Err(err) = run_kick_webhook_server(bind, state, shutdown_rx).await {
-					warn!(error = %err, "kick webhook server stopped");
-				}
-			});
-		} else {
-			warn!("kick webhook ingestion disabled (no webhook_bind configured)");
-		}
-
 		let _ = events_tx.try_send(status(
 			platform,
 			true,
 			format!("kick adapter online (session_id={session_id})"),
 		));
 
-		let mut reconcile_interval = tokio::time::interval(Duration::from_secs(KICK_WEBHOOK_RECONCILE_INTERVAL_SECS));
+		let mut reconnect_attempt: u32 = 0;
 
-		loop {
-			tokio::select! {
-				_ = reconcile_interval.tick() => {
-					let rooms: Vec<RoomKey> = {
-						let guard = this.joined_rooms.read().await;
-						guard.iter().cloned().collect()
-					};
-					for room in rooms {
-						if let Err(err) = this.ensure_webhook_subscription(&room).await {
-							warn!(error = %err, room=%room, "kick webhook subscription reconcile failed");
-							metrics::counter!("chatty_kick_webhook_subscribe_errors_total").increment(1);
+		'outer: loop {
+			let ws = match this.connect_ws().await {
+				Ok(ws) => {
+					reconnect_attempt = 0;
+					ws
+				}
+				Err(err) => {
+					warn!(error = %err, "kick ws connect failed");
+					let delay =
+						Self::backoff_delay(reconnect_attempt, this.cfg.reconnect_min_delay, this.cfg.reconnect_max_delay);
+					reconnect_attempt = reconnect_attempt.saturating_add(1);
+					tokio::time::sleep(delay).await;
+					continue;
+				}
+			};
+
+			let (mut ws_tx, mut ws_rx) = ws.split();
+			let _ = events_tx.try_send(status(platform, true, "kick ws connected"));
+
+			let rooms: Vec<RoomKey> = {
+				let guard = this.joined_rooms.read().await;
+				guard.iter().cloned().collect()
+			};
+			for room in rooms {
+				if let Ok(chatroom_id) = this.resolve_chatroom_id(&room).await
+					&& let Err(err) = this.send_pusher_subscribe(&mut ws_tx, chatroom_id).await
+				{
+					warn!(error = %err, chatroom_id, room = %room, "kick ws subscribe failed");
+				}
+			}
+
+			loop {
+				tokio::select! {
+					msg = ws_rx.next() => {
+						let Some(msg) = msg else {
+							warn!("kick ws closed");
+							break;
+						};
+						match msg {
+							Ok(Message::Text(text)) => {
+								match serde_json::from_str::<KickPusherEvent>(&text) {
+									Ok(envelope) => {
+										if envelope.event == "pusher:ping" {
+											if let Err(err) = this.send_pusher_pong(&mut ws_tx).await {
+												warn!(error = %err, "kick ws pong failed");
+											}
+										} else if envelope.event == "pusher:error" {
+											warn!(payload = %text, "kick ws error event");
+										} else if let Err(err) = this.handle_pusher_event(envelope, &events_tx).await {
+											warn!(error = %err, "kick ws event handling failed");
+										}
+									}
+									Err(err) => {
+										warn!(error = %err, payload = %text, "kick ws message parse failed");
+									}
+								}
+							}
+							Ok(Message::Ping(payload)) => {
+								let _ = ws_tx.send(Message::Pong(payload)).await;
+							}
+							Ok(Message::Close(_)) => {
+								warn!("kick ws closed");
+								break;
+							}
+							Ok(_) => {}
+							Err(err) => {
+								warn!(error = %err, "kick ws receive error");
+								break;
+							}
 						}
 					}
-				}
-				cmd = control_rx.recv() => {
-					let Some(cmd) = cmd else {
-						info!(%platform, "kick adapter control channel closed; shutting down");
-						break;
-					};
+					cmd = control_rx.recv() => {
+						let Some(cmd) = cmd else {
+							info!(%platform, "kick adapter control channel closed; shutting down");
+							break 'outer;
+						};
 
-					match cmd {
-						AdapterControl::Join { room } => {
-							if room.platform != platform {
-								debug!(%platform, room=%room, "ignoring Join for non-matching platform");
-								continue;
-							}
-							let mut guard = this.joined_rooms.write().await;
-							if guard.insert(room.clone()) {
-								let detail = format!("joined kick room:{}", room.room_id.as_str());
-								let _ = events_tx.try_send(status(platform, true, detail));
-								let cache_key = format!("kick:channel:{}:native", room.room_id.as_str());
-								info!(%platform, room=%room.room_id, cache_key=%cache_key, "emitting AssetBundle ingest");
-								let ingest = IngestEvent::new(
-									platform,
-									room.room_id.clone(),
-									IngestPayload::AssetBundle(AssetBundle {
-										provider: AssetProvider::Kick,
-										scope: AssetScope::Channel,
-										cache_key: cache_key.clone(),
-										etag: Some("empty".to_string()),
-										emotes: Vec::new(),
-										badges: Vec::new(),
-									}),
-								);
-								let _ = events_tx.try_send(AdapterEvent::Ingest(Box::new(ingest)));
-								drop(guard);
+						match cmd {
+							AdapterControl::Join { room } => {
+								if room.platform != platform {
+									debug!(%platform, room=%room, "ignoring Join for non-matching platform");
+									continue;
+								}
+								let mut guard = this.joined_rooms.write().await;
+								if guard.insert(room.clone()) {
+									let detail = format!("joined kick room:{}", room.room_id.as_str());
+									let _ = events_tx.try_send(status(platform, true, detail));
+									let cache_key = format!("kick:channel:{}:native", room.room_id.as_str());
+									info!(%platform, room=%room.room_id, cache_key=%cache_key, "emitting AssetBundle ingest");
+									let ingest = IngestEvent::new(
+										platform,
+										room.room_id.clone(),
+										IngestPayload::AssetBundle(AssetBundle {
+											provider: AssetProvider::Kick,
+											scope: AssetScope::Channel,
+											cache_key: cache_key.clone(),
+											etag: Some("empty".to_string()),
+											emotes: Vec::new(),
+											badges: Vec::new(),
+										}),
+									);
+									let _ = events_tx.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+									drop(guard);
+
+								if let Ok(chatroom_id) = this.resolve_chatroom_id(&room).await
+									&& let Err(err) = this.send_pusher_subscribe(&mut ws_tx, chatroom_id).await {
+										warn!(error = %err, chatroom_id, room = %room, "kick ws subscribe failed");
+									}
+
 								let room_for_assets = room.clone();
-								let events_tx = events_tx.clone();
-								let token_for_assets = this.pick_subscription_token().await;
-								let broadcaster_id = match token_for_assets.as_ref() {
-									Some(token) => this.resolve_broadcaster_id(&room, token).await.ok(),
-									None => None,
-								};
+								let events_tx_spawn = events_tx.clone();
+								let seventv_subscriptions = this.seventv_subscriptions.clone();
+								let broadcaster_id = this
+									.resolve_broadcaster_id(&room, &SecretString::new(String::new()))
+									.await
+									.ok();
 								tokio::spawn(async move {
 									if let Some(id) = broadcaster_id {
 										info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, "fetching 7tv channel badges bundle (kick)");
@@ -1071,21 +938,66 @@ impl PlatformAdapter for KickEventAdapter {
 												room_for_assets.room_id.clone(),
 												IngestPayload::AssetBundle(bundle),
 											);
-											let _ = events_tx.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+											let _ = events_tx_spawn.try_send(AdapterEvent::Ingest(Box::new(ingest)));
 										}
 
 										info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, "fetching 7tv emote set bundle (kick)");
-										if let Ok(bundle) = fetch_7tv_bundle(SevenTvPlatform::Kick, &id.to_string()).await {
-											info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
-											let ingest = IngestEvent::new(
-												Platform::Kick,
-												room_for_assets.room_id.clone(),
-												IngestPayload::AssetBundle(bundle),
-											);
-											let _ = events_tx.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+										match fetch_7tv_bundle_with_sets(SevenTvPlatform::Kick, &id.to_string(), SevenTvCacheMode::UseCache).await {
+											Ok((bundle, sets)) => {
+												info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
+												let ingest = IngestEvent::new(
+													Platform::Kick,
+													room_for_assets.room_id.clone(),
+													IngestPayload::AssetBundle(bundle),
+												);
+												let _ = events_tx_spawn.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+
+												let set_ids = sets.set_ids();
+												if !set_ids.is_empty() {
+													let api = ensure_seventv_event_api();
+													let mut subscriptions = Vec::new();
+													for set_id in set_ids {
+														let (subscription, mut rx) = api.subscribe(DispatchType::EmoteSetUpdate, set_id.clone());
+														subscriptions.push(subscription);
+														let events_tx_updates = events_tx_spawn.clone();
+														let room_updates = room_for_assets.clone();
+														let platform_id = id.to_string();
+														tokio::spawn(async move {
+															while rx.recv().await.is_some() {
+																match fetch_7tv_bundle_with_sets(
+																	SevenTvPlatform::Kick,
+																	&platform_id,
+																	SevenTvCacheMode::Refresh,
+																)
+																.await
+																{
+																	Ok((bundle, _)) => {
+																		info!(room=%room_updates.room_id, cache_key=%bundle.cache_key, "emitting updated 7tv emote set bundle (kick)");
+																		let ingest = IngestEvent::new(
+																			Platform::Kick,
+																			room_updates.room_id.clone(),
+																			IngestPayload::AssetBundle(bundle),
+																			);
+																		let _ = events_tx_updates.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+																	}
+																	Err(error) => {
+																		info!(room=%room_updates.room_id, error=?error, "failed to refresh 7tv emote set bundle (kick)");
+																	}
+																}
+															}
+														});
+													}
+
+													let mut guard = seventv_subscriptions.write().await;
+													guard.insert(room_for_assets.clone(), subscriptions);
+												}
+											}
+											Err(error) => {
+												warn!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, error=?error, "failed to fetch 7tv emote set bundle (kick)");
+											}
 										}
 									} else {
-										warn!(%platform, room=%room_for_assets.room_id, "kick broadcaster id unresolved; skipping 7tv/kick asset fetches (check Kick OAuth token or broadcaster overrides)");
+										warn!(%platform, room=%room_for_assets.room_id, "kick broadcaster id unresolved; skipping 7tv asset fetches");
 									}
 
 									if let Ok(bundle) = fetch_7tv_badges_bundle().await {
@@ -1095,7 +1007,7 @@ impl PlatformAdapter for KickEventAdapter {
 											room_for_assets.room_id.clone(),
 											IngestPayload::AssetBundle(bundle),
 										);
-										let _ = events_tx.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+										let _ = events_tx_spawn.try_send(AdapterEvent::Ingest(Box::new(ingest)));
 									}
 
 									if let Some(bundle) = fetch_kick_badge_bundle(room_for_assets.room_id.as_str()).await {
@@ -1105,13 +1017,20 @@ impl PlatformAdapter for KickEventAdapter {
 											room_for_assets.room_id.clone(),
 											IngestPayload::AssetBundle(bundle),
 										);
-										let _ = events_tx.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+										let _ = events_tx_spawn.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+									}
+
+									let bundles = fetch_kick_emote_bundles(room_for_assets.room_id.as_str()).await;
+									for bundle in bundles {
+										info!(%platform, room=%room_for_assets.room_id, cache_key=%bundle.cache_key, scope=?bundle.scope, "emitting Kick emote bundle");
+										let ingest = IngestEvent::new(
+											Platform::Kick,
+											room_for_assets.room_id.clone(),
+											IngestPayload::AssetBundle(bundle),
+										);
+										let _ = events_tx_spawn.try_send(AdapterEvent::Ingest(Box::new(ingest)));
 									}
 								});
-								if let Err(err) = this.ensure_webhook_subscription(&room).await {
-									warn!(error = %err, room=%room, "kick webhook subscription failed");
-									metrics::counter!("chatty_kick_webhook_subscribe_errors_total").increment(1);
-								}
 							}
 						}
 						AdapterControl::Leave { room } => {
@@ -1124,11 +1043,22 @@ impl PlatformAdapter for KickEventAdapter {
 								let detail = format!("left kick room:{}", room.room_id.as_str());
 								let _ = events_tx.try_send(status(platform, true, detail));
 							}
+							drop(guard);
+							if let Some((chatroom_id, _)) = this.chatroom_id_by_room.remove(&room) {
+								this.room_by_chatroom_id.remove(&chatroom_id);
+								if let Err(err) = this.send_pusher_unsubscribe(&mut ws_tx, chatroom_id).await {
+									warn!(error = %err, chatroom_id, room = %room, "kick ws unsubscribe failed");
+								}
+							}
+
+							if let Some(subscriptions) = this.seventv_subscriptions.write().await.remove(&room) {
+								drop(subscriptions);
+							}
 						}
 						AdapterControl::UpdateAuth { auth } => {
 							this.apply_auth_update(auth).await;
-							let has_tokens = !this.user_tokens.read().await.is_empty();
-							if !has_tokens {
+							let has_users = !this.auth_user_ids.read().await.is_empty();
+							if !has_users {
 								this.maybe_notice_auth_issue("kick auth missing access token", &events_tx);
 							} else {
 								let _ = events_tx.try_send(status(platform, true, "kick auth updated"));
@@ -1144,15 +1074,16 @@ impl PlatformAdapter for KickEventAdapter {
 						}
 						AdapterControl::Shutdown => {
 							info!(%platform, "kick adapter received Shutdown");
-
-							if let Some(tx) = webhook_shutdown_tx.take() {
-								let _ = tx.send(true);
-							}
-							break;
+							break 'outer;
 						}
+					}
 					}
 				}
 			}
+
+			let delay = Self::backoff_delay(reconnect_attempt, this.cfg.reconnect_min_delay, this.cfg.reconnect_max_delay);
+			reconnect_attempt = reconnect_attempt.saturating_add(1);
+			tokio::time::sleep(delay).await;
 		}
 
 		let _ = events_tx.try_send(status(platform, false, "kick adapter offline"));

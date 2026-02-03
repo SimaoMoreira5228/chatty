@@ -24,7 +24,9 @@ command_rate_limit_per_topic_burst = 10
 command_rate_limit_per_topic_per_minute = 60
 
 [kick]
-# Webhook bind for Kick events.
-webhook_bind = "0.0.0.0:18206"
-webhook_path = "/kick/events"
-webhook_verify_signatures = true
+# Kick Pusher websocket URL override.
+# pusher_ws_url = "wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679"
+
+# Reconnect backoff tuning (milliseconds).
+reconnect_min_delay_ms = 500
+reconnect_max_delay_ms = 30000

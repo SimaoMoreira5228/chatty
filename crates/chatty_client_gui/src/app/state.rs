@@ -47,6 +47,12 @@ pub struct UiState {
 	pub toaster: crate::app::features::toaster::Toaster,
 	pub animation_start: std::time::Instant,
 	pub animation_clock: std::time::Instant,
+	#[cfg(debug_assertions)]
+	pub fps_last_instant: std::time::Instant,
+	#[cfg(debug_assertions)]
+	pub fps_frame_count: u32,
+	#[cfg(debug_assertions)]
+	pub fps_value: u32,
 	pub follow_end: bool,
 	pub last_focus: Option<std::time::Instant>,
 	pub vim: crate::app::vim::VimState,
@@ -74,6 +80,12 @@ impl Default for UiState {
 			toaster: crate::app::features::toaster::Toaster::new(),
 			animation_start: Instant::now(),
 			animation_clock: Instant::now(),
+			#[cfg(debug_assertions)]
+			fps_last_instant: Instant::now(),
+			#[cfg(debug_assertions)]
+			fps_frame_count: 0,
+			#[cfg(debug_assertions)]
+			fps_value: 0,
 			follow_end: true,
 			last_focus: None,
 			vim: crate::app::vim::VimState::default(),

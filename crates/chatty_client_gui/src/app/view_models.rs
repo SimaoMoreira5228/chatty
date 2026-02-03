@@ -112,6 +112,8 @@ pub struct ChatMessageViewModel<'a> {
 	pub anim_elapsed: std::time::Duration,
 	pub emotes_map: Arc<HashMap<String, AssetRefUi>>,
 	pub badges_map: Arc<HashMap<String, AssetRefUi>>,
+	pub show_platform_badge: bool,
+	pub platform: chatty_domain::Platform,
 }
 
 #[derive(Debug, Clone)]
@@ -172,6 +174,7 @@ pub fn build_chat_pane_view_model<'a>(
 	for room in &rooms {
 		platforms.insert(room.platform);
 	}
+	let show_platform_badge = platforms.len() > 1;
 	for platform in platforms {
 		let has_identity = app.state.gui_settings().identities.iter().any(|id| id.platform == platform);
 		if !has_identity {
@@ -185,13 +188,20 @@ pub fn build_chat_pane_view_model<'a>(
 	}
 
 	let badges_map = app.assets.get_badges_for_target(&app.state, &tab_ref.target);
+	let mut emotes_map_by_room: HashMap<RoomKey, Arc<HashMap<String, AssetRefUi>>> = HashMap::new();
 	let anim_elapsed = app.state.ui.animation_clock.duration_since(app.state.ui.animation_start);
 	let start_index = tab_ref.log.items.len().saturating_sub(100);
 	for item in tab_ref.log.items.iter().skip(start_index) {
 		match item {
 			ChatItem::ChatMessage(m) => {
-				let room_target = TabTarget(vec![m.room.clone()]);
-				let emotes_map = app.assets.get_emotes_for_target(&app.state, &room_target);
+				let emotes_map = if let Some(existing) = emotes_map_by_room.get(&m.room) {
+					existing.clone()
+				} else {
+					let room_target = TabTarget(vec![m.room.clone()]);
+					let map = app.assets.get_emotes_for_target(&app.state, &room_target);
+					emotes_map_by_room.insert(m.room.clone(), map.clone());
+					map
+				};
 				let is_pending =
 					app.is_pending_delete(&m.room, m.server_message_id.as_deref(), m.platform_message_id.as_deref());
 				let model = ChatMessageViewModel {
@@ -202,6 +212,8 @@ pub fn build_chat_pane_view_model<'a>(
 					anim_elapsed,
 					emotes_map,
 					badges_map: badges_map.clone(),
+					show_platform_badge,
+					platform: m.platform,
 				};
 				log_items.push(ChatPaneLogItem::ChatMessage(Box::new(model)));
 			}

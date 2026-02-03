@@ -5,7 +5,7 @@ mod client;
 
 pub use adapter::{KickConfig, KickEventAdapter};
 use anyhow::anyhow;
-pub use client::{KickClient, KickEventSpec, KickEventSubscription, KickTokenIntrospection, KickUserInfo};
+pub use client::{KickClient, KickTokenIntrospection, KickUserInfo};
 
 pub struct KickValidatedToken {
 	pub token: KickTokenIntrospection,

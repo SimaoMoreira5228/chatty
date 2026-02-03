@@ -48,6 +48,25 @@ pub fn view(app: &Chatty, palette: theme::Palette) -> Element<'_, Message> {
 		notifs = notifs.push(text(format!("{:?}: {}", n.kind, n.message)).color(palette.text_dim));
 	}
 
+	let seventv_counts = app.state.asset_catalog.room_provider_asset_counts(3);
+	let mut seventv_rows = column![].spacing(4);
+	if seventv_counts.is_empty() {
+		seventv_rows = seventv_rows.push(text("(no room bundles)"));
+	} else {
+		for row in seventv_counts {
+			seventv_rows = seventv_rows.push(
+				text(format!(
+					"{}:{} → emotes: {}, badges: {}",
+					row.room.platform.as_str(),
+					row.room.room_id.as_str(),
+					row.emotes,
+					row.badges
+				))
+				.color(palette.text_dim),
+			);
+		}
+	}
+
 	scrollable(
 		column![
 			text(t!("settings.diagnostics")).color(palette.text),
@@ -67,6 +86,9 @@ pub fn view(app: &Chatty, palette: theme::Palette) -> Element<'_, Message> {
 			rule::horizontal(1),
 			text(t!("settings.recent_notifications")).color(palette.text_dim),
 			notifs,
+			rule::horizontal(1),
+			text("7TV room assets").color(palette.text_dim),
+			seventv_rows,
 		]
 		.spacing(12)
 		.padding(12),

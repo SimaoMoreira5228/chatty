@@ -11,6 +11,9 @@ pub enum NetCommand {
 	Disconnect {
 		reason: String,
 	},
+	EventsLoopEnded {
+		reason: String,
+	},
 	SubscribeRoomKey {
 		room: RoomKey,
 	},

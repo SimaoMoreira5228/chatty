@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime};
 use anyhow::Context;
 use chatty_domain::{Platform, RoomKey};
 use futures_util::{SinkExt, StreamExt};
+use tokio::sync::RwLock;
 use tokio::time::{Instant, sleep};
 use tokio_tungstenite::tungstenite::protocol::Message;
 use tracing::{debug, info, warn};
@@ -17,7 +18,8 @@ use url::Url;
 use super::helix::{HelixClient, HelixCreateSubscriptionResponse, HelixSubscriptionData, refresh_user_token};
 use super::{eventsub, notifications};
 use crate::assets::{
-	SevenTvPlatform, ensure_asset_cache_pruner, fetch_7tv_badges_bundle, fetch_7tv_bundle, fetch_7tv_channel_badges_bundle,
+	DispatchType, SevenTvCacheMode, SevenTvPlatform, SevenTvSubscription, ensure_asset_cache_pruner,
+	ensure_seventv_event_api, fetch_7tv_badges_bundle, fetch_7tv_bundle_with_sets, fetch_7tv_channel_badges_bundle,
 	fetch_bttv_badges_bundle, fetch_bttv_bundle, fetch_bttv_global_emotes_bundle, fetch_ffz_badges_bundle, fetch_ffz_bundle,
 	fetch_ffz_global_emotes_bundle, fetch_twitch_badges_bundle, fetch_twitch_channel_badges_bundle,
 	fetch_twitch_channel_emotes_bundle, fetch_twitch_global_emotes_bundle,
@@ -160,6 +162,7 @@ pub struct TwitchEventSubAdapter {
 	subscription_id_by_room_and_type: HashMap<(RoomKey, TwitchSubscriptionType), String>,
 	is_token_user_mod_by_room: HashMap<RoomKey, bool>,
 	last_mod_status_refresh_by_room: HashMap<RoomKey, Instant>,
+	seventv_subscriptions: Arc<RwLock<HashMap<RoomKey, Vec<SevenTvSubscription>>>>,
 	auth_expires_at: Option<SystemTime>,
 	last_auth_error_notice: Option<String>,
 	last_refresh_attempt: Option<Instant>,
@@ -233,6 +236,7 @@ impl TwitchEventSubAdapter {
 			subscription_id_by_room_and_type: HashMap::new(),
 			is_token_user_mod_by_room: HashMap::new(),
 			last_mod_status_refresh_by_room: HashMap::new(),
+			seventv_subscriptions: Arc::new(RwLock::new(HashMap::new())),
 			auth_expires_at: None,
 			last_auth_error_notice: None,
 			last_refresh_attempt: None,
@@ -394,7 +398,13 @@ impl TwitchEventSubAdapter {
 	}
 
 	fn is_helix_auth_error(err: &anyhow::Error) -> bool {
-		err.to_string().to_ascii_lowercase().contains("helix auth failed")
+		let err_str = err.to_string().to_ascii_lowercase();
+		err_str.contains("helix auth failed") && !Self::is_helix_missing_authorization(err)
+	}
+
+	fn is_helix_missing_authorization(err: &anyhow::Error) -> bool {
+		let err_str = err.to_string().to_ascii_lowercase();
+		err_str.contains("missing proper authorization")
 	}
 
 	fn categorize_helix_error(err: &anyhow::Error) -> HelixErrorCategory {
@@ -670,7 +680,18 @@ impl TwitchEventSubAdapter {
 				continue;
 			}
 
-			self.ensure_subscription_for_room_and_type(session_id, room, sub_type).await?;
+			if let Err(e) = self.ensure_subscription_for_room_and_type(session_id, room, sub_type).await {
+				if Self::is_helix_missing_authorization(&e) {
+					warn!(
+						error = ?e,
+						room = %room,
+						sub_type = ?sub_type,
+						"skipping twitch subscription; missing authorization for this event type"
+					);
+					continue;
+				}
+				return Err(e);
+			}
 		}
 
 		Ok(())
@@ -785,7 +806,6 @@ impl TwitchEventSubAdapter {
 							return Err(e);
 						}
 						HelixErrorCategory::Conflict => {
-							// Handle conflict by finding and reconciling existing subscriptions
 							let subs = helix
 								.list_all_eventsub_subscriptions_by_type(sub_type.as_helix_type())
 								.await
@@ -931,6 +951,7 @@ impl TwitchEventSubAdapter {
 					let broadcaster_id = self.resolve_broadcaster_id(&room).await.ok();
 					let client_id = self.cfg.client_id.clone();
 					let bearer_token = self.cfg.user_access_token.expose().to_string();
+					let seventv_subscriptions = self.seventv_subscriptions.clone();
 					tokio::spawn(async move {
 						if let Ok(bundle) = fetch_twitch_badges_bundle(&client_id, &bearer_token).await {
 							info!(%platform, room=%room_for_assets.room_id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
@@ -1072,8 +1093,9 @@ impl TwitchEventSubAdapter {
 							}
 
 							info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, "fetching 7tv emote set bundle");
-							match fetch_7tv_bundle(SevenTvPlatform::Twitch, &id).await {
-								Ok(bundle) => {
+							match fetch_7tv_bundle_with_sets(SevenTvPlatform::Twitch, &id, SevenTvCacheMode::UseCache).await
+							{
+								Ok((bundle, sets)) => {
 									info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
 									let mut ingest = IngestEvent::new(
 										Platform::Twitch,
@@ -1082,6 +1104,50 @@ impl TwitchEventSubAdapter {
 									);
 									ingest.trace.session_id = session_id.clone();
 									let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+
+									let set_ids = sets.set_ids();
+									if !set_ids.is_empty() {
+										let api = ensure_seventv_event_api();
+										let mut subscriptions = Vec::new();
+										for set_id in set_ids {
+											let (subscription, mut rx) =
+												api.subscribe(DispatchType::EmoteSetUpdate, set_id.clone());
+											subscriptions.push(subscription);
+											let events_tx_updates = events_tx_clone.clone();
+											let room_updates = room_for_assets.clone();
+											let session_updates = session_id.clone();
+											let platform_id = id.clone();
+											tokio::spawn(async move {
+												while rx.recv().await.is_some() {
+													match fetch_7tv_bundle_with_sets(
+														SevenTvPlatform::Twitch,
+														&platform_id,
+														SevenTvCacheMode::Refresh,
+													)
+													.await
+													{
+														Ok((bundle, _)) => {
+															info!(room=%room_updates.room_id, cache_key=%bundle.cache_key, "emitting updated 7tv emote set bundle");
+															let mut ingest = IngestEvent::new(
+																Platform::Twitch,
+																room_updates.room_id.clone(),
+																IngestPayload::AssetBundle(bundle),
+															);
+															ingest.trace.session_id = session_updates.clone();
+															let _ = events_tx_updates
+																.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+														}
+														Err(error) => {
+															info!(room=%room_updates.room_id, error=?error, "failed to refresh 7tv emote set bundle");
+														}
+													}
+												}
+											});
+										}
+
+										let mut guard = seventv_subscriptions.write().await;
+										guard.insert(room_for_assets.clone(), subscriptions);
+									}
 								}
 								Err(error) => {
 									info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, error=?error, "failed to fetch 7tv emote set bundle");
@@ -1125,6 +1191,10 @@ impl TwitchEventSubAdapter {
 						true,
 						format!("requested leave {}", Self::topic_for_room(&room)),
 					));
+				}
+
+				if let Some(subscriptions) = self.seventv_subscriptions.write().await.remove(&room) {
+					drop(subscriptions);
 				}
 
 				if let Err(e) = self.remove_subscription_for_room(&room).await {

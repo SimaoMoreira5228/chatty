@@ -115,14 +115,15 @@ pub fn view(app: &Chatty, palette: theme::Palette) -> Element<'_, Message> {
 		.push(rule::vertical(1))
 		.push(conn_button);
 
-	let left = row![
-		svg(svg_handle("logo.svg")).width(16).height(16),
-		text(t!("app.name")).color(palette.text_dim),
-		rule::vertical(1),
-		insert_chip,
-	]
-	.spacing(10)
-	.align_y(Alignment::Center);
+	let mut left = row![].spacing(10).align_y(Alignment::Center);
+	if cfg!(debug_assertions) {
+		left = left.push(text(format!("{} fps", app.state.ui.fps_value)).color(palette.text_dim));
+	}
+	left = left
+		.push(svg(svg_handle("logo.svg")).width(16).height(16))
+		.push(text(t!("app.name")).color(palette.text_dim))
+		.push(rule::vertical(1))
+		.push(insert_chip);
 
 	container(row![left, space::horizontal(), right].spacing(10).align_y(Alignment::Center))
 		.width(Length::Fill)

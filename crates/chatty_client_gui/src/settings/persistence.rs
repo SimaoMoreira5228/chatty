@@ -179,7 +179,24 @@ pub fn build_client_config(settings: &GuiSettings) -> Result<ClientConfigV1, Str
 
 	let mut twitch_identity = None;
 	let mut kick_identity = None;
+	if let Some(active_id) = settings.active_identity.as_deref()
+		&& let Some(active) = settings
+			.identities
+			.iter()
+			.find(|identity| identity.enabled && !identity.oauth_token.trim().is_empty() && identity.id == active_id)
+	{
+		match active.platform {
+			Platform::Twitch => twitch_identity = Some(active),
+			Platform::Kick => kick_identity = Some(active),
+			_ => {}
+		}
+	}
+
 	for identity in settings.identities.iter().rev() {
+		if !identity.enabled || identity.oauth_token.trim().is_empty() {
+			continue;
+		}
+
 		match identity.platform {
 			Platform::Twitch => {
 				if twitch_identity.is_none() {

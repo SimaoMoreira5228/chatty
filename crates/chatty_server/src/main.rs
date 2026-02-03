@@ -277,23 +277,14 @@ async fn main() -> anyhow::Result<()> {
 		if let Some(base_url) = server_cfg.kick.base_url.clone() {
 			kick_cfg.base_url = base_url;
 		}
-		if let Some(token) = server_cfg.kick.system_access_token.clone() {
-			kick_cfg.system_access_token = Some(token);
+		if let Some(ws_url) = server_cfg.kick.pusher_ws_url.clone() {
+			kick_cfg.pusher_ws_url = ws_url;
 		}
-		if let Some(path) = server_cfg.kick.webhook_path.clone() {
-			kick_cfg.webhook_path = path;
+		if let Some(min) = server_cfg.kick.reconnect_min_delay {
+			kick_cfg.reconnect_min_delay = min;
 		}
-		if let Some(path) = server_cfg.kick.webhook_public_key_path.clone() {
-			kick_cfg.webhook_public_key_path = Some(std::path::PathBuf::from(path));
-		}
-		if let Some(verify) = server_cfg.kick.webhook_verify_signatures {
-			kick_cfg.webhook_verify_signatures = verify;
-		}
-		if let Some(bind) = server_cfg.kick.webhook_bind.clone() {
-			match bind.parse::<std::net::SocketAddr>() {
-				Ok(addr) => kick_cfg.webhook_bind = Some(addr),
-				Err(e) => warn!(error = %e, bind = %bind, "kick webhook bind is invalid"),
-			}
+		if let Some(max) = server_cfg.kick.reconnect_max_delay {
+			kick_cfg.reconnect_max_delay = max;
 		}
 		if !server_cfg.kick.broadcaster_id_overrides.is_empty() {
 			kick_cfg.broadcaster_id_overrides = server_cfg

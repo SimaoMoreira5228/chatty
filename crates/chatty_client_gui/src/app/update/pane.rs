@@ -86,7 +86,7 @@ impl Chatty {
 	}
 
 	pub fn update_pane_send_pressed(&mut self, pane: pane_grid::Pane) -> Task<Message> {
-		let rooms = self.pane_rooms(pane);
+		let rooms = self.selected_tab().map(|t| t.target.0.clone()).unwrap_or_default();
 		if rooms.is_empty() {
 			return self.toast(t!("no_active_room").to_string());
 		}

@@ -31,18 +31,28 @@ impl KickClient {
 		Ok(format!("Bearer {}", self.access_token.trim()))
 	}
 
+	fn auth_header_optional(&self) -> Option<String> {
+		let token = self.access_token.trim();
+		if token.is_empty() {
+			None
+		} else {
+			Some(format!("Bearer {}", token))
+		}
+	}
+
 	pub async fn send_chat_message(
 		&self,
-		broadcaster_user_id: u64,
+		chatroom_id: u64,
 		content: &str,
+		message_ref: &str,
 		reply_to_message_id: Option<&str>,
 	) -> anyhow::Result<()> {
-		let url = format!("{}/public/v1/chat", self.base_url.trim_end_matches('/'));
+		let url = format!("https://kick.com/api/v2/messages/send/{}", chatroom_id);
 		let body = KickSendChatRequest {
-			broadcaster_user_id,
 			content: content.to_string(),
+			message_ref: message_ref.to_string(),
 			reply_to_message_id: reply_to_message_id.map(|v| v.to_string()),
-			type_field: "user".to_string(),
+			type_field: "message".to_string(),
 		};
 
 		let resp = self
@@ -112,19 +122,24 @@ impl KickClient {
 			urlencoding::encode(slug)
 		);
 
-		let resp = self
-			.client
-			.get(url)
-			.header("Authorization", self.auth_header()?)
-			.send()
-			.await
-			.context("kick get channels")?;
+		let mut request = self.client.get(url.clone());
+		let mut used_auth = false;
+		if let Some(auth) = self.auth_header_optional() {
+			request = request.header("Authorization", auth);
+			used_auth = true;
+		}
+
+		let mut resp = request.send().await.context("kick get channels")?;
+		if used_auth && matches!(resp.status(), StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
+			resp = self.client.get(url).send().await.context("kick get channels (unauth)")?;
+		}
 
 		if resp.status() == StatusCode::NOT_FOUND {
 			return Ok(None);
 		}
+
 		if !resp.status().is_success() {
-			return Err(anyhow!("kick get channels failed: status={}", resp.status()));
+			return self.resolve_broadcaster_id_v2(slug).await;
 		}
 
 		let body: KickChannelsResponse = resp.json().await.context("parse kick channels response")?;
@@ -133,60 +148,55 @@ impl KickClient {
 			.into_iter()
 			.find(|c| c.slug.eq_ignore_ascii_case(slug))
 			.map(|c| c.broadcaster_user_id);
-		Ok(found)
-	}
-
-	pub async fn list_event_subscriptions(
-		&self,
-		broadcaster_user_id: Option<u64>,
-	) -> anyhow::Result<Vec<KickEventSubscription>> {
-		let mut url = format!("{}/public/v1/events/subscriptions", self.base_url.trim_end_matches('/'));
-		if let Some(id) = broadcaster_user_id {
-			url.push_str(&format!("?broadcaster_user_id={}", id));
+		if found.is_some() {
+			return Ok(found);
 		}
 
+		self.resolve_broadcaster_id_v2(slug).await
+	}
+
+	pub async fn resolve_chatroom_id(&self, slug: &str) -> anyhow::Result<Option<u64>> {
+		let url = format!("https://kick.com/api/v2/channels/{}/chatroom", urlencoding::encode(slug));
 		let resp = self
 			.client
 			.get(url)
-			.header("Authorization", self.auth_header()?)
+			.header("Accept", "application/json")
+			.header("User-Agent", "chatty-server/0.1")
 			.send()
 			.await
-			.context("kick list event subscriptions")?;
+			.context("kick get chatroom")?;
 
+		if resp.status() == StatusCode::NOT_FOUND {
+			return Ok(None);
+		}
 		if !resp.status().is_success() {
-			return Err(anyhow!("kick list event subscriptions failed: status={}", resp.status()));
+			return Err(anyhow!("kick get chatroom failed: status={}", resp.status()));
 		}
 
-		let body: KickEventsSubscriptionList = resp.json().await.context("parse kick subscriptions list")?;
-		Ok(body.data.unwrap_or_default())
+		let body: KickChatroomResponse = resp.json().await.context("parse kick chatroom response")?;
+		Ok(Some(body.id))
 	}
 
-	pub async fn create_event_subscriptions(
-		&self,
-		broadcaster_user_id: Option<u64>,
-		events: Vec<KickEventSpec>,
-	) -> anyhow::Result<Vec<KickEventSubscription>> {
-		let url = format!("{}/public/v1/events/subscriptions", self.base_url.trim_end_matches('/'));
-		let body = KickEventsSubscriptionCreate {
-			broadcaster_user_id,
-			events,
-			method: "webhook".to_string(),
-		};
+	async fn resolve_broadcaster_id_v2(&self, slug: &str) -> anyhow::Result<Option<u64>> {
+		let url = format!("https://kick.com/api/v2/channels/{}", urlencoding::encode(slug));
 		let resp = self
 			.client
-			.post(url)
-			.header("Authorization", self.auth_header()?)
-			.json(&body)
+			.get(url)
+			.header("Accept", "application/json")
+			.header("User-Agent", "chatty-server/0.1")
 			.send()
 			.await
-			.context("kick create event subscriptions")?;
+			.context("kick get channels (v2)")?;
 
+		if resp.status() == StatusCode::NOT_FOUND {
+			return Ok(None);
+		}
 		if !resp.status().is_success() {
-			return Err(anyhow!("kick create event subscriptions failed: status={}", resp.status()));
+			return Err(anyhow!("kick get channels failed: status={}", resp.status()));
 		}
 
-		let body: KickEventsSubscriptionCreateResponse = resp.json().await.context("parse kick subscriptions create")?;
-		Ok(body.data.unwrap_or_default())
+		let body: KickChannelV2Response = resp.json().await.context("parse kick channels response (v2)")?;
+		Ok(Some(body.user_id.unwrap_or(body.id)))
 	}
 
 	pub async fn introspect_token(&self, token: &str) -> anyhow::Result<KickTokenIntrospection> {
@@ -205,18 +215,6 @@ impl KickClient {
 
 		let body: KickTokenIntrospectionResponse = resp.json().await.context("parse kick token introspect")?;
 		Ok(body.data)
-	}
-
-	pub async fn fetch_public_key(&self) -> anyhow::Result<String> {
-		let url = format!("{}/public/v1/public-key", self.base_url.trim_end_matches('/'));
-		let resp = self.client.get(url).send().await.context("kick public key")?;
-
-		if !resp.status().is_success() {
-			return Err(anyhow!("kick public key failed: status={}", resp.status()));
-		}
-
-		let body: KickPublicKeyResponse = resp.json().await.context("parse kick public key")?;
-		Ok(body.data.public_key)
 	}
 
 	pub async fn get_current_user(&self, token: &str) -> anyhow::Result<Option<KickUserInfo>> {
@@ -238,25 +236,10 @@ impl KickClient {
 	}
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct KickEventSpec {
-	pub name: String,
-	pub version: u32,
-}
-
-impl KickEventSpec {
-	pub fn new(name: impl Into<String>, version: u32) -> Self {
-		Self {
-			name: name.into(),
-			version,
-		}
-	}
-}
-
 #[derive(Debug, serde::Serialize)]
 struct KickSendChatRequest {
-	broadcaster_user_id: u64,
 	content: String,
+	message_ref: String,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	reply_to_message_id: Option<String>,
 	#[serde(rename = "type")]
@@ -285,28 +268,10 @@ struct KickChannelData {
 }
 
 #[derive(Debug, Deserialize)]
-struct KickEventsSubscriptionList {
-	data: Option<Vec<KickEventSubscription>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct KickEventsSubscriptionCreateResponse {
-	data: Option<Vec<KickEventSubscription>>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct KickEventSubscription {
-	pub id: Option<String>,
-	pub event: String,
-	pub version: u32,
-}
-
-#[derive(Debug, serde::Serialize)]
-struct KickEventsSubscriptionCreate {
-	#[serde(skip_serializing_if = "Option::is_none")]
-	broadcaster_user_id: Option<u64>,
-	events: Vec<KickEventSpec>,
-	method: String,
+struct KickChannelV2Response {
+	id: u64,
+	#[serde(default)]
+	user_id: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -324,13 +289,8 @@ pub struct KickTokenIntrospection {
 }
 
 #[derive(Debug, Deserialize)]
-struct KickPublicKeyResponse {
-	data: KickPublicKeyData,
-}
-
-#[derive(Debug, Deserialize)]
-struct KickPublicKeyData {
-	public_key: String,
+struct KickChatroomResponse {
+	id: u64,
 }
 
 #[derive(Debug, Deserialize)]

@@ -287,7 +287,6 @@ impl Chatty {
 				emotes,
 			} => {
 				if let Ok(room) = RoomTopic::parse(&topic) {
-					let _tid = self.ensure_tab_for_rooms(vec![room.clone()]);
 					let tokens = tokenize_message_text(&text);
 					let time = SystemTime::now();
 					let display_name = author_display.clone().unwrap_or_else(|| author_login.clone());
@@ -398,6 +397,9 @@ impl Chatty {
 			};
 
 			let room = chatty_domain::RoomTopic::parse(&topic).ok();
+			if room.is_none() && scope == chatty_protocol::pb::AssetScope::Channel as i32 {
+				tracing::warn!(topic = %topic, cache_key = %ck, provider, scope, "asset bundle topic failed room parse");
+			}
 			let is_new = self.state.asset_catalog.register_bundle(bundle.clone(), scope, room);
 
 			if is_new {

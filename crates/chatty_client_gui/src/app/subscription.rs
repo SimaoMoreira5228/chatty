@@ -44,7 +44,7 @@ impl Chatty {
 			_ => None,
 		});
 
-		let anim = iced::time::every(Duration::from_millis(50)).map(Message::AnimationTick);
+		let anim = iced::time::every(Duration::from_millis(16)).map(Message::AnimationTick);
 		Subscription::batch(vec![input, anim])
 	}
 }

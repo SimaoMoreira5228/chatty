@@ -62,61 +62,6 @@ pub fn view(app: &Chatty, palette: theme::Palette) -> Element<'_, Message> {
 
 	let panes = crate::ui::tab_view::view(app, selected_tab, palette);
 
-	let tab_items = vm.tab_bar.items;
-	let tab_bar = row(tab_items.into_iter().map(|item| {
-		let tab_color = if item.is_selected { palette.text } else { palette.text_dim };
-		let bg = if item.is_selected {
-			palette.panel_bg_2
-		} else {
-			palette.chat_bg
-		};
-
-		let title = item.title;
-		let mut c = row![text(title).color(tab_color)].align_y(Alignment::Center).spacing(8);
-
-		if !item.pinned {
-			let icon_style = move |_theme: &iced::Theme, _status| svg::Style {
-				color: Some(palette.text),
-			};
-
-			c = c
-				.push(
-					button(svg(svg_handle("close.svg")).width(12).height(12).style(icon_style))
-						.on_press(Message::CloseTabPressed(item.id)),
-				)
-				.push(
-					button(svg(svg_handle("open-in-new.svg")).width(12).height(12).style(icon_style))
-						.on_press(Message::PopTab(item.id)),
-				);
-		}
-
-		button(c)
-			.on_press(Message::TabSelected(item.id))
-			.padding([6, 12])
-			.style(move |_theme, _status| button::Style {
-				background: Some(Background::Color(bg)),
-				text_color: tab_color,
-				border: Border {
-					color: if item.is_selected {
-						palette.accent_blue
-					} else {
-						palette.border
-					},
-					width: 1.0,
-					radius: iced::border::Radius {
-						top_left: 4.0,
-						top_right: 4.0,
-						bottom_right: 0.0,
-						bottom_left: 0.0,
-					},
-				},
-				..Default::default()
-			})
-			.into()
-	}))
-	.spacing(4)
-	.align_y(Alignment::End);
-
 	let add_tab_btn = button(
 		svg(svg_handle("plus.svg"))
 			.width(16)
@@ -128,9 +73,66 @@ pub fn view(app: &Chatty, palette: theme::Palette) -> Element<'_, Message> {
 	.on_press(Message::AddTabPressed)
 	.padding(8);
 
-	let top_bar = row![tab_bar, add_tab_btn].spacing(8).align_y(Alignment::Center);
+	let tab_items = vm.tab_bar.items;
+	let mut tab_widgets: Vec<Element<'_, Message>> = tab_items
+		.into_iter()
+		.map(|item| {
+			let tab_color = if item.is_selected { palette.text } else { palette.text_dim };
+			let bg = if item.is_selected {
+				palette.panel_bg_2
+			} else {
+				palette.chat_bg
+			};
 
-	column![top_bar, panes]
+			let title = item.title;
+			let mut c = row![text(title).color(tab_color)].align_y(Alignment::Center).spacing(8);
+
+			if !item.pinned {
+				let icon_style = move |_theme: &iced::Theme, _status| svg::Style {
+					color: Some(palette.text),
+				};
+
+				c = c
+					.push(
+						button(svg(svg_handle("close.svg")).width(12).height(12).style(icon_style))
+							.on_press(Message::CloseTabPressed(item.id)),
+					)
+					.push(
+						button(svg(svg_handle("open-in-new.svg")).width(12).height(12).style(icon_style))
+							.on_press(Message::PopTab(item.id)),
+					);
+			}
+
+			button(c)
+				.on_press(Message::TabSelected(item.id))
+				.padding([6, 12])
+				.style(move |_theme, _status| button::Style {
+					background: Some(Background::Color(bg)),
+					text_color: tab_color,
+					border: Border {
+						color: if item.is_selected {
+							palette.accent_blue
+						} else {
+							palette.border
+						},
+						width: 1.0,
+						radius: iced::border::Radius {
+							top_left: 4.0,
+							top_right: 4.0,
+							bottom_right: 0.0,
+							bottom_left: 0.0,
+						},
+					},
+					..Default::default()
+				})
+				.into()
+		})
+		.collect();
+	tab_widgets.push(add_tab_btn.into());
+
+	let tab_bar = row(tab_widgets).spacing(4).align_y(Alignment::End).wrap().vertical_spacing(4);
+
+	column![tab_bar, panes]
 		.width(Length::Fill)
 		.height(Length::Fill)
 		.padding(8)

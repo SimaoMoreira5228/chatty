@@ -177,7 +177,7 @@ impl Chatty {
 					let Some(focused) = focused else {
 						return Task::none();
 					};
-					let rooms = self.pane_rooms(focused);
+					let rooms = self.selected_tab().map(|t| t.target.0.clone()).unwrap_or_default();
 					let insert_target = self.state.ui.vim.insert_target;
 
 					if let Some(tab) = self.selected_tab_mut()

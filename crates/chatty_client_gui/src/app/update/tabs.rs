@@ -25,14 +25,32 @@ impl Chatty {
 	}
 
 	pub fn update_close_tab_pressed(&mut self, id: crate::app::features::tabs::TabId) -> Task<Message> {
-		self.state.tabs.remove(&id);
+		let tab = self.state.tabs.remove(&id);
 		self.state.tab_order.retain(|&tid| tid != id);
 
 		if self.state.selected_tab_id == Some(id) {
 			self.state.selected_tab_id = self.state.tab_order.first().copied();
 		}
+		self.save_ui_layout();
 
-		Task::none()
+		let mut tasks = Vec::new();
+		if let Some(tab) = tab {
+			let net = self.net_effects.clone();
+			for room in tab.target.0 {
+				let still_used = self.state.tabs.values().any(|t| t.target.0.contains(&room));
+				if still_used {
+					continue;
+				}
+				let net_clone = net.clone();
+				let task = Task::perform(
+					async move { (room.clone(), net_clone.unsubscribe_room_key(room.clone()).await) },
+					|(room, res)| Message::TabUnsubscribed(room, res),
+				);
+				tasks.push(task);
+			}
+		}
+
+		if tasks.is_empty() { Task::none() } else { Task::batch(tasks) }
 	}
 
 	pub fn update_pop_tab(&mut self, id: crate::app::features::tabs::TabId) -> Task<Message> {

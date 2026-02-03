@@ -55,6 +55,13 @@ pub struct AssetCatalog {
 	room_keys: HashMap<chatty_domain::RoomKey, Vec<String>>,
 }
 
+#[derive(Debug, Clone)]
+pub struct RoomProviderAssetCounts {
+	pub room: chatty_domain::RoomKey,
+	pub emotes: usize,
+	pub badges: usize,
+}
+
 impl AssetManager {
 	pub fn new(image_fetch_sender: mpsc::Sender<String>) -> Self {
 		Self {
@@ -126,6 +133,23 @@ impl AssetCatalog {
 		Self::default()
 	}
 
+	fn lookup_room_keys(&self, room: &chatty_domain::RoomKey) -> Option<&Vec<String>> {
+		if let Some(keys) = self.room_keys.get(room) {
+			return Some(keys);
+		}
+
+		let lower = room.room_id.as_str().to_ascii_lowercase();
+		if lower == room.room_id.as_str() {
+			return None;
+		}
+
+		let Ok(room_id) = chatty_domain::RoomId::new(lower) else {
+			return None;
+		};
+		let normalized = chatty_domain::RoomKey::new(room.platform, room_id);
+		self.room_keys.get(&normalized)
+	}
+
 	pub fn register_bundle(&mut self, bundle: AssetBundleUi, scope: i32, room: Option<chatty_domain::RoomKey>) -> bool {
 		let ck = bundle.cache_key.clone();
 		let is_new = !self.bundles.contains_key(&ck);
@@ -170,7 +194,7 @@ impl AssetCatalog {
 		}
 
 		for room in &target.0 {
-			if let Some(keys) = self.room_keys.get(room) {
+			if let Some(keys) = self.lookup_room_keys(room) {
 				for ck in keys {
 					if let Some(bundle) = self.bundles.get(ck) {
 						for emote in &bundle.emotes {
@@ -196,7 +220,7 @@ impl AssetCatalog {
 		}
 
 		for room in &target.0 {
-			if let Some(keys) = self.room_keys.get(room) {
+			if let Some(keys) = self.lookup_room_keys(room) {
 				for ck in keys {
 					if let Some(bundle) = self.bundles.get(ck) {
 						for badge in &bundle.badges {
@@ -208,6 +232,37 @@ impl AssetCatalog {
 		}
 
 		Arc::new(map)
+	}
+
+	pub fn room_provider_asset_counts(&self, provider: i32) -> Vec<RoomProviderAssetCounts> {
+		let mut rows = Vec::new();
+		for (room, keys) in &self.room_keys {
+			let mut emotes = 0usize;
+			let mut badges = 0usize;
+			for ck in keys {
+				if let Some(bundle) = self.bundles.get(ck)
+					&& bundle.provider == provider
+				{
+					emotes += bundle.emotes.len();
+					badges += bundle.badges.len();
+				}
+			}
+			rows.push(RoomProviderAssetCounts {
+				room: room.clone(),
+				emotes,
+				badges,
+			});
+		}
+
+		rows.sort_by(|a, b| {
+			a.room
+				.platform
+				.as_str()
+				.cmp(b.room.platform.as_str())
+				.then_with(|| a.room.room_id.as_str().cmp(b.room.room_id.as_str()))
+		});
+
+		rows
 	}
 }
 
