@@ -247,8 +247,8 @@ message ChatMessageEvent {
   // Platform-native id when available.
   string platform_message_id = 4;
 
-  // Optional reference to a message being replied to.
-  ReplyRef reply = 5;
+  // Optional reply preview for a message.
+  Reply reply = 5;
 }
 
 message Origin {
@@ -280,10 +280,18 @@ message ChatMessage {
   repeated AssetRef emotes = 7;
 }
 
-message ReplyRef {
+message Reply {
   // Server or platform id of the referenced message.
   string server_message_id = 1;
   string platform_message_id = 2;
+
+  // Author of the referenced message.
+  string user_id = 3;
+  string user_login = 4;
+  string user_display = 5;
+
+  // Referenced message body (plain text).
+  string message = 6;
 }
 
 enum AssetProvider {

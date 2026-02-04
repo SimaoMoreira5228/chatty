@@ -1,4 +1,4 @@
-use crate::app::view_models::AssetRefUi;
+use crate::app::view_models::{AssetRefUi, ChatReplyUi};
 
 /// UI-level events emitted by the networking layer.
 #[derive(Debug, Clone)]
@@ -29,6 +29,7 @@ pub enum UiEvent {
 		platform_message_id: Option<String>,
 		badge_ids: Vec<String>,
 		emotes: Vec<AssetRefUi>,
+		reply: Option<ChatReplyUi>,
 	},
 	RoomPermissions {
 		topic: String,

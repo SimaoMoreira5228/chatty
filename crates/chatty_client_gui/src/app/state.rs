@@ -373,6 +373,7 @@ mod tests {
 			badge_ids: Vec::new(),
 			emotes: Vec::new(),
 			platform_message_id: None,
+			reply: None,
 		}
 	}
 

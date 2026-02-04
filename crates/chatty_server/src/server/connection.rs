@@ -849,7 +849,14 @@ pub async fn handle_connection(
 							message: Some(message),
 							server_message_id: m.ids.server_id.to_string(),
 							platform_message_id: m.ids.platform_id.unwrap_or_default(),
-							reply: None,
+							reply: m.reply.map(|reply| pb::Reply {
+								server_message_id: reply.server_message_id.unwrap_or_default(),
+								platform_message_id: reply.platform_message_id.unwrap_or_default(),
+								user_id: reply.user_id.unwrap_or_default(),
+								user_login: reply.user_login,
+								user_display: reply.user_display.unwrap_or_default(),
+								message: reply.message,
+							}),
 						};
 
 						let env = pb::EventEnvelope {

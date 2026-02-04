@@ -31,6 +31,18 @@ pub struct ChatMessageUi {
 	pub badge_ids: Vec<String>,
 	pub emotes: Vec<AssetRefUi>,
 	pub platform_message_id: Option<String>,
+	pub reply: Option<ChatReplyUi>,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct ChatReplyUi {
+	pub server_message_id: Option<String>,
+	pub platform_message_id: Option<String>,
+	pub user_id: Option<String>,
+	pub user_login: String,
+	pub user_display: Option<String>,
+	pub message: String,
 }
 
 #[derive(Debug, Clone)]
@@ -114,6 +126,14 @@ pub struct ChatMessageViewModel<'a> {
 	pub badges_map: Arc<HashMap<String, AssetRefUi>>,
 	pub show_platform_badge: bool,
 	pub platform: chatty_domain::Platform,
+	pub reply: Option<ReplyPreviewUi>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReplyPreviewUi {
+	pub display_name: String,
+	pub message: String,
+	pub is_own: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -190,6 +210,72 @@ pub fn build_chat_pane_view_model<'a>(
 	let badges_map = app.assets.get_badges_for_target(&app.state, &tab_ref.target);
 	let mut emotes_map_by_room: HashMap<RoomKey, Arc<HashMap<String, AssetRefUi>>> = HashMap::new();
 	let anim_elapsed = app.state.ui.animation_clock.duration_since(app.state.ui.animation_start);
+	let reply_preview_for = |msg: &ChatMessageUi| -> Option<ReplyPreviewUi> {
+		let reply = msg.reply.as_ref()?;
+		let mut display_name = reply
+			.user_display
+			.clone()
+			.filter(|v| !v.trim().is_empty())
+			.unwrap_or_else(|| reply.user_login.clone());
+		let mut message = reply.message.clone();
+
+		if display_name.trim().is_empty() || message.trim().is_empty() {
+			let found = tab_ref.log.items.iter().rev().find_map(|item| match item {
+				ChatItem::ChatMessage(m) => {
+					let server_match = reply
+						.server_message_id
+						.as_deref()
+						.and_then(|id| m.server_message_id.as_deref().map(|sid| sid == id))
+						.unwrap_or(false);
+					let platform_match = reply
+						.platform_message_id
+						.as_deref()
+						.and_then(|id| m.platform_message_id.as_deref().map(|pid| pid == id))
+						.unwrap_or(false);
+					if server_match || platform_match { Some(m) } else { None }
+				}
+				_ => None,
+			});
+
+			if let Some(found) = found {
+				if display_name.trim().is_empty() {
+					display_name = found.display_name.clone();
+				}
+				if message.trim().is_empty() {
+					message = found.text.clone();
+				}
+			}
+		}
+
+		if display_name.trim().is_empty() {
+			display_name = "unknown".to_string();
+		}
+
+		if message.trim().is_empty() {
+			message = "message unavailable".to_string();
+		}
+
+		let is_own = app.state.gui_settings().identities.iter().any(|id| {
+			if !id.enabled || id.platform != msg.platform {
+				return false;
+			}
+
+			if let Some(reply_user_id) = reply.user_id.as_deref()
+				&& !reply_user_id.is_empty()
+			{
+				return id.user_id == reply_user_id;
+			}
+
+			!reply.user_login.is_empty() && id.username.eq_ignore_ascii_case(reply.user_login.as_str())
+		});
+
+		Some(ReplyPreviewUi {
+			display_name,
+			message,
+			is_own,
+		})
+	};
+
 	let start_index = tab_ref.log.items.len().saturating_sub(100);
 	for item in tab_ref.log.items.iter().skip(start_index) {
 		match item {
@@ -214,6 +300,7 @@ pub fn build_chat_pane_view_model<'a>(
 					badges_map: badges_map.clone(),
 					show_platform_badge,
 					platform: m.platform,
+					reply: reply_preview_for(m.as_ref()),
 				};
 				log_items.push(ChatPaneLogItem::ChatMessage(Box::new(model)));
 			}

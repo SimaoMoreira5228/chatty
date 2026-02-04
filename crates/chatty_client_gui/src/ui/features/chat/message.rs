@@ -150,14 +150,57 @@ impl<'a> ChatMessageView<'a> {
 			msg_row = msg_row.push(svg(svg_handle("spinner.svg")).width(14).height(14));
 		}
 
-		mouse_area(msg_row)
+		let message_row: Element<'_, Message> = mouse_area(msg_row)
 			.on_right_press(Message::Chat(crate::app::message::ChatMessage::MessageActionButtonPressed(
 				m.room.clone(),
 				m.server_message_id.clone(),
 				m.platform_message_id.clone(),
 				m.author_id.clone(),
 			)))
-			.into()
+			.into();
+
+		if let Some(reply) = &self.model.reply {
+			column![self.render_reply(reply), message_row].spacing(2).into()
+		} else {
+			message_row
+		}
+	}
+
+	fn render_reply(&self, reply: &crate::app::view_models::ReplyPreviewUi) -> Element<'a, Message> {
+		let palette = self.model.palette;
+		let mut reply_row = row![].spacing(4).align_y(Alignment::Center);
+
+		reply_row = reply_row.push(text("replying to ").size(12).color(palette.text_dim));
+
+		let name_text = text(format!("@{}", reply.display_name)).size(12).color(if reply.is_own {
+			palette.text
+		} else {
+			palette.text_dim
+		});
+
+		let name_el: Element<'_, Message> = if reply.is_own {
+			container(name_text)
+				.padding([1, 4])
+				.style(move |_theme| container::Style {
+					text_color: Some(palette.text),
+					background: Some(Background::Color(palette.accent_blue)),
+					border: Border {
+						color: palette.border,
+						width: 1.0,
+						radius: 4.0.into(),
+					},
+					shadow: Shadow::default(),
+					snap: false,
+				})
+				.into()
+		} else {
+			name_text.color(palette.text_dim).into()
+		};
+
+		reply_row = reply_row.push(name_el);
+		reply_row = reply_row.push(text(format!(": {}", reply.message)).size(12).color(palette.text_dim));
+
+		reply_row.into()
 	}
 
 	fn render_image(&self, url: &str, width: u32, height: u32, alt_text: Option<&str>) -> Element<'a, Message> {

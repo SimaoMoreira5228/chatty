@@ -285,6 +285,7 @@ impl Chatty {
 				platform_message_id,
 				badge_ids,
 				emotes,
+				reply,
 			} => {
 				if let Ok(room) = RoomTopic::parse(&topic) {
 					let tokens = tokenize_message_text(&text);
@@ -306,6 +307,7 @@ impl Chatty {
 						badge_ids,
 						emotes,
 						platform_message_id,
+						reply,
 					};
 					Some(self.update_chat_message_prepared(msg))
 				} else {

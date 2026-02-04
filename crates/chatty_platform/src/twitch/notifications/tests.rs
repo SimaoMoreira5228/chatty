@@ -59,6 +59,7 @@ fn mod_gating_allows_non_moderation_payloads_even_when_not_mod() {
 			display: Some("u".to_string()),
 		},
 		text: "hi".to_string(),
+		reply: None,
 		badges: Vec::new(),
 		emotes: Vec::new(),
 	});

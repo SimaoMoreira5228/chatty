@@ -356,11 +356,25 @@ pub struct ChatMessage {
 
 	pub text: String,
 
+	/// Reply preview when available.
+	pub reply: Option<ChatReply>,
+
 	/// Provider-specific badge ids attached to the author.
 	pub badges: Vec<String>,
 
 	/// Provider-specific emotes present in the message.
 	pub emotes: Vec<AssetRef>,
+}
+
+/// Reply preview metadata (platform-provided).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatReply {
+	pub server_message_id: Option<String>,
+	pub platform_message_id: Option<String>,
+	pub user_id: Option<String>,
+	pub user_login: String,
+	pub user_display: Option<String>,
+	pub message: String,
 }
 
 impl ChatMessage {
@@ -372,6 +386,7 @@ impl ChatMessage {
 			},
 			author,
 			text: text.into(),
+			reply: None,
 			badges: Vec::new(),
 			emotes: Vec::new(),
 		}

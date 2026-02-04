@@ -139,7 +139,23 @@ pub(crate) struct ChannelChatMessageEvent {
 	pub(crate) message_id: String,
 	pub(crate) message: ChannelChatMessageContent,
 	#[serde(default)]
+	pub(crate) reply: Option<ChannelChatMessageReply>,
+	#[serde(default)]
 	pub(crate) badges: Vec<TwitchChatBadge>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ChannelChatMessageReply {
+	#[serde(default)]
+	pub(crate) parent_message_id: String,
+	#[serde(default)]
+	pub(crate) parent_message_body: String,
+	#[serde(default)]
+	pub(crate) parent_user_id: String,
+	#[serde(default)]
+	pub(crate) parent_user_login: String,
+	#[serde(default)]
+	pub(crate) parent_user_name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -375,8 +391,18 @@ pub(crate) struct NormalizedChatNotification {
 	pub(crate) chatter_user_name: String,
 
 	pub(crate) text: String,
+	pub(crate) reply: Option<NormalizedChatReply>,
 	pub(crate) badge_ids: Vec<String>,
 	pub(crate) emotes: Vec<crate::AssetRef>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct NormalizedChatReply {
+	pub(crate) parent_message_id: String,
+	pub(crate) parent_message_body: String,
+	pub(crate) parent_user_id: String,
+	pub(crate) parent_user_login: String,
+	pub(crate) parent_user_name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -518,6 +544,18 @@ pub(crate) fn try_normalize_channel_chat_message(raw_json: &str) -> anyhow::Resu
 		chatter_user_name: msg.payload.event.chatter_user_name,
 
 		text: msg.payload.event.message.text,
+		reply: msg.payload.event.reply.and_then(|reply| {
+			if reply.parent_message_id.trim().is_empty() {
+				return None;
+			}
+			Some(NormalizedChatReply {
+				parent_message_id: reply.parent_message_id,
+				parent_message_body: reply.parent_message_body,
+				parent_user_id: reply.parent_user_id,
+				parent_user_login: reply.parent_user_login,
+				parent_user_name: reply.parent_user_name,
+			})
+		}),
 		badge_ids: msg
 			.payload
 			.event
