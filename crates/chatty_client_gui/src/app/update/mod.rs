@@ -1,5 +1,6 @@
-use iced::Task;
 use std::time::Duration;
+
+use iced::Task;
 
 use crate::app::message::Message;
 use crate::app::model::Chatty;

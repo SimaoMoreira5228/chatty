@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use chatty_domain::RoomKey;
@@ -18,10 +18,13 @@ pub async fn reconcile_subscriptions_on_connect(
 	session: &mut BoxedSessionControl,
 	topics_refcounts: &HashMap<String, usize>,
 	cursor_by_topic: &Arc<Mutex<HashMap<String, u64>>>,
+	lagged_topics: &Arc<Mutex<HashSet<String>>>,
 	ui_tx: &mpsc::UnboundedSender<UiEvent>,
 	cmd_tx: &mpsc::Sender<NetCommand>,
 	events_task: &mut Option<tokio::task::JoinHandle<()>>,
 ) -> Result<(), String> {
+	ensure_events_loop_started(session, events_task, ui_tx, cmd_tx, cursor_by_topic, lagged_topics).await?;
+
 	let topics: Vec<String> = topics_refcounts
 		.iter()
 		.filter(|(_, c)| **c > 0)
@@ -45,7 +48,7 @@ pub async fn reconcile_subscriptions_on_connect(
 		.await
 		.map_err(|e| format!("subscribe failed: {}", map_core_err(e)))?;
 
-	ensure_events_loop_started(session, events_task, ui_tx, cmd_tx, cursor_by_topic).await
+	Ok(())
 }
 
 pub async fn unsubscribe_topics(

@@ -184,17 +184,17 @@ impl Chatty {
 
 											if let Some(animated) = animated {
 												animated_cache.insert(url.clone(), animated);
-												tracing::info!(url = %url, attempt, "animated image decoded");
+												tracing::debug!(url = %url, attempt, "animated image decoded");
 												succeeded = true;
 											} else if url.ends_with(".svg") || bytes.windows(4).any(|w| w == b"<svg") {
 												let handle = iced::widget::svg::Handle::from_memory(bytes);
 												svg_cache.insert(url.clone(), handle);
-												tracing::info!(url = %url, attempt, "svg image fetch succeeded");
+												tracing::debug!(url = %url, attempt, "svg image fetch succeeded");
 												succeeded = true;
 											} else {
 												let handle = iced::widget::image::Handle::from_bytes(bytes);
 												img_cache.insert(url.clone(), handle);
-												tracing::info!(url = %url, attempt, "image fetch succeeded");
+												tracing::debug!(url = %url, attempt, "image fetch succeeded");
 												succeeded = true;
 											}
 										}

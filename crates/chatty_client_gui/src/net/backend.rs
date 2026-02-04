@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -66,6 +66,7 @@ pub async fn run_network_task_with_session_factory<F>(
 	let mut events_task: Option<tokio::task::JoinHandle<()>> = None;
 	let mut topics_refcounts: HashMap<String, usize> = HashMap::new();
 	let cursor_by_topic: Arc<Mutex<HashMap<String, u64>>> = Arc::new(Mutex::new(HashMap::new()));
+	let lagged_topics: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
 	let mut last_connect_cfg: Option<ClientConfigV1> = None;
 	let mut reconnect_attempt: u32 = 0;
 	let mut reconnect_deadline: Option<Instant> = None;
@@ -173,6 +174,7 @@ pub async fn run_network_task_with_session_factory<F>(
 						reconnect_attempt = 0;
 						reconnect_deadline = None;
 						let _ = ui_tx.send(UiEvent::Connecting);
+						lagged_topics.lock().unwrap().clear();
 						if let Some(t) = events_task.take() { t.abort(); }
 						if let Some(s) = session.as_ref() { s.close(0, "reconnect"); }
 						session = connect_fn(cfg.clone(), ui_tx.clone()).await;
@@ -188,6 +190,7 @@ pub async fn run_network_task_with_session_factory<F>(
 								s,
 								&topics_refcounts,
 								&cursor_by_topic,
+								&lagged_topics,
 								&ui_tx,
 								&cmd_tx,
 								&mut events_task,
@@ -231,6 +234,7 @@ pub async fn run_network_task_with_session_factory<F>(
 						last_connect_cfg = None;
 						reconnect_attempt = 0;
 						reconnect_deadline = None;
+						lagged_topics.lock().unwrap().clear();
 						let _ = ui_tx.send(UiEvent::Disconnected { reason });
 					}
 
@@ -239,6 +243,7 @@ pub async fn run_network_task_with_session_factory<F>(
 						if let Some(s) = session.as_ref() { s.close(0, &reason); }
 						session = None;
 						keepalive_failures = 0;
+						lagged_topics.lock().unwrap().clear();
 						if let Some(_cfg) = last_connect_cfg.clone() {
 							let attempt = bump_reconnect_attempt(&mut reconnect_attempt, last_successful_connect_time);
 							let (deadline, ms) = schedule_reconnect(attempt);
@@ -250,6 +255,58 @@ pub async fn run_network_task_with_session_factory<F>(
 						}
 					}
 
+
+					NetCommand::RefreshTopic { topic } => {
+						let has_topic = topics_refcounts.get(&topic).map(|c| *c > 0).unwrap_or(false);
+						if !has_topic {
+							continue;
+						}
+
+						{
+							let mut cursors = cursor_by_topic.lock().unwrap();
+							cursors.insert(topic.clone(), 0);
+						}
+
+						if let Some(s) = session.as_mut() {
+							let ensure_res = ensure_events_loop_started(
+								s,
+								&mut events_task,
+								&ui_tx,
+								&cmd_tx,
+								&cursor_by_topic,
+								&lagged_topics,
+							)
+							.await;
+
+							let subscribe_res = match ensure_res {
+								Ok(()) => s
+									.subscribe(vec![(topic.clone(), 0)])
+									.await
+									.map_err(|e| format!("subscribe failed: {}", map_core_err(e))),
+								Err(e) => Err(e),
+							};
+
+							if let Err(e) = subscribe_res {
+								ui_send_error(&ui_tx, e, last_connect_cfg.as_ref());
+								if let Some(s) = session.as_ref() {
+									s.close(0, "subscribe failed");
+								}
+								session = None;
+								let _ = ui_tx.send(UiEvent::Disconnected {
+									reason: "subscribe failed; reconnecting".to_string(),
+								});
+								if let Some(_cfg) = last_connect_cfg.clone() {
+									let attempt = bump_reconnect_attempt(&mut reconnect_attempt, last_successful_connect_time);
+									let (deadline, ms) = schedule_reconnect(attempt);
+									reconnect_deadline = Some(deadline);
+									let _ = ui_tx.send(UiEvent::Reconnecting {
+										attempt,
+										next_retry_in_ms: ms,
+									});
+								}
+							}
+						}
+					}
 
 					NetCommand::SubscribeRoomKey { room } => {
 						let topic = topic_for_room(&room);
@@ -263,6 +320,7 @@ pub async fn run_network_task_with_session_factory<F>(
 									s,
 									&topics_refcounts,
 									&cursor_by_topic,
+									&lagged_topics,
 									&ui_tx,
 									&cmd_tx,
 									&mut events_task,
@@ -335,6 +393,7 @@ pub async fn run_network_task_with_session_factory<F>(
 				&& last_connect_cfg.is_none() => {
 				dev_auto_connect_fired = true;
 				let _ = ui_tx.send(UiEvent::Connecting);
+				lagged_topics.lock().unwrap().clear();
 				if let Some(t) = events_task.take() { t.abort(); }
 				if let Some(s) = session.as_ref() { s.close(0, "dev auto-connect"); }
 				session = connect_fn(Box::default(), ui_tx.clone()).await;
@@ -349,6 +408,7 @@ pub async fn run_network_task_with_session_factory<F>(
 						s,
 						&topics_refcounts,
 						&cursor_by_topic,
+						&lagged_topics,
 						&ui_tx,
 						&cmd_tx,
 						&mut events_task,
@@ -388,6 +448,7 @@ pub async fn run_network_task_with_session_factory<F>(
 							s,
 							&topics_refcounts,
 							&cursor_by_topic,
+							&lagged_topics,
 							&ui_tx,
 							&cmd_tx,
 							&mut events_task,
@@ -434,6 +495,7 @@ pub async fn ensure_events_loop_started(
 	ui_tx: &mpsc::UnboundedSender<UiEvent>,
 	cmd_tx: &mpsc::Sender<NetCommand>,
 	cursor_by_topic: &Arc<Mutex<HashMap<String, u64>>>,
+	lagged_topics: &Arc<Mutex<HashSet<String>>>,
 ) -> Result<(), String> {
 	if events_task.is_some() {
 		return Ok(());
@@ -449,6 +511,7 @@ pub async fn ensure_events_loop_started(
 		ui_tx.clone(),
 		cmd_tx.clone(),
 		Arc::clone(cursor_by_topic),
+		Arc::clone(lagged_topics),
 	));
 
 	Ok(())
@@ -459,12 +522,33 @@ fn spawn_events_loop(
 	ui_tx: mpsc::UnboundedSender<UiEvent>,
 	cmd_tx: mpsc::Sender<NetCommand>,
 	cursor_by_topic: Arc<Mutex<HashMap<String, u64>>>,
+	lagged_topics: Arc<Mutex<HashSet<String>>>,
 ) -> tokio::task::JoinHandle<()> {
 	tokio::spawn(async move {
 		let res = events
 			.run_events_loop(Box::new(|ev| {
 				let topic = ev.topic.clone();
 				let cursor = ev.cursor;
+				if let Some(pb::event_envelope::Event::TopicLagged(_)) = ev.event.as_ref() {
+					let should_refresh = {
+						let mut lagged = lagged_topics.lock().unwrap();
+						lagged.insert(topic.clone())
+					};
+
+					if should_refresh {
+						let mut cursors = cursor_by_topic.lock().unwrap();
+						cursors.insert(topic.clone(), 0);
+						let cmd_tx = cmd_tx.clone();
+						let topic = topic.clone();
+						tokio::spawn(async move {
+							let _ = cmd_tx.send(NetCommand::RefreshTopic { topic }).await;
+						});
+					}
+				} else {
+					let mut lagged = lagged_topics.lock().unwrap();
+					lagged.remove(&topic);
+				}
+
 				let event_kind = match ev.event.as_ref() {
 					Some(pb::event_envelope::Event::ChatMessage(_)) => "chat_message",
 					Some(pb::event_envelope::Event::TopicLagged(_)) => "topic_lagged",
@@ -473,6 +557,7 @@ fn spawn_events_loop(
 					Some(pb::event_envelope::Event::RoomState(_)) => "room_state",
 					None => "empty",
 				};
+
 				debug!(%topic, cursor, %event_kind, "events stream received");
 				if let Some(pb::event_envelope::Event::AssetBundle(bundle)) = ev.event.as_ref() {
 					info!(%topic, cache_key = %bundle.cache_key, emote_count = bundle.emotes.len(), badge_count = bundle.badges.len(), "events stream asset bundle received");

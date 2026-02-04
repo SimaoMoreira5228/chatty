@@ -1,7 +1,9 @@
+use core::fmt;
+
 use crate::app::view_models::{AssetRefUi, ChatReplyUi};
 
 /// UI-level events emitted by the networking layer.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum UiEvent {
 	Connecting,
 	Reconnecting {
@@ -64,4 +66,100 @@ pub enum UiEvent {
 		status: i32,
 		detail: String,
 	},
+}
+
+impl fmt::Debug for UiEvent {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			UiEvent::Connecting => write!(f, "UiEvent::Connecting"),
+			UiEvent::Reconnecting {
+				attempt,
+				next_retry_in_ms,
+			} => {
+				write!(
+					f,
+					"UiEvent::Reconnecting {{ attempt: {}, next_retry_in_ms: {} }}",
+					attempt, next_retry_in_ms
+				)
+			}
+			UiEvent::Connected {
+				server_name,
+				server_instance_id,
+			} => {
+				write!(
+					f,
+					"UiEvent::Connected {{ server_name: {}, server_instance_id: {} }}",
+					server_name, server_instance_id
+				)
+			}
+			UiEvent::Disconnected { reason } => {
+				write!(f, "UiEvent::Disconnected {{ reason: {} }}", reason)
+			}
+			UiEvent::ErrorWithServer { message, server } => {
+				write!(f, "UiEvent::ErrorWithServer {{ message: {}, server: {:?} }}", message, server)
+			}
+			UiEvent::ChatMessage {
+				topic,
+				author_login,
+				server_message_id,
+				platform_message_id,
+				..
+			} => {
+				write!(
+					f,
+					"UiEvent::ChatMessage {{ topic: {}, author_login: {}, server_message_id: {:?}, platform_message_id: {:?}, ... }}",
+					topic, author_login, server_message_id, platform_message_id
+				)
+			}
+			UiEvent::RoomPermissions {
+				topic,
+				can_send,
+				can_reply,
+				can_delete,
+				can_timeout,
+				can_ban,
+				is_moderator,
+				is_broadcaster,
+			} => {
+				write!(
+					f,
+					"UiEvent::RoomPermissions {{ topic: {}, can_send: {}, can_reply: {}, can_delete: {}, can_timeout: {}, can_ban: {}, is_moderator: {}, is_broadcaster: {} }}",
+					topic, can_send, can_reply, can_delete, can_timeout, can_ban, is_moderator, is_broadcaster
+				)
+			}
+			UiEvent::RoomState {
+				topic,
+				emote_only,
+				subscribers_only,
+				unique_chat,
+				slow_mode,
+				slow_mode_wait_time_seconds,
+				followers_only,
+				followers_only_duration_minutes,
+			} => {
+				write!(
+					f,
+					"UiEvent::RoomState {{ topic: {}, emote_only: {:?}, subscribers_only: {:?}, unique_chat: {:?}, slow_mode: {:?}, slow_mode_wait_time_seconds: {:?}, followers_only: {:?}, followers_only_duration_minutes: {:?} }}",
+					topic,
+					emote_only,
+					subscribers_only,
+					unique_chat,
+					slow_mode,
+					slow_mode_wait_time_seconds,
+					followers_only,
+					followers_only_duration_minutes
+				)
+			}
+			UiEvent::AssetBundle { topic, cache_key, .. } => {
+				write!(
+					f,
+					"UiEvent::AssetBundle {{ topic: {}, cache_key: {}, ... }}",
+					topic, cache_key
+				)
+			}
+			UiEvent::CommandResult { status, detail } => {
+				write!(f, "UiEvent::CommandResult {{ status: {}, detail: {} }}", status, detail)
+			}
+		}
+	}
 }

@@ -18,5 +18,6 @@ pub(crate) async fn recv_next(rx: Arc<Mutex<UiEventReceiver>>) -> Option<UiEvent
 	} else {
 		info!("recv_next: got UiEvent? false");
 	}
+
 	ev
 }

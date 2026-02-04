@@ -14,6 +14,9 @@ pub enum NetCommand {
 	EventsLoopEnded {
 		reason: String,
 	},
+	RefreshTopic {
+		topic: String,
+	},
 	SubscribeRoomKey {
 		room: RoomKey,
 	},
