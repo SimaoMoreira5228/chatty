@@ -1380,9 +1380,10 @@ pub async fn handle_connection(
 							pending.extend(outcome.items);
 						}
 
-						if outcome.status == pb::subscription_result::Status::ReplayNotAvailable && last_cursor > 0 {
+						let dropped = outcome.current_cursor.saturating_sub(last_cursor);
+						if outcome.status == pb::subscription_result::Status::ReplayNotAvailable && dropped > 0 {
 							let lagged = pb::TopicLaggedEvent {
-								dropped: outcome.current_cursor.saturating_sub(last_cursor),
+								dropped,
 								detail: "replay buffer exhausted".to_string(),
 							};
 							let env = pb::EventEnvelope {
@@ -1414,6 +1415,7 @@ pub async fn handle_connection(
 					.await?;
 
 					adapter_manager.apply_global_joins_leaves(&topics_to_join, &[]).await;
+					adapter_manager.reconcile_from_state_snapshot().await;
 
 					let mut permission_events: Vec<pb::EventEnvelope> = Vec::new();
 					for result in &permission_results {
