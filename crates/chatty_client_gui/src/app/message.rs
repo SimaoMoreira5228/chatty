@@ -15,7 +15,7 @@ pub enum NetMessage {
 	ConnectPressed,
 	DisconnectPressed,
 	ConnectFinished(Result<(), String>),
-	NetPolled(Option<crate::net::UiEvent>),
+	NetPolled(Box<Option<crate::net::UiEvent>>),
 	AutoJoinCompleted(Vec<(RoomKey, Result<(), String>)>),
 }
 
@@ -74,7 +74,7 @@ pub enum Message {
 
 	ModalDismissed,
 	OpenJoinModal(JoinTarget),
-	Net(NetMessage),
+	Net(Box<NetMessage>),
 	Chat(ChatMessage),
 
 	PaneMessage(pane_grid::Pane, ChatPaneMessage),

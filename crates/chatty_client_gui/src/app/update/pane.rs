@@ -81,7 +81,7 @@ impl Chatty {
 
 		tracing::info!("TabUnsubscribed handled; resuming network event polling");
 		Task::perform(recv_next(self.net_rx.clone()), |ev| {
-			Message::Net(crate::app::message::NetMessage::NetPolled(ev))
+			Message::Net(Box::new(crate::app::message::NetMessage::NetPolled(Box::new(ev))))
 		})
 	}
 
@@ -418,7 +418,7 @@ impl Chatty {
 				}
 				results
 			},
-			|results| Message::Net(crate::app::message::NetMessage::AutoJoinCompleted(results)),
+			|results| Message::Net(Box::new(crate::app::message::NetMessage::AutoJoinCompleted(results))),
 		)
 	}
 

@@ -31,7 +31,7 @@ pub enum UiEvent {
 		platform_message_id: Option<String>,
 		badge_ids: Vec<String>,
 		emotes: Vec<AssetRefUi>,
-		reply: Option<ChatReplyUi>,
+		reply: Box<Option<ChatReplyUi>>,
 	},
 	RoomPermissions {
 		topic: String,

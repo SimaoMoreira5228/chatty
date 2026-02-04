@@ -89,7 +89,7 @@ impl Chatty {
 				self.state.ui.users_view = view;
 				task
 			}
-			Message::Net(msg) => self.update_net_message(msg),
+			Message::Net(msg) => self.update_net_message(*msg),
 			Message::Window(msg) => self.update_window_message(msg),
 			Message::Chat(msg) => self.update_chat_message(msg),
 			Message::Layout(msg) => self.update_layout_message(msg),

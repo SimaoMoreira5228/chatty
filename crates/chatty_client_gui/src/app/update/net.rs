@@ -21,7 +21,7 @@ impl Chatty {
 			NetMessage::ConnectPressed => self.update_connect_pressed(),
 			NetMessage::DisconnectPressed => self.update_disconnect_pressed(),
 			NetMessage::ConnectFinished(res) => self.update_connect_finished(res),
-			NetMessage::NetPolled(ev) => self.update_net_polled(ev),
+			NetMessage::NetPolled(ev) => self.update_net_polled(*ev),
 			NetMessage::AutoJoinCompleted(results) => self.update_auto_join_completed(results),
 		}
 	}
@@ -49,7 +49,7 @@ impl Chatty {
 					};
 
 					let recv_cmd = Task::perform(recv_next(self.net_rx.clone()), |ev| {
-						Message::Net(crate::app::message::NetMessage::NetPolled(ev))
+						Message::Net(Box::new(crate::app::message::NetMessage::NetPolled(Box::new(ev))))
 					});
 
 					if do_focus {
@@ -98,14 +98,14 @@ impl Chatty {
 		self.state.set_connection_status(ConnectionStatus::Connecting);
 		let net = self.net_effects.clone();
 		Task::perform(net.connect(cfg), |res| {
-			Message::Net(crate::app::message::NetMessage::ConnectFinished(res))
+			Message::Net(Box::new(crate::app::message::NetMessage::ConnectFinished(res)))
 		})
 	}
 
 	pub fn update_disconnect_pressed(&mut self) -> Task<Message> {
 		let net = self.net_effects.clone();
 		Task::perform(net.disconnect("user".to_string()), |res| {
-			Message::Net(crate::app::message::NetMessage::ConnectFinished(res))
+			Message::Net(Box::new(crate::app::message::NetMessage::ConnectFinished(res)))
 		})
 	}
 
@@ -178,7 +178,7 @@ impl Chatty {
 
 		let ev_task = ev_task_opt.unwrap_or_else(Task::none);
 		let recv_task = Task::perform(recv_next(self.net_rx.clone()), |ev| {
-			Message::Net(crate::app::message::NetMessage::NetPolled(ev))
+			Message::Net(Box::new(crate::app::message::NetMessage::NetPolled(Box::new(ev))))
 		});
 
 		if let Some(pre) = pre_task {
@@ -238,7 +238,7 @@ impl Chatty {
 							}
 							results
 						},
-						|results| Message::Net(crate::app::message::NetMessage::AutoJoinCompleted(results)),
+						|results| Message::Net(Box::new(crate::app::message::NetMessage::AutoJoinCompleted(results))),
 					))
 				} else {
 					None
@@ -307,7 +307,7 @@ impl Chatty {
 						badge_ids,
 						emotes,
 						platform_message_id,
-						reply,
+						reply: *reply,
 						is_deleted: false,
 					};
 					Some(self.update_chat_message_prepared(msg))
@@ -423,8 +423,8 @@ impl Chatty {
 			let _ = self.report_info(format!("command status={status}: {detail}"));
 
 			if status == chatty_protocol::pb::command_result::Status::Ok as i32 {
-				if let Some(cmd) = self.pending_commands.pop() {
-					if let crate::app::types::PendingCommand::Delete {
+				if let Some(cmd) = self.pending_commands.pop()
+					&& let crate::app::types::PendingCommand::Delete {
 						room,
 						server_message_id,
 						platform_message_id,
@@ -433,7 +433,6 @@ impl Chatty {
 						self.state
 							.mark_message_deleted(&room, server_message_id.as_deref(), platform_message_id.as_deref());
 					}
-				}
 
 				self.pending_commands.retain(|pc| {
 					!matches!(

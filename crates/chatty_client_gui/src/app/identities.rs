@@ -53,7 +53,7 @@ impl Chatty {
 		}
 
 		self.state.set_gui_settings(gs);
-		Task::done(Message::Net(crate::app::message::NetMessage::ConnectPressed))
+		Task::done(Message::Net(Box::new(crate::app::message::NetMessage::ConnectPressed)))
 	}
 
 	pub(crate) fn upsert_identity_from_kick_blob(&mut self, raw: String) -> Task<Message> {
@@ -99,6 +99,6 @@ impl Chatty {
 		}
 
 		self.state.set_gui_settings(gs);
-		Task::done(Message::Net(crate::app::message::NetMessage::ConnectPressed))
+		Task::done(Message::Net(Box::new(crate::app::message::NetMessage::ConnectPressed)))
 	}
 }

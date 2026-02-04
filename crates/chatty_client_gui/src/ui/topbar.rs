@@ -36,7 +36,7 @@ pub fn view(app: &Chatty, palette: theme::Palette) -> Element<'_, Message> {
 			]
 			.spacing(4),
 		)
-		.on_press(Message::Net(crate::app::message::NetMessage::ConnectPressed)),
+		.on_press(Message::Net(Box::new(crate::app::message::NetMessage::ConnectPressed))),
 		ConnectionStatus::Connecting => button(
 			row![
 				svg(svg_handle("spinner.svg"))
@@ -49,7 +49,7 @@ pub fn view(app: &Chatty, palette: theme::Palette) -> Element<'_, Message> {
 			]
 			.spacing(4),
 		)
-		.on_press(Message::Net(crate::app::message::NetMessage::DisconnectPressed)),
+		.on_press(Message::Net(Box::new(crate::app::message::NetMessage::DisconnectPressed))),
 		ConnectionStatus::Reconnecting { .. } => button(
 			row![
 				svg(svg_handle("refresh.svg"))
@@ -62,7 +62,7 @@ pub fn view(app: &Chatty, palette: theme::Palette) -> Element<'_, Message> {
 			]
 			.spacing(4),
 		)
-		.on_press(Message::Net(crate::app::message::NetMessage::ConnectPressed)),
+		.on_press(Message::Net(Box::new(crate::app::message::NetMessage::ConnectPressed))),
 		ConnectionStatus::Connected { .. } => button(
 			row![
 				svg(svg_handle("disconnect.svg"))
@@ -75,7 +75,7 @@ pub fn view(app: &Chatty, palette: theme::Palette) -> Element<'_, Message> {
 			]
 			.spacing(4),
 		)
-		.on_press(Message::Net(crate::app::message::NetMessage::DisconnectPressed)),
+		.on_press(Message::Net(Box::new(crate::app::message::NetMessage::DisconnectPressed))),
 	};
 
 	let insert_chip = if app.state.ui.vim.insert_mode {

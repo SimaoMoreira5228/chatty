@@ -59,7 +59,7 @@ pub fn view(app: &Chatty, palette: theme::Palette) -> Element<'_, Message> {
 					]
 					.spacing(4)
 				)
-				.on_press(Message::Net(crate::app::message::NetMessage::ConnectPressed)),
+				.on_press(Message::Net(Box::new(crate::app::message::NetMessage::ConnectPressed))),
 				button(
 					row![
 						svg(svg_handle("disconnect.svg")).width(14).height(14),
@@ -67,7 +67,7 @@ pub fn view(app: &Chatty, palette: theme::Palette) -> Element<'_, Message> {
 					]
 					.spacing(4)
 				)
-				.on_press(Message::Net(crate::app::message::NetMessage::DisconnectPressed)),
+				.on_press(Message::Net(Box::new(crate::app::message::NetMessage::DisconnectPressed))),
 			]
 			.spacing(10),
 		]

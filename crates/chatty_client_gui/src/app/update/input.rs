@@ -43,7 +43,7 @@ impl Chatty {
 				self.state.set_connection_status(ConnectionStatus::Connecting);
 				let net = self.net_effects.clone();
 				return Task::perform(net.connect(cfg), |res| {
-					Message::Net(crate::app::message::NetMessage::ConnectFinished(res))
+					Message::Net(Box::new(crate::app::message::NetMessage::ConnectFinished(res)))
 				});
 			}
 		}
@@ -93,7 +93,7 @@ impl Chatty {
 				let toast_cmd = self.toast(t!("insert_mode").to_string());
 				let focus_cmd = iced::widget::operation::focus(format!("composer-{:?}", focused));
 				let recv_cmd = Task::perform(recv_next(self.net_rx.clone()), |ev| {
-					Message::Net(crate::app::message::NetMessage::NetPolled(ev))
+					Message::Net(Box::new(crate::app::message::NetMessage::NetPolled(Box::new(ev))))
 				});
 				return Task::batch(vec![toast_cmd, focus_cmd, recv_cmd]);
 			}
@@ -165,7 +165,7 @@ impl Chatty {
 					let unfocus_cmd =
 						iced::advanced::widget::operate(iced::advanced::widget::operation::focusable::unfocus());
 					let recv_cmd = Task::perform(recv_next(self.net_rx.clone()), |ev| {
-						Message::Net(crate::app::message::NetMessage::NetPolled(ev))
+						Message::Net(Box::new(crate::app::message::NetMessage::NetPolled(Box::new(ev))))
 					});
 					return Task::batch(vec![toast_cmd, unfocus_cmd, recv_cmd]);
 				}

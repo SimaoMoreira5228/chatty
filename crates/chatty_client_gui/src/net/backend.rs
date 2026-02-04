@@ -720,7 +720,7 @@ fn map_event_envelope_to_ui_event(ev: pb::EventEnvelope) -> Option<UiEvent> {
 				},
 				badge_ids,
 				emotes,
-				reply,
+				reply: Box::new(reply),
 			})
 		}
 		Some(pb::event_envelope::Event::TopicLagged(lag)) => {

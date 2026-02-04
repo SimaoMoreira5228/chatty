@@ -273,12 +273,10 @@ impl KickEventAdapter {
 				text,
 				reply_to_platform_message_id,
 				..
-			} => {
-				client
-					.send_chat_message(broadcaster_id, &text, reply_to_platform_message_id.as_deref())
-					.await
-					.map_err(map_kick_error)?
-			}
+			} => client
+				.send_chat_message(broadcaster_id, &text, reply_to_platform_message_id.as_deref())
+				.await
+				.map_err(map_kick_error)?,
 			CommandRequest::DeleteMessage { platform_message_id, .. } => {
 				if !can_moderate {
 					return Err(CommandError::NotAuthorized(None));
