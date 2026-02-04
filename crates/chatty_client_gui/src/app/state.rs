@@ -334,6 +334,49 @@ impl AppState {
 		}
 	}
 
+	pub fn mark_message_deleted(
+		&mut self,
+		room: &RoomKey,
+		server_message_id: Option<&str>,
+		platform_message_id: Option<&str>,
+	) {
+		for (_tid, tab) in self.tabs.iter_mut() {
+			for item in tab.log.items.iter_mut() {
+				let ChatItem::ChatMessage(m) = item else {
+					continue;
+				};
+
+				if &m.room != room {
+					continue;
+				}
+
+				let mut should_mark = false;
+				if let Some(sid) = server_message_id
+					&& let Some(ref msg_sid) = m.server_message_id
+					&& msg_sid == sid
+				{
+					should_mark = true;
+				}
+				if let Some(pid) = platform_message_id
+					&& let Some(ref msg_pid) = m.platform_message_id
+					&& msg_pid == pid
+				{
+					should_mark = true;
+				}
+
+				if should_mark && !m.is_deleted {
+					m.is_deleted = true;
+					if let Some(count) = tab.user_counts.get_mut(&m.user_login) {
+						*count = count.saturating_sub(1);
+						if *count == 0 {
+							tab.user_counts.remove(&m.user_login);
+						}
+					}
+				}
+			}
+		}
+	}
+
 	pub fn set_connection_status(&mut self, st: ConnectionStatus) {
 		info!(?st, "connection status changed");
 		self.connection = st;
@@ -374,6 +417,7 @@ mod tests {
 			emotes: Vec::new(),
 			platform_message_id: None,
 			reply: None,
+			is_deleted: false,
 		}
 	}
 

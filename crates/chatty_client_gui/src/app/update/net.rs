@@ -308,6 +308,7 @@ impl Chatty {
 						emotes,
 						platform_message_id,
 						reply,
+						is_deleted: false,
 					};
 					Some(self.update_chat_message_prepared(msg))
 				} else {
@@ -422,7 +423,18 @@ impl Chatty {
 			let _ = self.report_info(format!("command status={status}: {detail}"));
 
 			if status == chatty_protocol::pb::command_result::Status::Ok as i32 {
-				let _ = self.pending_commands.pop();
+				if let Some(cmd) = self.pending_commands.pop() {
+					if let crate::app::types::PendingCommand::Delete {
+						room,
+						server_message_id,
+						platform_message_id,
+					} = cmd
+					{
+						self.state
+							.mark_message_deleted(&room, server_message_id.as_deref(), platform_message_id.as_deref());
+					}
+				}
+
 				self.pending_commands.retain(|pc| {
 					!matches!(
 						pc,

@@ -1,5 +1,5 @@
 use chatty_domain::Platform;
-use iced::widget::{column, container, image, mouse_area, row, svg, text, tooltip};
+use iced::widget::{column, container, image, mouse_area, row, rule, stack, svg, text, tooltip};
 use iced::{Alignment, Background, Border, Element, Length, Shadow};
 
 use crate::app::assets::AssetManager;
@@ -22,6 +22,15 @@ impl<'a> ChatMessageView<'a> {
 		let m = self.model.message;
 		let palette = self.model.palette;
 		let is_focused = self.model.is_focused;
+		let is_deleted = self.model.is_deleted;
+		let text_color = if is_deleted {
+			palette.text_dim
+		} else if is_focused {
+			palette.text
+		} else {
+			palette.text_dim
+		};
+		let name_color = if is_deleted { palette.text_dim } else { palette.chat_nick };
 
 		let mut msg_row = row![].spacing(6).align_y(Alignment::Start);
 
@@ -42,7 +51,7 @@ impl<'a> ChatMessageView<'a> {
 			}
 		}
 
-		let name_txt = text(m.display_name.as_str()).color(palette.chat_nick);
+		let name_txt = text(m.display_name.as_str()).color(name_color);
 		let mut content_row = row![].spacing(4).align_y(Alignment::Start);
 
 		let inline_emote = |token: &str| m.emotes.iter().find(|emote| emote.name == token);
@@ -50,7 +59,7 @@ impl<'a> ChatMessageView<'a> {
 
 		for (i, token) in m.tokens.iter().enumerate() {
 			if i > 0 {
-				content_row = content_row.push(text(" ").color(if is_focused { palette.text } else { palette.text_dim }));
+				content_row = content_row.push(text(" ").color(text_color));
 			}
 
 			let exact_emote = inline_emote(token.as_str())
@@ -104,7 +113,7 @@ impl<'a> ChatMessageView<'a> {
 			let mut token_row = row![].spacing(0).align_y(Alignment::Start);
 			if has_word {
 				if !prefix.is_empty() {
-					token_row = token_row.push(text(prefix).color(if is_focused { palette.text } else { palette.text_dim }));
+					token_row = token_row.push(text(prefix).color(text_color));
 				}
 
 				let found_emote = inline_emote(core)
@@ -116,22 +125,18 @@ impl<'a> ChatMessageView<'a> {
 						let (width, height) = self.emote_size(img, 20);
 						self.render_image(&img.url, width, height, Some(&emote.name))
 					} else {
-						text(core)
-							.color(if is_focused { palette.text } else { palette.text_dim })
-							.into()
+						text(core).color(text_color).into()
 					}
 				} else {
-					text(core)
-						.color(if is_focused { palette.text } else { palette.text_dim })
-						.into()
+					text(core).color(text_color).into()
 				};
 
 				token_row = token_row.push(core_el);
 				if !suffix.is_empty() {
-					token_row = token_row.push(text(suffix).color(if is_focused { palette.text } else { palette.text_dim }));
+					token_row = token_row.push(text(suffix).color(text_color));
 				}
 			} else {
-				token_row = token_row.push(text(core).color(if is_focused { palette.text } else { palette.text_dim }));
+				token_row = token_row.push(text(core).color(text_color));
 			}
 
 			content_row = content_row.push(token_row);
@@ -141,7 +146,7 @@ impl<'a> ChatMessageView<'a> {
 
 		msg_row = msg_row
 			.push(name_txt)
-			.push(text(": ").color(if is_focused { palette.text } else { palette.text_dim }))
+			.push(text(": ").color(text_color))
 			.push(content_block)
 			.width(Length::Fill)
 			.height(Length::Shrink);
@@ -158,6 +163,16 @@ impl<'a> ChatMessageView<'a> {
 				m.author_id.clone(),
 			)))
 			.into();
+
+		let message_row: Element<'_, Message> = if is_deleted {
+			let strike = container(rule::horizontal(1))
+				.width(Length::Fill)
+				.height(Length::Fill)
+				.center_y(Length::Fill);
+			stack(vec![message_row, strike.into()]).width(Length::Fill).into()
+		} else {
+			message_row
+		};
 
 		if let Some(reply) = &self.model.reply {
 			column![self.render_reply(reply), message_row].spacing(2).into()

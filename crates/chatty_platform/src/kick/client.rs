@@ -42,17 +42,16 @@ impl KickClient {
 
 	pub async fn send_chat_message(
 		&self,
-		chatroom_id: u64,
+		broadcaster_user_id: u64,
 		content: &str,
-		message_ref: &str,
 		reply_to_message_id: Option<&str>,
 	) -> anyhow::Result<()> {
-		let url = format!("https://kick.com/api/v2/messages/send/{}", chatroom_id);
-		let body = KickSendChatRequest {
+		let url = format!("{}/public/v1/chat", self.base_url.trim_end_matches('/'));
+		let body = KickPostChatRequest {
+			broadcaster_user_id,
 			content: content.to_string(),
-			message_ref: message_ref.to_string(),
 			reply_to_message_id: reply_to_message_id.map(|v| v.to_string()),
-			type_field: "message".to_string(),
+			type_field: "user".to_string(),
 		};
 
 		let resp = self
@@ -237,10 +236,10 @@ impl KickClient {
 }
 
 #[derive(Debug, serde::Serialize)]
-struct KickSendChatRequest {
+struct KickPostChatRequest {
+	broadcaster_user_id: u64,
 	content: String,
-	message_ref: String,
-	#[serde(skip_serializing_if = "Option::is_none")]
+	#[serde(default, skip_serializing_if = "Option::is_none")]
 	reply_to_message_id: Option<String>,
 	#[serde(rename = "type")]
 	type_field: String,

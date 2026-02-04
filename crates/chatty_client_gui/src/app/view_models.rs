@@ -32,6 +32,7 @@ pub struct ChatMessageUi {
 	pub emotes: Vec<AssetRefUi>,
 	pub platform_message_id: Option<String>,
 	pub reply: Option<ChatReplyUi>,
+	pub is_deleted: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -121,6 +122,7 @@ pub struct ChatMessageViewModel<'a> {
 	pub palette: Palette,
 	pub is_focused: bool,
 	pub is_pending: bool,
+	pub is_deleted: bool,
 	pub anim_elapsed: std::time::Duration,
 	pub emotes_map: Arc<HashMap<String, AssetRefUi>>,
 	pub badges_map: Arc<HashMap<String, AssetRefUi>>,
@@ -295,6 +297,7 @@ pub fn build_chat_pane_view_model<'a>(
 					palette,
 					is_focused,
 					is_pending,
+					is_deleted: m.is_deleted,
 					anim_elapsed,
 					emotes_map,
 					badges_map: badges_map.clone(),

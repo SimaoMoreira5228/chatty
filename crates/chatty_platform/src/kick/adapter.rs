@@ -254,7 +254,6 @@ impl KickEventAdapter {
 			)));
 		};
 		let broadcaster_id = self.resolve_broadcaster_id(room, &token).await?;
-		let chatroom_id = self.resolve_chatroom_id(room).await.ok();
 		let is_broadcaster = auth_user_id
 			.as_deref()
 			.and_then(|id| if id.trim().is_empty() { None } else { Some(id) })
@@ -275,12 +274,8 @@ impl KickEventAdapter {
 				reply_to_platform_message_id,
 				..
 			} => {
-				let Some(chatroom_id) = chatroom_id else {
-					return Err(CommandError::InvalidTopic(Some("kick chatroom id unresolved".to_string())));
-				};
-				let message_ref = chrono::Utc::now().timestamp_millis().to_string();
 				client
-					.send_chat_message(chatroom_id, &text, &message_ref, reply_to_platform_message_id.as_deref())
+					.send_chat_message(broadcaster_id, &text, reply_to_platform_message_id.as_deref())
 					.await
 					.map_err(map_kick_error)?
 			}
