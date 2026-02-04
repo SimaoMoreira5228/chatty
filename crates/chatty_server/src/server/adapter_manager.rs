@@ -305,6 +305,17 @@ impl AdapterManager {
 		}
 	}
 
+	/// Re-emit joins for the provided rooms to refresh assets.
+	pub async fn refresh_rooms(&self, rooms: &[RoomKey]) {
+		let mut joined = self.joined_rooms.write().await;
+		for room in rooms {
+			if let Some(ctrl) = self.control_by_platform.get(&room.platform) {
+				let _ = ctrl.send(AdapterControl::Join { room: room.clone() }).await;
+				joined.insert(room.clone());
+			}
+		}
+	}
+
 	/// Shutdown the adapter manager.
 	#[allow(dead_code)]
 	pub async fn shutdown(mut self) {

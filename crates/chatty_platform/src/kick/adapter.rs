@@ -894,30 +894,19 @@ impl PlatformAdapter for KickEventAdapter {
 									continue;
 								}
 								let mut guard = this.joined_rooms.write().await;
-								if guard.insert(room.clone()) {
+								let inserted = guard.insert(room.clone());
+								if inserted {
 									let detail = format!("joined kick room:{}", room.room_id.as_str());
 									let _ = events_tx.try_send(status(platform, true, detail));
-									let cache_key = format!("kick:channel:{}:native", room.room_id.as_str());
-									info!(%platform, room=%room.room_id, cache_key=%cache_key, "emitting AssetBundle ingest");
-									let ingest = IngestEvent::new(
-										platform,
-										room.room_id.clone(),
-										IngestPayload::AssetBundle(AssetBundle {
-											provider: AssetProvider::Kick,
-											scope: AssetScope::Channel,
-											cache_key: cache_key.clone(),
-											etag: Some("empty".to_string()),
-											emotes: Vec::new(),
-											badges: Vec::new(),
-										}),
-									);
-									let _ = events_tx.try_send(AdapterEvent::Ingest(Box::new(ingest)));
-									drop(guard);
+								}
+								drop(guard);
 
-								if let Ok(chatroom_id) = this.resolve_chatroom_id(&room).await
-									&& let Err(err) = this.send_pusher_subscribe(&mut ws_tx, chatroom_id).await {
-										warn!(error = %err, chatroom_id, room = %room, "kick ws subscribe failed");
-									}
+								if inserted
+									&& let Ok(chatroom_id) = this.resolve_chatroom_id(&room).await
+									&& let Err(err) = this.send_pusher_subscribe(&mut ws_tx, chatroom_id).await
+								{
+									warn!(error = %err, chatroom_id, room = %room, "kick ws subscribe failed");
+								}
 
 								let room_for_assets = room.clone();
 								let events_tx_spawn = events_tx.clone();
@@ -927,6 +916,22 @@ impl PlatformAdapter for KickEventAdapter {
 									.await
 									.ok();
 								tokio::spawn(async move {
+									let cache_key = format!("kick:channel:{}:native", room_for_assets.room_id.as_str());
+									info!(%platform, room=%room_for_assets.room_id, cache_key=%cache_key, "emitting AssetBundle ingest");
+									let ingest = IngestEvent::new(
+										platform,
+										room_for_assets.room_id.clone(),
+										IngestPayload::AssetBundle(AssetBundle {
+											provider: AssetProvider::Kick,
+											scope: AssetScope::Channel,
+											cache_key: cache_key.clone(),
+											etag: Some("empty".to_string()),
+											emotes: Vec::new(),
+											badges: Vec::new(),
+										}),
+									);
+									let _ = events_tx_spawn.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+
 									if let Some(id) = broadcaster_id {
 										info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, "fetching 7tv channel badges bundle (kick)");
 										if let Ok(bundle) =
@@ -1031,7 +1036,6 @@ impl PlatformAdapter for KickEventAdapter {
 										let _ = events_tx_spawn.try_send(AdapterEvent::Ingest(Box::new(ingest)));
 									}
 								});
-							}
 						}
 						AdapterControl::Leave { room } => {
 							if room.platform != platform {

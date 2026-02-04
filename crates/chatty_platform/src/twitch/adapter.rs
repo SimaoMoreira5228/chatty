@@ -927,234 +927,8 @@ impl TwitchEventSubAdapter {
 				}
 
 				let inserted = self.joined_rooms.insert(room.clone());
+				self.emit_assets_for_room(room.clone(), current_session_id, events_tx).await;
 				if inserted {
-					let cache_key = format!("twitch:channel:{}:native", room.room_id.as_str());
-					info!(%platform, room=%room.room_id, cache_key=%cache_key, "emitting AssetBundle ingest");
-					let mut ingest = IngestEvent::new(
-						platform,
-						room.room_id.clone(),
-						IngestPayload::AssetBundle(AssetBundle {
-							provider: AssetProvider::Twitch,
-							scope: AssetScope::Channel,
-							cache_key: cache_key.clone(),
-							etag: Some("empty".to_string()),
-							emotes: Vec::new(),
-							badges: Vec::new(),
-						}),
-					);
-					ingest.trace.session_id = current_session_id.map(|s| s.to_string());
-					let _ = events_tx.try_send(AdapterEvent::Ingest(Box::new(ingest)));
-
-					let room_for_assets = room.clone();
-					let events_tx_clone = events_tx.clone();
-					let session_id = current_session_id.map(|s| s.to_string());
-					let broadcaster_id = self.resolve_broadcaster_id(&room).await.ok();
-					let client_id = self.cfg.client_id.clone();
-					let bearer_token = self.cfg.user_access_token.expose().to_string();
-					let seventv_subscriptions = self.seventv_subscriptions.clone();
-					tokio::spawn(async move {
-						if let Ok(bundle) = fetch_twitch_badges_bundle(&client_id, &bearer_token).await {
-							info!(%platform, room=%room_for_assets.room_id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
-							let mut ingest = IngestEvent::new(
-								Platform::Twitch,
-								room_for_assets.room_id.clone(),
-								IngestPayload::AssetBundle(bundle),
-							);
-							ingest.trace.session_id = session_id.clone();
-							let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
-						}
-
-						if let Ok(bundle) = fetch_twitch_global_emotes_bundle(&client_id, &bearer_token).await {
-							info!(%platform, room=%room_for_assets.room_id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
-							let mut ingest = IngestEvent::new(
-								Platform::Twitch,
-								room_for_assets.room_id.clone(),
-								IngestPayload::AssetBundle(bundle),
-							);
-							ingest.trace.session_id = session_id.clone();
-							let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
-						}
-
-						if let Ok(bundle) = fetch_ffz_bundle(room_for_assets.room_id.as_str()).await {
-							info!(%platform, room=%room_for_assets.room_id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
-							let mut ingest = IngestEvent::new(
-								Platform::Twitch,
-								room_for_assets.room_id.clone(),
-								IngestPayload::AssetBundle(bundle),
-							);
-							ingest.trace.session_id = session_id.clone();
-							let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
-						}
-
-						if let Ok(bundle) = fetch_ffz_global_emotes_bundle().await {
-							info!(%platform, room=%room_for_assets.room_id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
-							let mut ingest = IngestEvent::new(
-								Platform::Twitch,
-								room_for_assets.room_id.clone(),
-								IngestPayload::AssetBundle(bundle),
-							);
-							ingest.trace.session_id = session_id.clone();
-							let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
-						}
-
-						if let Ok(bundle) = fetch_bttv_global_emotes_bundle().await {
-							info!(%platform, room=%room_for_assets.room_id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
-							let mut ingest = IngestEvent::new(
-								Platform::Twitch,
-								room_for_assets.room_id.clone(),
-								IngestPayload::AssetBundle(bundle),
-							);
-							ingest.trace.session_id = session_id.clone();
-							let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
-						}
-
-						if let Ok(bundle) = fetch_bttv_badges_bundle("twitch").await {
-							info!(%platform, room=%room_for_assets.room_id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
-							let mut ingest = IngestEvent::new(
-								Platform::Twitch,
-								room_for_assets.room_id.clone(),
-								IngestPayload::AssetBundle(bundle),
-							);
-							ingest.trace.session_id = session_id.clone();
-							let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
-						}
-
-						if let Ok(bundle) = fetch_ffz_badges_bundle().await {
-							info!(%platform, room=%room_for_assets.room_id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
-							let mut ingest = IngestEvent::new(
-								Platform::Twitch,
-								room_for_assets.room_id.clone(),
-								IngestPayload::AssetBundle(bundle),
-							);
-							ingest.trace.session_id = session_id.clone();
-							let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
-						}
-
-						if let Ok(bundle) = fetch_7tv_badges_bundle().await {
-							info!(%platform, room=%room_for_assets.room_id, cache_key=%bundle.cache_key, etag=?bundle.etag, "fetched 7tv global badges bundle");
-							let mut ingest = IngestEvent::new(
-								Platform::Twitch,
-								room_for_assets.room_id.clone(),
-								IngestPayload::AssetBundle(bundle),
-							);
-							ingest.trace.session_id = session_id.clone();
-							let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
-						}
-
-						if let Some(id) = broadcaster_id {
-							if let Ok(bundle) = fetch_twitch_channel_badges_bundle(&client_id, &bearer_token, &id).await {
-								info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
-								let mut ingest = IngestEvent::new(
-									Platform::Twitch,
-									room_for_assets.room_id.clone(),
-									IngestPayload::AssetBundle(bundle),
-								);
-								ingest.trace.session_id = session_id.clone();
-								let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
-							}
-
-							if let Ok(bundle) = fetch_twitch_channel_emotes_bundle(&client_id, &bearer_token, &id).await {
-								info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
-								let mut ingest = IngestEvent::new(
-									Platform::Twitch,
-									room_for_assets.room_id.clone(),
-									IngestPayload::AssetBundle(bundle),
-								);
-								ingest.trace.session_id = session_id.clone();
-								let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
-							}
-
-							if let Ok(bundle) = fetch_bttv_bundle("twitch", &id).await {
-								info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
-								let mut ingest = IngestEvent::new(
-									Platform::Twitch,
-									room_for_assets.room_id.clone(),
-									IngestPayload::AssetBundle(bundle),
-								);
-								ingest.trace.session_id = session_id.clone();
-								let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
-							}
-
-							info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, "fetching 7tv channel badges bundle");
-							match fetch_7tv_channel_badges_bundle(SevenTvPlatform::Twitch, &id).await {
-								Ok(bundle) => {
-									info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
-									let mut ingest = IngestEvent::new(
-										Platform::Twitch,
-										room_for_assets.room_id.clone(),
-										IngestPayload::AssetBundle(bundle),
-									);
-									ingest.trace.session_id = session_id.clone();
-									let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
-								}
-								Err(error) => {
-									info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, error=?error, "failed to fetch 7tv channel badges bundle");
-								}
-							}
-
-							info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, "fetching 7tv emote set bundle");
-							match fetch_7tv_bundle_with_sets(SevenTvPlatform::Twitch, &id, SevenTvCacheMode::UseCache).await
-							{
-								Ok((bundle, sets)) => {
-									info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
-									let mut ingest = IngestEvent::new(
-										Platform::Twitch,
-										room_for_assets.room_id.clone(),
-										IngestPayload::AssetBundle(bundle),
-									);
-									ingest.trace.session_id = session_id.clone();
-									let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
-
-									let set_ids = sets.set_ids();
-									if !set_ids.is_empty() {
-										let api = ensure_seventv_event_api();
-										let mut subscriptions = Vec::new();
-										for set_id in set_ids {
-											let (subscription, mut rx) =
-												api.subscribe(DispatchType::EmoteSetUpdate, set_id.clone());
-											subscriptions.push(subscription);
-											let events_tx_updates = events_tx_clone.clone();
-											let room_updates = room_for_assets.clone();
-											let session_updates = session_id.clone();
-											let platform_id = id.clone();
-											tokio::spawn(async move {
-												while rx.recv().await.is_some() {
-													match fetch_7tv_bundle_with_sets(
-														SevenTvPlatform::Twitch,
-														&platform_id,
-														SevenTvCacheMode::Refresh,
-													)
-													.await
-													{
-														Ok((bundle, _)) => {
-															info!(room=%room_updates.room_id, cache_key=%bundle.cache_key, "emitting updated 7tv emote set bundle");
-															let mut ingest = IngestEvent::new(
-																Platform::Twitch,
-																room_updates.room_id.clone(),
-																IngestPayload::AssetBundle(bundle),
-															);
-															ingest.trace.session_id = session_updates.clone();
-															let _ = events_tx_updates
-																.try_send(AdapterEvent::Ingest(Box::new(ingest)));
-														}
-														Err(error) => {
-															info!(room=%room_updates.room_id, error=?error, "failed to refresh 7tv emote set bundle");
-														}
-													}
-												}
-											});
-										}
-
-										let mut guard = seventv_subscriptions.write().await;
-										guard.insert(room_for_assets.clone(), subscriptions);
-									}
-								}
-								Err(error) => {
-									info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, error=?error, "failed to fetch 7tv emote set bundle");
-								}
-							}
-						}
-					});
 					let _ = events_tx.try_send(status(
 						platform,
 						true,
@@ -1223,6 +997,234 @@ impl TwitchEventSubAdapter {
 
 			AdapterControl::Shutdown => {}
 		}
+	}
+
+	async fn emit_assets_for_room(&mut self, room: RoomKey, current_session_id: Option<&str>, events_tx: &AdapterEventTx) {
+		let platform = Platform::Twitch;
+		let cache_key = format!("twitch:channel:{}:native", room.room_id.as_str());
+		info!(%platform, room=%room.room_id, cache_key=%cache_key, "emitting AssetBundle ingest");
+		let mut ingest = IngestEvent::new(
+			platform,
+			room.room_id.clone(),
+			IngestPayload::AssetBundle(AssetBundle {
+				provider: AssetProvider::Twitch,
+				scope: AssetScope::Channel,
+				cache_key: cache_key.clone(),
+				etag: Some("empty".to_string()),
+				emotes: Vec::new(),
+				badges: Vec::new(),
+			}),
+		);
+		ingest.trace.session_id = current_session_id.map(|s| s.to_string());
+		let _ = events_tx.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+
+		let room_for_assets = room.clone();
+		let events_tx_clone = events_tx.clone();
+		let session_id = current_session_id.map(|s| s.to_string());
+		let broadcaster_id = self.resolve_broadcaster_id(&room).await.ok();
+		let client_id = self.cfg.client_id.clone();
+		let bearer_token = self.cfg.user_access_token.expose().to_string();
+		let seventv_subscriptions = self.seventv_subscriptions.clone();
+		tokio::spawn(async move {
+			if let Ok(bundle) = fetch_twitch_badges_bundle(&client_id, &bearer_token).await {
+				info!(%platform, room=%room_for_assets.room_id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
+				let mut ingest = IngestEvent::new(
+					Platform::Twitch,
+					room_for_assets.room_id.clone(),
+					IngestPayload::AssetBundle(bundle),
+				);
+				ingest.trace.session_id = session_id.clone();
+				let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+			}
+
+			if let Ok(bundle) = fetch_twitch_global_emotes_bundle(&client_id, &bearer_token).await {
+				info!(%platform, room=%room_for_assets.room_id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
+				let mut ingest = IngestEvent::new(
+					Platform::Twitch,
+					room_for_assets.room_id.clone(),
+					IngestPayload::AssetBundle(bundle),
+				);
+				ingest.trace.session_id = session_id.clone();
+				let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+			}
+
+			if let Ok(bundle) = fetch_ffz_bundle(room_for_assets.room_id.as_str()).await {
+				info!(%platform, room=%room_for_assets.room_id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
+				let mut ingest = IngestEvent::new(
+					Platform::Twitch,
+					room_for_assets.room_id.clone(),
+					IngestPayload::AssetBundle(bundle),
+				);
+				ingest.trace.session_id = session_id.clone();
+				let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+			}
+
+			if let Ok(bundle) = fetch_ffz_global_emotes_bundle().await {
+				info!(%platform, room=%room_for_assets.room_id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
+				let mut ingest = IngestEvent::new(
+					Platform::Twitch,
+					room_for_assets.room_id.clone(),
+					IngestPayload::AssetBundle(bundle),
+				);
+				ingest.trace.session_id = session_id.clone();
+				let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+			}
+
+			if let Ok(bundle) = fetch_bttv_global_emotes_bundle().await {
+				info!(%platform, room=%room_for_assets.room_id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
+				let mut ingest = IngestEvent::new(
+					Platform::Twitch,
+					room_for_assets.room_id.clone(),
+					IngestPayload::AssetBundle(bundle),
+				);
+				ingest.trace.session_id = session_id.clone();
+				let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+			}
+
+			if let Ok(bundle) = fetch_bttv_badges_bundle("twitch").await {
+				info!(%platform, room=%room_for_assets.room_id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
+				let mut ingest = IngestEvent::new(
+					Platform::Twitch,
+					room_for_assets.room_id.clone(),
+					IngestPayload::AssetBundle(bundle),
+				);
+				ingest.trace.session_id = session_id.clone();
+				let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+			}
+
+			if let Ok(bundle) = fetch_ffz_badges_bundle().await {
+				info!(%platform, room=%room_for_assets.room_id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
+				let mut ingest = IngestEvent::new(
+					Platform::Twitch,
+					room_for_assets.room_id.clone(),
+					IngestPayload::AssetBundle(bundle),
+				);
+				ingest.trace.session_id = session_id.clone();
+				let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+			}
+
+			if let Ok(bundle) = fetch_7tv_badges_bundle().await {
+				info!(%platform, room=%room_for_assets.room_id, cache_key=%bundle.cache_key, etag=?bundle.etag, "fetched 7tv global badges bundle");
+				let mut ingest = IngestEvent::new(
+					Platform::Twitch,
+					room_for_assets.room_id.clone(),
+					IngestPayload::AssetBundle(bundle),
+				);
+				ingest.trace.session_id = session_id.clone();
+				let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+			}
+
+			if let Some(id) = broadcaster_id {
+				if let Ok(bundle) = fetch_twitch_channel_badges_bundle(&client_id, &bearer_token, &id).await {
+					info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
+					let mut ingest = IngestEvent::new(
+						Platform::Twitch,
+						room_for_assets.room_id.clone(),
+						IngestPayload::AssetBundle(bundle),
+					);
+					ingest.trace.session_id = session_id.clone();
+					let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+				}
+
+				if let Ok(bundle) = fetch_twitch_channel_emotes_bundle(&client_id, &bearer_token, &id).await {
+					info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
+					let mut ingest = IngestEvent::new(
+						Platform::Twitch,
+						room_for_assets.room_id.clone(),
+						IngestPayload::AssetBundle(bundle),
+					);
+					ingest.trace.session_id = session_id.clone();
+					let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+				}
+
+				if let Ok(bundle) = fetch_bttv_bundle("twitch", &id).await {
+					info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
+					let mut ingest = IngestEvent::new(
+						Platform::Twitch,
+						room_for_assets.room_id.clone(),
+						IngestPayload::AssetBundle(bundle),
+					);
+					ingest.trace.session_id = session_id.clone();
+					let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+				}
+
+				info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, "fetching 7tv channel badges bundle");
+				match fetch_7tv_channel_badges_bundle(SevenTvPlatform::Twitch, &id).await {
+					Ok(bundle) => {
+						info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
+						let mut ingest = IngestEvent::new(
+							Platform::Twitch,
+							room_for_assets.room_id.clone(),
+							IngestPayload::AssetBundle(bundle),
+						);
+						ingest.trace.session_id = session_id.clone();
+						let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+					}
+					Err(error) => {
+						info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, error=?error, "failed to fetch 7tv channel badges bundle");
+					}
+				}
+
+				info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, "fetching 7tv emote set bundle");
+				match fetch_7tv_bundle_with_sets(SevenTvPlatform::Twitch, &id, SevenTvCacheMode::UseCache).await {
+					Ok((bundle, sets)) => {
+						info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, cache_key=%bundle.cache_key, "emitting AssetBundle ingest");
+						let mut ingest = IngestEvent::new(
+							Platform::Twitch,
+							room_for_assets.room_id.clone(),
+							IngestPayload::AssetBundle(bundle),
+						);
+						ingest.trace.session_id = session_id.clone();
+						let _ = events_tx_clone.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+
+						let set_ids = sets.set_ids();
+						if !set_ids.is_empty() {
+							let api = ensure_seventv_event_api();
+							let mut subscriptions = Vec::new();
+							for set_id in set_ids {
+								let (subscription, mut rx) = api.subscribe(DispatchType::EmoteSetUpdate, set_id.clone());
+								subscriptions.push(subscription);
+								let events_tx_updates = events_tx_clone.clone();
+								let room_updates = room_for_assets.clone();
+								let session_updates = session_id.clone();
+								let platform_id = id.clone();
+								tokio::spawn(async move {
+									while rx.recv().await.is_some() {
+										match fetch_7tv_bundle_with_sets(
+											SevenTvPlatform::Twitch,
+											&platform_id,
+											SevenTvCacheMode::Refresh,
+										)
+										.await
+										{
+											Ok((bundle, _)) => {
+												info!(room=%room_updates.room_id, cache_key=%bundle.cache_key, "emitting updated 7tv emote set bundle");
+												let mut ingest = IngestEvent::new(
+													Platform::Twitch,
+													room_updates.room_id.clone(),
+													IngestPayload::AssetBundle(bundle),
+												);
+												ingest.trace.session_id = session_updates.clone();
+												let _ = events_tx_updates.try_send(AdapterEvent::Ingest(Box::new(ingest)));
+											}
+											Err(error) => {
+												info!(room=%room_updates.room_id, error=?error, "failed to refresh 7tv emote set bundle");
+											}
+										}
+									}
+								});
+							}
+
+							let mut guard = seventv_subscriptions.write().await;
+							guard.insert(room_for_assets.clone(), subscriptions);
+						}
+					}
+					Err(error) => {
+						info!(%platform, room=%room_for_assets.room_id, broadcaster_id=%id, error=?error, "failed to fetch 7tv emote set bundle");
+					}
+				}
+			}
+		});
 	}
 
 	fn ingest_from_normalized_chat(

@@ -1415,7 +1415,13 @@ pub async fn handle_connection(
 					.await?;
 
 					adapter_manager.apply_global_joins_leaves(&topics_to_join, &[]).await;
-					adapter_manager.reconcile_from_state_snapshot().await;
+
+					let refresh_rooms: Vec<RoomKey> = permission_results
+						.iter()
+						.filter(|result| result.status == pb::subscription_result::Status::Ok as i32)
+						.filter_map(|result| RoomTopic::parse(&result.topic).ok())
+						.collect();
+					adapter_manager.refresh_rooms(&refresh_rooms).await;
 
 					let mut permission_events: Vec<pb::EventEnvelope> = Vec::new();
 					for result in &permission_results {
