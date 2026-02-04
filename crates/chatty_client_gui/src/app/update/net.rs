@@ -429,10 +429,10 @@ impl Chatty {
 						server_message_id,
 						platform_message_id,
 					} = cmd
-					{
-						self.state
-							.mark_message_deleted(&room, server_message_id.as_deref(), platform_message_id.as_deref());
-					}
+				{
+					self.state
+						.mark_message_deleted(&room, server_message_id.as_deref(), platform_message_id.as_deref());
+				}
 
 				self.pending_commands.retain(|pc| {
 					!matches!(

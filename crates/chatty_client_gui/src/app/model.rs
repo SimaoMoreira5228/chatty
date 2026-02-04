@@ -247,19 +247,19 @@ impl Chatty {
 							let _ = net_clone.connect(cfg).await;
 							recv_next(rx_clone).await
 						},
-							|ev| Message::Net(Box::new(crate::app::message::NetMessage::NetPolled(Box::new(ev)))),
+						|ev| Message::Net(Box::new(crate::app::message::NetMessage::NetPolled(Box::new(ev)))),
 					)
 				}
 				Err(e) => {
 					let _ = instance.report_error(e);
 					Task::perform(recv_next(net_rx.clone()), |ev| {
-							Message::Net(Box::new(crate::app::message::NetMessage::NetPolled(Box::new(ev))))
+						Message::Net(Box::new(crate::app::message::NetMessage::NetPolled(Box::new(ev))))
 					})
 				}
 			}
 		} else {
 			Task::perform(recv_next(net_rx), |ev| {
-					Message::Net(Box::new(crate::app::message::NetMessage::NetPolled(Box::new(ev))))
+				Message::Net(Box::new(crate::app::message::NetMessage::NetPolled(Box::new(ev))))
 			})
 		};
 
