@@ -60,8 +60,12 @@ impl ConfirmModal {
 
 	pub fn update(&mut self, app: &mut Chatty, message: ConfirmModalMessage) -> Task<Message> {
 		match message {
-			ConfirmModalMessage::Confirm => app.update_confirm_modal_confirmed(self.clone()),
+			ConfirmModalMessage::Confirm => {
+				app.state.ui.overlay_dismissed = true;
+				app.update_confirm_modal_confirmed(self.clone())
+			}
 			ConfirmModalMessage::Cancel => {
+				app.state.ui.overlay_dismissed = true;
 				app.state.ui.active_overlay = None;
 				Task::none()
 			}

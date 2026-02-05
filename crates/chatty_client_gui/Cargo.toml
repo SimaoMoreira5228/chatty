@@ -27,7 +27,7 @@ open = "5.3"
 rand = "0.9"
 reqwest = { version = "0.13", features = ["native-tls"] }
 rfd = "0.17"
-rust-embed = { workspace = true, features = ["compression", "include-exclude"] }
+rust-embed = { workspace = true, features = ["include-exclude"] }
 rust-i18n = "3.1.5"
 serde = { workspace = true }
 serde_json = { workspace = true }

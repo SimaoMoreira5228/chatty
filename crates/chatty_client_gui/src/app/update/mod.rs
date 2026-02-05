@@ -1,3 +1,4 @@
+#[cfg(debug_assertions)]
 use std::time::Duration;
 
 use iced::Task;
@@ -46,7 +47,8 @@ impl Chatty {
 		match message {
 			Message::AnimationTick(instant) => {
 				self.state.ui.animation_clock = instant;
-				if cfg!(debug_assertions) {
+				#[cfg(debug_assertions)]
+				{
 					self.state.ui.fps_frame_count = self.state.ui.fps_frame_count.saturating_add(1);
 					let elapsed = instant.duration_since(self.state.ui.fps_last_instant);
 					if elapsed >= Duration::from_secs(1) {

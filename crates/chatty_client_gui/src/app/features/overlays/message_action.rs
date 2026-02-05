@@ -40,6 +40,7 @@ impl MessageActionMenu {
 	}
 
 	pub fn update(&mut self, app: &mut Chatty, message: MessageActionMenuMessage) -> Task<Message> {
+		app.state.ui.overlay_dismissed = true;
 		match message {
 			MessageActionMenuMessage::Reply => app.update_reply_to_message(
 				self.room.clone(),

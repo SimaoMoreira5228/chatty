@@ -165,7 +165,10 @@ pub fn build_client_config(settings: &GuiSettings) -> Result<ClientConfigV1, Str
 	} else {
 		let endpoint = settings.server_endpoint_quic.trim();
 		if endpoint.is_empty() {
-			ClientConfigV1::default()
+			let endpoint = ClientConfigV1::default_server_endpoint_quic();
+			validate_quic_endpoint(endpoint).map_err(|err| format!("Invalid build-time server endpoint: {err}"))?;
+			ClientConfigV1::from_quic_endpoint(endpoint)
+				.map_err(|err| format!("Invalid build-time server endpoint: {err}"))?
 		} else {
 			validate_quic_endpoint(endpoint).map_err(|err| format!("Invalid server endpoint: {err}"))?;
 			ClientConfigV1::from_quic_endpoint(endpoint).map_err(|err| format!("Invalid server endpoint: {err}"))?

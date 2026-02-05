@@ -37,8 +37,7 @@ fn main() {
 
 	fs::write(out_file, contents).expect("failed to write locales_generated.rs");
 
-	#[cfg(target_os = "windows")]
-	{
+	if env::var("CARGO_CFG_TARGET_OS").ok().as_deref() == Some("windows") {
 		let icon_path = "assets/app-icons/chatty.ico";
 		if Path::new(icon_path).exists() {
 			let mut res = winres::WindowsResource::new();
