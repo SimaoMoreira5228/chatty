@@ -70,6 +70,9 @@ message Hello {
   // Optional Kick username/login.
   string kick_username = 10;
 
+  // Optional Kick refresh token for long-lived sessions.
+  string kick_refresh_token = 12;
+
   // Supported codecs by the client (optional; defaults to protobuf-only).
   repeated Codec supported_codecs = 20;
 

@@ -87,11 +87,6 @@ pub struct PersistenceSettings {
 /// Twitch settings loaded by the server.
 #[derive(Debug, Clone, Default)]
 pub struct TwitchSettings {
-	/// Twitch App Client ID.
-	pub client_id: Option<String>,
-	/// Twitch App Client Secret (optional; used for token refresh).
-	pub client_secret: Option<SecretString>,
-
 	/// Disable automatic refresh; expiry becomes a hard error.
 	pub disable_refresh: bool,
 
@@ -177,8 +172,6 @@ struct FilePersistenceSettings {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 struct FileTwitchSettings {
-	client_id: Option<String>,
-	client_secret: Option<String>,
 	user_access_token: Option<String>,
 	refresh_token: Option<String>,
 	disable_refresh: Option<bool>,
@@ -206,12 +199,6 @@ struct FileKickSettings {
 impl ServerConfig {
 	fn from_file(file: FileConfig) -> Self {
 		let twitch = TwitchSettings {
-			client_id: file.twitch.client_id.filter(|s| !s.trim().is_empty()),
-			client_secret: file
-				.twitch
-				.client_secret
-				.filter(|s| !s.trim().is_empty())
-				.map(SecretString::new),
 			disable_refresh: file.twitch.disable_refresh.unwrap_or(false),
 			user_access_token: file
 				.twitch
@@ -438,22 +425,6 @@ fn apply_env_overrides(cfg: &mut ServerConfig) {
 		info!(retention, "persistence: replay_retention_minutes overridden by env");
 	}
 
-	if let Ok(v) = std::env::var("CHATTY_TWITCH_CLIENT_ID") {
-		let v = v.trim().to_string();
-		if !v.is_empty() {
-			cfg.twitch.client_id = Some(v);
-			info!("twitch config: client_id overridden by env");
-		}
-	}
-
-	if let Ok(v) = std::env::var("CHATTY_TWITCH_CLIENT_SECRET") {
-		let v = v.trim().to_string();
-		if !v.is_empty() {
-			cfg.twitch.client_secret = Some(SecretString::new(v));
-			info!("twitch config: client_secret overridden by env");
-		}
-	}
-
 	if let Ok(v) = std::env::var("CHATTY_TWITCH_DISABLE_REFRESH")
 		&& let Some(disable) = parse_env_bool(&v)
 	{
@@ -499,10 +470,12 @@ fn apply_env_overrides(cfg: &mut ServerConfig) {
 		debug!("twitch config: reconnect_max_delay overridden by env");
 	}
 
-	if cfg.twitch.client_id.as_ref().map(|v| !v.trim().is_empty()).unwrap_or(false) {
-		info!("twitch config: client_id provided by server config");
+	if let Ok(v) = std::env::var("TWITCH_CLIENT_ID")
+		&& !v.trim().is_empty()
+	{
+		info!("twitch config: client_id provided by env");
 	} else {
-		warn!("twitch config: no client_id in server config (waiting for user OAuth)");
+		warn!("twitch config: no client_id in env (waiting for user OAuth)");
 	}
 
 	if let (Some(min), Some(max)) = (cfg.twitch.reconnect_min_delay, cfg.twitch.reconnect_max_delay)

@@ -67,6 +67,9 @@ impl PlatformAdapter for NullAdapter {
 				AdapterControl::QueryPermissions { resp, .. } => {
 					let _ = resp.send(PermissionsInfo::default());
 				}
+				AdapterControl::QueryAuth { resp } => {
+					let _ = resp.send(None);
+				}
 				AdapterControl::Shutdown => {
 					info!(%platform, "null adapter received Shutdown");
 					break;

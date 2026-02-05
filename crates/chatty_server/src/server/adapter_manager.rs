@@ -205,6 +205,20 @@ impl AdapterManager {
 		}
 	}
 
+	/// Query current auth snapshot for a platform adapter (best-effort).
+	pub async fn query_auth(&self, platform: Platform) -> Option<AdapterAuth> {
+		let ctrl = self.control_by_platform.get(&platform)?;
+		let (tx, rx) = oneshot::channel();
+		if ctrl.send(AdapterControl::QueryAuth { resp: tx }).await.is_err() {
+			return None;
+		}
+
+		match tokio::time::timeout(std::time::Duration::from_secs(2), rx).await {
+			Ok(Ok(result)) => result,
+			_ => None,
+		}
+	}
+
 	/// Apply join/leave changes based on topics that crossed refcount thresholds.
 	pub async fn apply_global_joins_leaves(&self, topics_to_join: &[String], topics_to_leave: &[String]) {
 		let mut join_rooms: Vec<RoomKey> = Vec::new();

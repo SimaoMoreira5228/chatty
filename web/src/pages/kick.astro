@@ -150,6 +150,8 @@ import "../styles/globals.css";
 
 			const payload = {
 				oauth_token: params.get("oauth_token") ?? "",
+				refresh_token: params.get("refresh_token") ?? "",
+				expires_in: params.get("expires_in") ?? "",
 				user_id: params.get("user_id") ?? "",
 				username: params.get("username") ?? "",
 			};

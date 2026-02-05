@@ -289,6 +289,7 @@ impl TwitchEventSubAdapter {
 		match auth {
 			AdapterAuth::UserAccessToken {
 				access_token,
+				refresh_token: _,
 				user_id: _,
 				expires_in,
 			} => {
@@ -993,6 +994,23 @@ impl TwitchEventSubAdapter {
 			AdapterControl::QueryPermissions { room, auth: _, resp } => {
 				let result = self.permissions_for_room(&room).await;
 				let _ = resp.send(result);
+			}
+
+			AdapterControl::QueryAuth { resp } => {
+				let token = self.cfg.user_access_token.expose().trim();
+				if token.is_empty() {
+					let _ = resp.send(None);
+				} else {
+					let auth = AdapterAuth::TwitchUser {
+						client_id: self.cfg.client_id.clone(),
+						access_token: self.cfg.user_access_token.clone(),
+						refresh_token: self.cfg.refresh_token.clone(),
+						user_id: self.token_user_id.clone(),
+						username: None,
+						expires_in: self.auth_expires_at.and_then(|at| at.duration_since(SystemTime::now()).ok()),
+					};
+					let _ = resp.send(Some(auth));
+				}
 			}
 
 			AdapterControl::Shutdown => {}

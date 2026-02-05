@@ -68,14 +68,6 @@ replay_capacity = 2048
 replay_retention_minutes = 0
 
 [twitch]
-# Twitch Helix client id (a.k.a. "Client ID").
-# Env override: CHATTY_TWITCH_CLIENT_ID
-client_id = ""
-
-# Twitch client secret (required for token refresh).
-# Env override: CHATTY_TWITCH_CLIENT_SECRET
-client_secret = ""
-
 # Twitch user access token (bearer) for server-owned ingestion.
 # Env override: CHATTY_TWITCH_USER_ACCESS_TOKEN
 user_access_token = ""

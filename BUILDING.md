@@ -45,7 +45,14 @@ Notes for the client:
 
 Server — runtime configuration
 
-The server behavior is driven by a configuration file and environment variable overrides. See `crates/chatty_server/config/chatty_server.toml.example` for an example configuration.
+The server behavior is driven by a configuration file plus environment variables. See `crates/chatty_server/config/chatty_server.toml.example` for an example configuration.
+
+Required OAuth client credentials (server runtime env):
+
+- TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET
+- KICK_CLIENT_ID / KICK_CLIENT_SECRET
+
+These are read from the environment only (no config file fallback).
 
 Notable runtime env var overrides:
 

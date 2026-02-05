@@ -245,6 +245,11 @@ pub fn build_client_config(settings: &GuiSettings) -> Result<ClientConfigV1, Str
 			cfg.kick_user_oauth_token = Some(token.to_string());
 		}
 
+		let refresh = identity.refresh_token.trim();
+		if !refresh.is_empty() {
+			cfg.kick_refresh_token = Some(refresh.to_string());
+		}
+
 		let user_id = identity.user_id.trim();
 		if !user_id.is_empty() {
 			cfg.kick_user_id = Some(user_id.to_string());

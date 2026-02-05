@@ -45,8 +45,14 @@ export const GET: APIRoute = async ({ cookies, redirect, url }) => {
 			return new Response(`Kick token exchange failed: ${text}`, { status: 502 });
 		}
 
-		const tokenJson = (await tokenResp.json()) as { access_token?: string };
+		const tokenJson = (await tokenResp.json()) as {
+			access_token?: string;
+			refresh_token?: string;
+			expires_in?: number;
+		};
 		const accessToken = tokenJson.access_token ?? "";
+		const refreshToken = tokenJson.refresh_token ?? "";
+		const expiresIn = tokenJson.expires_in ?? 0;
 		if (!accessToken) {
 			console.error("Kick OAuth token missing in response");
 			return new Response("Kick token missing", { status: 502 });
@@ -72,7 +78,13 @@ export const GET: APIRoute = async ({ cookies, redirect, url }) => {
 			console.warn("Kick user parse failed:", e);
 		}
 
-		const params = new URLSearchParams({ oauth_token: accessToken, user_id: userId, username: username });
+		const params = new URLSearchParams({
+			oauth_token: accessToken,
+			refresh_token: refreshToken,
+			expires_in: expiresIn ? String(expiresIn) : "",
+			user_id: userId,
+			username: username,
+		});
 
 		cookies.delete("chatty_kick_state", { path: "/" });
 		cookies.delete("chatty_kick_verifier", { path: "/" });

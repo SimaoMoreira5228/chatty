@@ -46,6 +46,11 @@ pub enum AdapterControl {
 		resp: oneshot::Sender<PermissionsInfo>,
 	},
 
+	/// Query current adapter auth snapshot (best-effort).
+	QueryAuth {
+		resp: oneshot::Sender<Option<AdapterAuth>>,
+	},
+
 	/// Request a graceful shutdown.
 	Shutdown,
 }
@@ -133,6 +138,7 @@ pub enum AdapterAuth {
 	/// OAuth-style bearer token.
 	UserAccessToken {
 		access_token: SecretString,
+		refresh_token: Option<SecretString>,
 		user_id: Option<String>,
 		expires_in: Option<Duration>,
 	},

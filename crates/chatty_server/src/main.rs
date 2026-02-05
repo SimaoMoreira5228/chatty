@@ -188,11 +188,24 @@ async fn main() -> anyhow::Result<()> {
 		endpoint
 	};
 
+	let twitch_client_id = std::env::var("TWITCH_CLIENT_ID").ok().filter(|v| !v.trim().is_empty());
+	let twitch_client_secret = std::env::var("TWITCH_CLIENT_SECRET")
+		.ok()
+		.filter(|v| !v.trim().is_empty())
+		.map(chatty_platform::SecretString::new);
+	let kick_client_id = std::env::var("KICK_CLIENT_ID").ok().filter(|v| !v.trim().is_empty());
+	let kick_client_secret = std::env::var("KICK_CLIENT_SECRET")
+		.ok()
+		.filter(|v| !v.trim().is_empty())
+		.map(chatty_platform::SecretString::new);
+
 	let conn_settings = ConnectionSettings {
 		auth_token: server_cfg.auth_token.clone(),
 		auth_hmac_secret: server_cfg.server.auth_hmac_secret.clone(),
-		twitch_client_id: server_cfg.twitch.client_id.clone(),
-		twitch_client_secret: server_cfg.twitch.client_secret.clone(),
+		twitch_client_id: twitch_client_id.clone(),
+		twitch_client_secret: twitch_client_secret.clone(),
+		kick_client_id: kick_client_id.clone(),
+		kick_client_secret: kick_client_secret.clone(),
 		command_rate_limit_per_conn_burst: server_cfg.server.command_rate_limit_per_conn_burst,
 		command_rate_limit_per_conn_per_minute: server_cfg.server.command_rate_limit_per_conn_per_minute,
 		command_rate_limit_per_topic_burst: server_cfg.server.command_rate_limit_per_topic_burst,
@@ -239,12 +252,12 @@ async fn main() -> anyhow::Result<()> {
 	let mut platform_adapters: Vec<Box<dyn chatty_platform::PlatformAdapter>> = Vec::new();
 
 	{
-		let client_id = server_cfg.twitch.client_id.clone().unwrap_or_default();
+		let client_id = twitch_client_id.clone().unwrap_or_default();
 		if server_cfg.twitch.user_access_token.is_some() {
 			warn!("twitch config: user_access_token ignored; user OAuth is required per-connection");
 		}
 		let mut twitch_cfg = TwitchConfig::new(client_id, SecretString::new(String::new()));
-		if let Some(secret) = server_cfg.twitch.client_secret.clone() {
+		if let Some(secret) = twitch_client_secret.clone() {
 			twitch_cfg.client_secret = Some(secret);
 		}
 		if let Some(refresh_token) = server_cfg.twitch.refresh_token.clone() {

@@ -77,6 +77,9 @@ pub struct ClientConfigV1 {
 	/// Optional Kick username/login.
 	pub kick_username: Option<String>,
 
+	/// Optional Kick refresh token (for long-lived sessions).
+	pub kick_refresh_token: Option<String>,
+
 	/// Maximum inbound/outbound frame size.
 	pub max_frame_bytes: usize,
 
@@ -132,6 +135,7 @@ impl Default for ClientConfigV1 {
 			kick_user_oauth_token: None,
 			kick_user_id: None,
 			kick_username: None,
+			kick_refresh_token: None,
 			max_frame_bytes: DEFAULT_MAX_FRAME_SIZE,
 			connect_timeout: Duration::from_secs(15),
 		}
@@ -274,6 +278,7 @@ impl SessionControl {
 			kick_user_oauth_token: cfg.kick_user_oauth_token.unwrap_or_default(),
 			kick_user_id: cfg.kick_user_id.unwrap_or_default(),
 			kick_username: cfg.kick_username.unwrap_or_default(),
+			kick_refresh_token: cfg.kick_refresh_token.unwrap_or_default(),
 			supported_codecs: vec![pb::Codec::Protobuf as i32],
 			preferred_codec: pb::Codec::Protobuf as i32,
 		};

@@ -8,6 +8,7 @@ pub use framing::{
 };
 
 /// Generated protobuf types (`chatty.v1`).
+#[allow(clippy::large_enum_variant)]
 pub mod pb {
 	include!(concat!(env!("OUT_DIR"), "/chatty.v1.rs"));
 }

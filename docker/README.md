@@ -33,6 +33,8 @@ Create `docker/.env` based on the example:
 - `KICK_REDIRECT_URI`
 - `KICK_SCOPES`
 
+The server also reads TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET and KICK_CLIENT_ID / KICK_CLIENT_SECRET from the environment.
+
 ## Ports
 
 - `18203/udp` QUIC server (exposed from host)

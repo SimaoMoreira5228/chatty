@@ -8,7 +8,9 @@ use std::time::{Instant, SystemTime};
 
 use anyhow::{Context as _, anyhow};
 use chatty_domain::{Platform, RoomKey, RoomTopic};
-use chatty_platform::kick::validate_user_token as validate_kick_user_token;
+use chatty_platform::kick::{
+	refresh_user_token as refresh_kick_user_token, validate_user_token as validate_kick_user_token,
+};
 use chatty_platform::twitch::{refresh_user_token, validate_user_token};
 use chatty_platform::{
 	AdapterAuth, AssetBundle, AssetProvider, AssetScale, AssetScope, CommandError, CommandRequest, IngestPayload,
@@ -217,6 +219,8 @@ pub struct ConnectionSettings {
 
 	pub twitch_client_id: Option<String>,
 	pub twitch_client_secret: Option<chatty_platform::SecretString>,
+	pub kick_client_id: Option<String>,
+	pub kick_client_secret: Option<chatty_platform::SecretString>,
 
 	pub command_rate_limit_per_conn_burst: u32,
 	pub command_rate_limit_per_conn_per_minute: u32,
@@ -233,6 +237,8 @@ impl Default for ConnectionSettings {
 			auth_hmac_secret: None,
 			twitch_client_id: None,
 			twitch_client_secret: None,
+			kick_client_id: None,
+			kick_client_secret: None,
 			command_rate_limit_per_conn_burst: 0,
 			command_rate_limit_per_conn_per_minute: 0,
 			command_rate_limit_per_topic_burst: 0,
@@ -479,11 +485,24 @@ pub async fn handle_connection(
 		let validated = match validate_user_token(&user_oauth).await {
 			Ok(v) => v,
 			Err(e) => {
-				let refresh_client_id = if !hello_client_id.is_empty() {
+				let mut refresh_client_id = if !hello_client_id.is_empty() {
 					Some(hello_client_id.to_string())
 				} else {
 					settings.twitch_client_id.clone()
 				};
+
+				if refresh_token.is_empty()
+					&& let Some(AdapterAuth::TwitchUser {
+						client_id,
+						refresh_token: Some(token),
+						..
+					}) = adapter_manager.query_auth(Platform::Twitch).await
+				{
+					refresh_token = token.expose().to_string();
+					if refresh_client_id.is_none() && !client_id.trim().is_empty() {
+						refresh_client_id = Some(client_id);
+					}
+				}
 
 				if !refresh_token.is_empty()
 					&& let Some(client_id) = refresh_client_id
@@ -604,35 +623,116 @@ pub async fn handle_connection(
 	}
 
 	let mut kick_auth: Option<AdapterAuth> = None;
-	let kick_oauth = hello.kick_user_oauth_token.trim();
+	let mut kick_oauth = hello.kick_user_oauth_token.trim().to_string();
 	if !kick_oauth.is_empty() {
-		let kick_user_id = hello.kick_user_id.trim();
-		if let Err(e) = validate_kick_user_token(kick_oauth).await {
-			warn!(conn_id, error = %e, "invalid kick oauth token");
-			send_envelope(
-				&mut control_send,
-				pb::Envelope {
-					version: PROTOCOL_VERSION,
-					request_id: String::new(),
-					msg: Some(pb::envelope::Msg::Error(pb::Error {
-						code: "UNAUTHORIZED".to_string(),
-						message: "invalid kick oauth token".to_string(),
-						topic: String::new(),
-						request_id: String::new(),
-					})),
-				},
-			)
-			.await
-			.ok();
-			return Ok(());
+		let mut kick_user_id = hello.kick_user_id.trim().to_string();
+		let mut kick_refresh = hello.kick_refresh_token.trim().to_string();
+
+		let validated = match validate_kick_user_token(&kick_oauth).await {
+			Ok(v) => v,
+			Err(e) => {
+				if kick_refresh.is_empty()
+					&& let Some(AdapterAuth::UserAccessToken {
+						refresh_token: Some(token),
+						..
+					}) = adapter_manager.query_auth(Platform::Kick).await
+				{
+					kick_refresh = token.expose().to_string();
+				}
+
+				if !kick_refresh.is_empty()
+					&& let Some(client_id) = settings.kick_client_id.as_ref()
+					&& let Some(client_secret) = settings.kick_client_secret.as_ref()
+				{
+					match refresh_kick_user_token(client_id, client_secret.expose(), &kick_refresh).await {
+						Ok(resp) => {
+							kick_oauth = resp.access_token;
+							if let Some(new_refresh) = resp.refresh_token {
+								kick_refresh = new_refresh;
+							}
+
+							match validate_kick_user_token(&kick_oauth).await {
+								Ok(v) => v,
+								Err(e) => {
+									warn!(conn_id, error = %e, "invalid kick oauth token after refresh");
+									send_envelope(
+										&mut control_send,
+										pb::Envelope {
+											version: PROTOCOL_VERSION,
+											request_id: String::new(),
+											msg: Some(pb::envelope::Msg::Error(pb::Error {
+												code: "UNAUTHORIZED".to_string(),
+												message: "invalid kick oauth token".to_string(),
+												topic: String::new(),
+												request_id: String::new(),
+											})),
+										},
+									)
+									.await
+									.ok();
+									return Ok(());
+								}
+							}
+						}
+						Err(e) => {
+							warn!(conn_id, error = %e, "kick oauth refresh failed");
+							send_envelope(
+								&mut control_send,
+								pb::Envelope {
+									version: PROTOCOL_VERSION,
+									request_id: String::new(),
+									msg: Some(pb::envelope::Msg::Error(pb::Error {
+										code: "UNAUTHORIZED".to_string(),
+										message: "invalid kick oauth token".to_string(),
+										topic: String::new(),
+										request_id: String::new(),
+									})),
+								},
+							)
+							.await
+							.ok();
+							return Ok(());
+						}
+					}
+				} else {
+					warn!(conn_id, error = %e, "invalid kick oauth token");
+					send_envelope(
+						&mut control_send,
+						pb::Envelope {
+							version: PROTOCOL_VERSION,
+							request_id: String::new(),
+							msg: Some(pb::envelope::Msg::Error(pb::Error {
+								code: "UNAUTHORIZED".to_string(),
+								message: "invalid kick oauth token".to_string(),
+								topic: String::new(),
+								request_id: String::new(),
+							})),
+						},
+					)
+					.await
+					.ok();
+					return Ok(());
+				}
+			}
+		};
+
+		if kick_user_id.trim().is_empty()
+			&& let Some(user) = validated.user.as_ref()
+		{
+			kick_user_id = user.user_id.to_string();
 		}
 
 		let auth = AdapterAuth::UserAccessToken {
 			access_token: SecretString::new(kick_oauth.to_string()),
-			user_id: if kick_user_id.is_empty() {
+			refresh_token: if kick_refresh.trim().is_empty() {
 				None
 			} else {
-				Some(kick_user_id.to_string())
+				Some(SecretString::new(kick_refresh))
+			},
+			user_id: if kick_user_id.trim().is_empty() {
+				None
+			} else {
+				Some(kick_user_id)
 			},
 			expires_in: None,
 		};

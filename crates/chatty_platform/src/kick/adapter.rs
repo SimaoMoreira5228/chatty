@@ -1069,6 +1069,9 @@ impl PlatformAdapter for KickEventAdapter {
 							let result = this.permissions_for_room(&room, auth).await;
 							let _ = resp.send(result);
 						}
+						AdapterControl::QueryAuth { resp } => {
+							let _ = resp.send(None);
+						}
 						AdapterControl::Shutdown => {
 							info!(%platform, "kick adapter received Shutdown");
 							break 'outer;

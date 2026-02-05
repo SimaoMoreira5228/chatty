@@ -157,6 +157,10 @@ async fn main() -> anyhow::Result<()> {
 			let v = v.trim().to_string();
 			(!v.is_empty()).then_some(v)
 		}),
+		kick_refresh_token: std::env::var("CHATTY_CLIENT_KICK_REFRESH_TOKEN").ok().and_then(|v| {
+			let v = v.trim().to_string();
+			(!v.is_empty()).then_some(v)
+		}),
 		..ClientConfigV1::default()
 	};
 

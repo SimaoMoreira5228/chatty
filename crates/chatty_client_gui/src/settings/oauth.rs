@@ -14,6 +14,7 @@ pub struct KickOAuthInfo {
 	pub username: String,
 	pub user_id: String,
 	pub oauth_token: String,
+	pub refresh_token: String,
 }
 
 pub fn parse_twitch_oauth_blob(blob: &str) -> Option<TwitchOAuthInfo> {
@@ -77,6 +78,12 @@ pub fn parse_kick_oauth_blob(blob: &str) -> Option<KickOAuthInfo> {
 		.unwrap_or_default()
 		.trim()
 		.to_string();
+	let refresh_token = value
+		.get("refresh_token")
+		.and_then(|v| v.as_str())
+		.unwrap_or_default()
+		.trim()
+		.to_string();
 	if oauth_token.is_empty() {
 		return None;
 	}
@@ -87,6 +94,7 @@ pub fn parse_kick_oauth_blob(blob: &str) -> Option<KickOAuthInfo> {
 		username,
 		user_id,
 		oauth_token,
+		refresh_token,
 	})
 }
 

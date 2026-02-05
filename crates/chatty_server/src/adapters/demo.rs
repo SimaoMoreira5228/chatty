@@ -171,6 +171,10 @@ impl PlatformAdapter for DemoAdapter {
 							let _ = resp.send(PermissionsInfo::default());
 						}
 
+						AdapterControl::QueryAuth { resp } => {
+							let _ = resp.send(None);
+						}
+
 						AdapterControl::Shutdown => {
 							info!(%platform, "demo adapter received Shutdown");
 							break;
