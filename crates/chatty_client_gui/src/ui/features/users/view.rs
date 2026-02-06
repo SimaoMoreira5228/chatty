@@ -20,12 +20,13 @@ impl UsersView {
 			&& let Some(tab) = app.state.tabs.get(&tab_id)
 		{
 			title = format!("Users • {}", tab.title);
-			let mut users: Vec<(String, usize)> = tab.user_counts.iter().map(|(k, v)| (k.clone(), *v)).collect();
+			let mut users: Vec<(smol_str::SmolStr, usize)> =
+				tab.user_counts.iter().map(|(k, v)| (k.clone(), *v)).collect();
 			users.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
 			let mut any = false;
 			for (user, count) in users {
-				if !filter.is_empty() && !user.to_ascii_lowercase().contains(&filter) {
+				if !filter.is_empty() && !user.as_str().to_ascii_lowercase().contains(&filter) {
 					continue;
 				}
 				any = true;
@@ -38,7 +39,7 @@ impl UsersView {
 				rows = rows.push(
 					container(
 						row![
-							text(user).color(palette.text).width(Length::Fill),
+							text(user.to_string()).color(palette.text).width(Length::Fill),
 							text(format!("{count} {count_label}")).color(palette.text_dim),
 						]
 						.align_y(Alignment::Center)

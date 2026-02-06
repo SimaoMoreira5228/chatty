@@ -399,21 +399,23 @@ mod tests {
 	use std::time::SystemTime;
 
 	use super::*;
+	use smallvec::SmallVec;
+	use smol_str::SmolStr;
 
 	fn make_message(room: RoomKey, user_login: &str, server_id: &str) -> ChatMessageUi {
 		ChatMessageUi {
 			time: SystemTime::UNIX_EPOCH,
 			platform: room.platform,
 			room,
-			key: format!("key-{server_id}"),
-			server_message_id: Some(server_id.to_string()),
+			key: SmolStr::new(format!("key-{server_id}")),
+			server_message_id: Some(SmolStr::new(server_id)),
 			author_id: None,
-			user_login: user_login.to_string(),
+			user_login: SmolStr::new(user_login),
 			user_display: None,
-			display_name: user_login.to_string(),
-			text: "hi".to_string(),
-			tokens: vec!["hi".to_string()],
-			badge_ids: Vec::new(),
+			display_name: SmolStr::new(user_login),
+			text: SmolStr::new("hi"),
+			tokens: SmallVec::from_iter([SmolStr::new("hi")]),
+			badge_ids: SmallVec::new(),
 			emotes: Vec::new(),
 			platform_message_id: None,
 			reply: None,

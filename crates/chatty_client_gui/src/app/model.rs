@@ -6,8 +6,7 @@ use std::sync::Arc;
 use chatty_domain::RoomKey;
 use iced::Task;
 use iced::widget::{pane_grid, text_editor};
-#[cfg(not(test))]
-use tokio::sync::Semaphore;
+use smol_str::SmolStr;
 use tokio::sync::{Mutex, mpsc};
 
 use crate::app::assets::AssetManager;
@@ -32,7 +31,7 @@ pub struct Chatty {
 	pub(crate) assets: AssetManager,
 	pub(crate) pending_commands: Vec<PendingCommand>,
 	pub(crate) pending_delete_keys: HashSet<PendingDeleteKey>,
-	pub(crate) message_text_editors: HashMap<String, text_editor::Content>,
+	pub(crate) message_text_editors: HashMap<SmolStr, text_editor::Content>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -130,36 +129,32 @@ impl Chatty {
 			let image_loading_arc = Arc::clone(&instance.assets.image_loading);
 			let image_failed_arc = Arc::clone(&instance.assets.image_failed);
 			let svg_cache_arc = instance.assets.svg_cache.clone();
-			let (img_tx, mut img_rx) = mpsc::channel::<String>(1000);
-			let sem: std::sync::Arc<tokio::sync::Semaphore> = Arc::new(Semaphore::new(6));
+			let (img_tx, img_rx) = mpsc::channel::<String>(1000);
+			let img_rx = Arc::new(Mutex::new(img_rx));
 
 			instance.assets.image_fetch_sender = img_tx.clone();
 
-			tokio::spawn(async move {
-				let client = reqwest::Client::new();
-				while let Some(url) = img_rx.recv().await {
-					let img_cache = image_cache_arc.clone();
-					let animated_cache = animated_cache_arc.clone();
-					let image_loading = Arc::clone(&image_loading_arc);
-					let image_failed = Arc::clone(&image_failed_arc);
-					let svg_cache = svg_cache_arc.clone();
-					let sem = Arc::clone(&sem);
-					let client = client.clone();
-					tokio::spawn(async move {
-						let Ok(_permit) = sem.acquire().await else {
-							return;
+			let worker_count = 6usize;
+			for _ in 0..worker_count {
+				let img_cache = image_cache_arc.clone();
+				let animated_cache = animated_cache_arc.clone();
+				let image_loading = Arc::clone(&image_loading_arc);
+				let image_failed = Arc::clone(&image_failed_arc);
+				let svg_cache = svg_cache_arc.clone();
+				let rx = Arc::clone(&img_rx);
+				tokio::spawn(async move {
+					let client = reqwest::Client::new();
+					loop {
+						let url = {
+							let mut guard = rx.lock().await;
+							guard.recv().await
+						};
+						let Some(url) = url else {
+							break;
 						};
 
-						if img_cache.contains_key(&url) {
-							return;
-						}
-
-						if animated_cache.contains_key(&url) {
-							return;
-						}
-
-						if svg_cache.contains_key(&url) {
-							return;
+						if img_cache.contains_key(&url) || animated_cache.contains_key(&url) || svg_cache.contains_key(&url) {
+							continue;
 						}
 
 						image_loading.insert(url.clone());
@@ -173,26 +168,34 @@ impl Chatty {
 								Ok(Ok(resp)) => {
 									match tokio::time::timeout(std::time::Duration::from_secs(8), resp.bytes()).await {
 										Ok(Ok(bytes)) => {
-											let bytes = bytes.to_vec();
-											let bytes_to_decode = bytes.clone();
-											let animated = tokio::task::spawn_blocking(move || {
-												crate::app::images::decode_animated_image(&bytes_to_decode)
-											})
-											.await
-											.ok()
-											.flatten();
+											let maybe_animated = bytes.len() >= 12
+												&& (bytes.starts_with(b"GIF87a")
+													|| bytes.starts_with(b"GIF89a")
+													|| (bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP")));
+
+											let animated = if maybe_animated {
+												let bytes_for_decode = bytes.clone();
+												tokio::task::spawn_blocking(move || {
+													crate::app::images::decode_animated_image(bytes_for_decode.as_ref())
+												})
+												.await
+												.ok()
+												.flatten()
+											} else {
+												None
+											};
 
 											if let Some(animated) = animated {
 												animated_cache.insert(url.clone(), animated);
 												tracing::debug!(url = %url, attempt, "animated image decoded");
 												succeeded = true;
 											} else if url.ends_with(".svg") || bytes.windows(4).any(|w| w == b"<svg") {
-												let handle = iced::widget::svg::Handle::from_memory(bytes);
+												let handle = iced::widget::svg::Handle::from_memory(bytes.to_vec());
 												svg_cache.insert(url.clone(), handle);
 												tracing::debug!(url = %url, attempt, "svg image fetch succeeded");
 												succeeded = true;
 											} else {
-												let handle = iced::widget::image::Handle::from_bytes(bytes);
+												let handle = iced::widget::image::Handle::from_bytes(bytes.to_vec());
 												img_cache.insert(url.clone(), handle);
 												tracing::debug!(url = %url, attempt, "image fetch succeeded");
 												succeeded = true;
@@ -223,9 +226,9 @@ impl Chatty {
 							image_failed.remove(&url);
 							tracing::debug!(url = %url, "image marked healthy");
 						}
-					});
-				}
-			});
+					}
+				});
+			}
 		}
 
 		if let Some(layout) = instance.layout_store.load() {

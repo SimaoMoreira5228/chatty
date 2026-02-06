@@ -7,9 +7,11 @@ use std::time::SystemTime;
 use chatty_domain::{Platform, RoomKey};
 use iced::widget::pane_grid::Pane;
 use rust_i18n::t;
+use smallvec::SmallVec;
+use smol_str::SmolStr;
 
 use crate::app::features::chat::ChatPane;
-use crate::app::features::tabs::{ChatItem, TabModel, TabTarget};
+use crate::app::features::tabs::{ChatItem, TabModel};
 use crate::app::model::Chatty;
 use crate::app::types::InsertTarget;
 use crate::theme::Palette;
@@ -20,17 +22,17 @@ pub struct ChatMessageUi {
 	pub time: SystemTime,
 	pub platform: Platform,
 	pub room: RoomKey,
-	pub key: String,
-	pub server_message_id: Option<String>,
-	pub author_id: Option<String>,
-	pub user_login: String,
-	pub user_display: Option<String>,
-	pub display_name: String,
-	pub text: String,
-	pub tokens: Vec<String>,
-	pub badge_ids: Vec<String>,
+	pub key: SmolStr,
+	pub server_message_id: Option<SmolStr>,
+	pub author_id: Option<SmolStr>,
+	pub user_login: SmolStr,
+	pub user_display: Option<SmolStr>,
+	pub display_name: SmolStr,
+	pub text: SmolStr,
+	pub tokens: SmallVec<[SmolStr; 8]>,
+	pub badge_ids: SmallVec<[SmolStr; 4]>,
 	pub emotes: Vec<AssetRefUi>,
-	pub platform_message_id: Option<String>,
+	pub platform_message_id: Option<SmolStr>,
 	pub reply: Option<ChatReplyUi>,
 	pub is_deleted: bool,
 }
@@ -38,19 +40,19 @@ pub struct ChatMessageUi {
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct ChatReplyUi {
-	pub server_message_id: Option<String>,
-	pub platform_message_id: Option<String>,
-	pub user_id: Option<String>,
-	pub user_login: String,
-	pub user_display: Option<String>,
-	pub message: String,
+	pub server_message_id: Option<SmolStr>,
+	pub platform_message_id: Option<SmolStr>,
+	pub user_id: Option<SmolStr>,
+	pub user_login: SmolStr,
+	pub user_display: Option<SmolStr>,
+	pub message: SmolStr,
 }
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct SystemNoticeUi {
 	pub time: SystemTime,
-	pub text: String,
+	pub text: SmolStr,
 }
 
 #[derive(Debug, Clone)]
@@ -133,8 +135,8 @@ pub struct ChatMessageViewModel<'a> {
 
 #[derive(Debug, Clone)]
 pub struct ReplyPreviewUi {
-	pub display_name: String,
-	pub message: String,
+	pub display_name: SmolStr,
+	pub message: SmolStr,
 	pub is_own: bool,
 }
 
@@ -181,7 +183,7 @@ pub fn build_chat_pane_view_model<'a>(
 	let mut warnings = Vec::new();
 	let mut log_items = Vec::new();
 	let tab_ref = state.tab_id.and_then(|tid| app.state.tabs.get(&tid)).unwrap_or(tab);
-	let rooms = tab_ref.target.0.clone();
+	let rooms = &tab_ref.target.0;
 	let can_send = rooms
 		.iter()
 		.any(|rk| app.state.room_permissions.get(rk).map(|p| p.can_send).unwrap_or(true));
@@ -193,7 +195,7 @@ pub fn build_chat_pane_view_model<'a>(
 	let placeholder = composer_placeholder(connected, &rooms, can_send, &restrictions);
 
 	let mut platforms = HashSet::new();
-	for room in &rooms {
+	for room in rooms {
 		platforms.insert(room.platform);
 	}
 	let show_platform_badge = platforms.len() > 1;
@@ -209,8 +211,22 @@ pub fn build_chat_pane_view_model<'a>(
 		}
 	}
 
-	let badges_map = app.assets.get_badges_for_target(&app.state, &tab_ref.target);
 	let mut emotes_map_by_room: HashMap<RoomKey, Arc<HashMap<String, AssetRefUi>>> = HashMap::new();
+	let mut badges_map_by_room: HashMap<RoomKey, Arc<HashMap<String, AssetRefUi>>> = HashMap::new();
+	let mut reply_by_server: HashMap<&str, &ChatMessageUi> = HashMap::new();
+	let mut reply_by_platform: HashMap<&str, &ChatMessageUi> = HashMap::new();
+	let reply_start = tab_ref.log.items.len().saturating_sub(200);
+	for item in tab_ref.log.items.iter().skip(reply_start) {
+		if let ChatItem::ChatMessage(m) = item {
+			if let Some(id) = m.server_message_id.as_deref() {
+				reply_by_server.insert(id, m.as_ref());
+			}
+			if let Some(id) = m.platform_message_id.as_deref() {
+				reply_by_platform.insert(id, m.as_ref());
+			}
+		}
+	}
+
 	let anim_elapsed = app.state.ui.animation_clock.duration_since(app.state.ui.animation_start);
 	let reply_preview_for = |msg: &ChatMessageUi| -> Option<ReplyPreviewUi> {
 		let reply = msg.reply.as_ref()?;
@@ -222,22 +238,11 @@ pub fn build_chat_pane_view_model<'a>(
 		let mut message = reply.message.clone();
 
 		if display_name.trim().is_empty() || message.trim().is_empty() {
-			let found = tab_ref.log.items.iter().rev().find_map(|item| match item {
-				ChatItem::ChatMessage(m) => {
-					let server_match = reply
-						.server_message_id
-						.as_deref()
-						.and_then(|id| m.server_message_id.as_deref().map(|sid| sid == id))
-						.unwrap_or(false);
-					let platform_match = reply
-						.platform_message_id
-						.as_deref()
-						.and_then(|id| m.platform_message_id.as_deref().map(|pid| pid == id))
-						.unwrap_or(false);
-					if server_match || platform_match { Some(m) } else { None }
-				}
-				_ => None,
-			});
+			let found = reply
+				.server_message_id
+				.as_deref()
+				.and_then(|id| reply_by_server.get(id).copied())
+				.or_else(|| reply.platform_message_id.as_deref().and_then(|id| reply_by_platform.get(id).copied()));
 
 			if let Some(found) = found {
 				if display_name.trim().is_empty() {
@@ -250,11 +255,11 @@ pub fn build_chat_pane_view_model<'a>(
 		}
 
 		if display_name.trim().is_empty() {
-			display_name = "unknown".to_string();
+			display_name = SmolStr::new("unknown");
 		}
 
 		if message.trim().is_empty() {
-			message = "message unavailable".to_string();
+			message = SmolStr::new("message unavailable");
 		}
 
 		let is_own = app.state.gui_settings().identities.iter().any(|id| {
@@ -285,9 +290,15 @@ pub fn build_chat_pane_view_model<'a>(
 				let emotes_map = if let Some(existing) = emotes_map_by_room.get(&m.room) {
 					existing.clone()
 				} else {
-					let room_target = TabTarget(vec![m.room.clone()]);
-					let map = app.assets.get_emotes_for_target(&app.state, &room_target);
+					let map = app.assets.get_emotes_for_room(&app.state, &m.room);
 					emotes_map_by_room.insert(m.room.clone(), map.clone());
+					map
+				};
+				let badges_map = if let Some(existing) = badges_map_by_room.get(&m.room) {
+					existing.clone()
+				} else {
+					let map = app.assets.get_badges_for_room(&app.state, &m.room);
+					badges_map_by_room.insert(m.room.clone(), map.clone());
 					map
 				};
 				let is_pending =
@@ -300,7 +311,7 @@ pub fn build_chat_pane_view_model<'a>(
 					is_deleted: m.is_deleted,
 					anim_elapsed,
 					emotes_map,
-					badges_map: badges_map.clone(),
+					badges_map,
 					show_platform_badge,
 					platform: m.platform,
 					reply: reply_preview_for(m.as_ref()),

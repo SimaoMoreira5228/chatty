@@ -12,6 +12,8 @@ use crate::app::model::Chatty;
 use crate::app::net::recv_next;
 use crate::app::state::ConnectionStatus;
 use crate::app::view_models::{AssetBundleUi, ChatMessageUi};
+use smallvec::SmallVec;
+use smol_str::SmolStr;
 use crate::net::UiEvent;
 use crate::settings;
 
@@ -290,23 +292,27 @@ impl Chatty {
 				if let Ok(room) = RoomTopic::parse(&topic) {
 					let tokens = tokenize_message_text(&text);
 					let time = SystemTime::now();
-					let display_name = author_display.clone().unwrap_or_else(|| author_login.clone());
+					let display_name = author_display
+						.as_deref()
+						.unwrap_or(author_login.as_str())
+						.to_string();
 					let key = build_message_key(&room, server_message_id.as_deref(), platform_message_id.as_deref(), time);
+					let badge_ids: SmallVec<[SmolStr; 4]> = badge_ids.into_iter().map(SmolStr::new).collect();
 					let msg = ChatMessageUi {
 						time,
 						platform: room.platform,
 						room: room.clone(),
-						key,
-						server_message_id,
-						author_id,
-						user_login: author_login,
-						user_display: author_display,
-						display_name,
-						text,
+						key: SmolStr::new(key),
+						server_message_id: server_message_id.map(SmolStr::new),
+						author_id: author_id.map(SmolStr::new),
+						user_login: SmolStr::new(author_login),
+						user_display: author_display.map(SmolStr::new),
+						display_name: SmolStr::new(display_name),
+						text: SmolStr::new(text),
 						tokens,
 						badge_ids,
 						emotes,
-						platform_message_id,
+						platform_message_id: platform_message_id.map(SmolStr::new),
 						reply: *reply,
 						is_deleted: false,
 					};

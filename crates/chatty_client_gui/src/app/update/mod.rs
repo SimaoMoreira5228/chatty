@@ -1,4 +1,3 @@
-#[cfg(debug_assertions)]
 use std::time::Duration;
 
 use iced::Task;
@@ -46,6 +45,10 @@ impl Chatty {
 	pub fn update(&mut self, message: Message) -> Task<Message> {
 		match message {
 			Message::AnimationTick(instant) => {
+				const ANIMATION_TICK_MIN: Duration = Duration::from_millis(33);
+				if instant.duration_since(self.state.ui.animation_clock) < ANIMATION_TICK_MIN {
+					return Task::none();
+				}
 				self.state.ui.animation_clock = instant;
 				#[cfg(debug_assertions)]
 				{

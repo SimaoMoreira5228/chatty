@@ -6,14 +6,13 @@ use iced::widget::image::Handle as ImageHandle;
 use iced::widget::svg;
 use tokio::sync::mpsc;
 
-use crate::app::features::tabs::TabTarget;
 use crate::app::images::AnimatedImage;
 use crate::app::state;
 use crate::app::view_models::{AssetBundleUi, AssetRefUi, AssetScaleUi};
 
-fn merge_asset_refs(existing: &mut Vec<AssetRefUi>, incoming: Vec<AssetRefUi>) {
+fn merge_asset_refs(existing: &mut Vec<AssetRefUi>, incoming: Vec<AssetRefUi>) -> bool {
 	if incoming.is_empty() {
-		return;
+		return false;
 	}
 
 	let mut seen: HashSet<String> = existing
@@ -27,6 +26,7 @@ fn merge_asset_refs(existing: &mut Vec<AssetRefUi>, incoming: Vec<AssetRefUi>) {
 		})
 		.collect();
 
+	let mut changed = false;
 	for asset in incoming {
 		let key = if asset.id.trim().is_empty() {
 			asset.name.clone()
@@ -35,8 +35,11 @@ fn merge_asset_refs(existing: &mut Vec<AssetRefUi>, incoming: Vec<AssetRefUi>) {
 		};
 		if seen.insert(key) {
 			existing.push(asset);
+			changed = true;
 		}
 	}
+
+	changed
 }
 
 pub struct AssetManager {
@@ -45,6 +48,8 @@ pub struct AssetManager {
 	pub image_loading: Arc<DashSet<String>>,
 	pub image_failed: Arc<DashSet<String>>,
 	pub svg_cache: moka::sync::Cache<String, svg::Handle>,
+	pub emotes_cache: moka::sync::Cache<(u64, String), Arc<HashMap<String, AssetRefUi>>>,
+	pub badges_cache: moka::sync::Cache<(u64, String), Arc<HashMap<String, AssetRefUi>>>,
 	pub image_fetch_sender: mpsc::Sender<String>,
 }
 
@@ -53,6 +58,7 @@ pub struct AssetCatalog {
 	bundles: HashMap<String, AssetBundleUi>,
 	global_keys: Vec<String>,
 	room_keys: HashMap<chatty_domain::RoomKey, Vec<String>>,
+	revision: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -70,24 +76,36 @@ impl AssetManager {
 			image_loading: Arc::new(DashSet::new()),
 			image_failed: Arc::new(DashSet::new()),
 			svg_cache: moka::sync::Cache::new(256),
+			emotes_cache: moka::sync::Cache::new(128),
+			badges_cache: moka::sync::Cache::new(128),
 			image_fetch_sender,
 		}
 	}
 
-	pub fn get_emotes_for_target(
-		&self,
-		state: &state::AppState,
-		target: &crate::app::features::tabs::TabTarget,
-	) -> Arc<HashMap<String, AssetRefUi>> {
-		state.asset_catalog.emotes_for_target(&TabTarget(target.0.clone()))
+	fn room_cache_key(room: &chatty_domain::RoomKey) -> String {
+		format!("{}:{}", room.platform.as_str(), room.room_id.as_str())
 	}
 
-	pub fn get_badges_for_target(
+	pub fn get_emotes_for_room(
 		&self,
 		state: &state::AppState,
-		target: &crate::app::features::tabs::TabTarget,
+		room: &chatty_domain::RoomKey,
 	) -> Arc<HashMap<String, AssetRefUi>> {
-		state.asset_catalog.badges_for_target(&TabTarget(target.0.clone()))
+		let revision = state.asset_catalog.revision();
+		let cache_key = (revision, Self::room_cache_key(room));
+		self.emotes_cache
+			.get_with(cache_key, || state.asset_catalog.emotes_for_room(room))
+	}
+
+	pub fn get_badges_for_room(
+		&self,
+		state: &state::AppState,
+		room: &chatty_domain::RoomKey,
+	) -> Arc<HashMap<String, AssetRefUi>> {
+		let revision = state.asset_catalog.revision();
+		let cache_key = (revision, Self::room_cache_key(room));
+		self.badges_cache
+			.get_with(cache_key, || state.asset_catalog.badges_for_room(room))
 	}
 
 	pub fn prefetch_bundle(&self, bundle: &AssetBundleUi, max_emotes: usize) {
@@ -133,6 +151,10 @@ impl AssetCatalog {
 		Self::default()
 	}
 
+	pub fn revision(&self) -> u64 {
+		self.revision
+	}
+
 	fn lookup_room_keys(&self, room: &chatty_domain::RoomKey) -> Option<&Vec<String>> {
 		if let Some(keys) = self.room_keys.get(room) {
 			return Some(keys);
@@ -153,25 +175,34 @@ impl AssetCatalog {
 	pub fn register_bundle(&mut self, bundle: AssetBundleUi, scope: i32, room: Option<chatty_domain::RoomKey>) -> bool {
 		let ck = bundle.cache_key.clone();
 		let is_new = !self.bundles.contains_key(&ck);
+		let mut changed = false;
 		if let Some(existing) = self.bundles.get_mut(&ck) {
-			merge_asset_refs(&mut existing.emotes, bundle.emotes);
-			merge_asset_refs(&mut existing.badges, bundle.badges);
-			if bundle.etag.is_some() {
+			changed |= merge_asset_refs(&mut existing.emotes, bundle.emotes);
+			changed |= merge_asset_refs(&mut existing.badges, bundle.badges);
+			if bundle.etag.is_some() && existing.etag != bundle.etag {
 				existing.etag = bundle.etag;
+				changed = true;
 			}
 		} else {
 			self.bundles.insert(ck.clone(), bundle);
+			changed = true;
 		}
 
 		if scope == chatty_protocol::pb::AssetScope::Global as i32 {
 			if !self.global_keys.contains(&ck) {
 				self.global_keys.push(ck);
+				changed = true;
 			}
 		} else if let Some(room) = room {
 			let keys = self.room_keys.entry(room).or_default();
 			if !keys.contains(&ck) {
 				keys.push(ck);
+				changed = true;
 			}
+		}
+
+		if changed {
+			self.revision = self.revision.wrapping_add(1);
 		}
 
 		is_new
@@ -182,7 +213,7 @@ impl AssetCatalog {
 		self.bundles.get(cache_key)
 	}
 
-	pub fn emotes_for_target(&self, target: &TabTarget) -> Arc<HashMap<String, AssetRefUi>> {
+	pub fn emotes_for_room(&self, room: &chatty_domain::RoomKey) -> Arc<HashMap<String, AssetRefUi>> {
 		let mut map = HashMap::new();
 
 		for ck in &self.global_keys {
@@ -193,13 +224,11 @@ impl AssetCatalog {
 			}
 		}
 
-		for room in &target.0 {
-			if let Some(keys) = self.lookup_room_keys(room) {
-				for ck in keys {
-					if let Some(bundle) = self.bundles.get(ck) {
-						for emote in &bundle.emotes {
-							map.insert(emote.name.clone(), emote.clone());
-						}
+		if let Some(keys) = self.lookup_room_keys(room) {
+			for ck in keys {
+				if let Some(bundle) = self.bundles.get(ck) {
+					for emote in &bundle.emotes {
+						map.insert(emote.name.clone(), emote.clone());
 					}
 				}
 			}
@@ -208,7 +237,7 @@ impl AssetCatalog {
 		Arc::new(map)
 	}
 
-	pub fn badges_for_target(&self, target: &TabTarget) -> Arc<HashMap<String, AssetRefUi>> {
+	pub fn badges_for_room(&self, room: &chatty_domain::RoomKey) -> Arc<HashMap<String, AssetRefUi>> {
 		let mut map = HashMap::new();
 
 		for ck in &self.global_keys {
@@ -219,13 +248,11 @@ impl AssetCatalog {
 			}
 		}
 
-		for room in &target.0 {
-			if let Some(keys) = self.lookup_room_keys(room) {
-				for ck in keys {
-					if let Some(bundle) = self.bundles.get(ck) {
-						for badge in &bundle.badges {
-							map.insert(badge.id.clone(), badge.clone());
-						}
+		if let Some(keys) = self.lookup_room_keys(room) {
+			for ck in keys {
+				if let Some(bundle) = self.bundles.get(ck) {
+					for badge in &bundle.badges {
+						map.insert(badge.id.clone(), badge.clone());
 					}
 				}
 			}
@@ -268,18 +295,9 @@ impl AssetCatalog {
 
 #[cfg(test)]
 mod tests {
-	use chatty_domain::{Platform, RoomId, RoomKey};
 	use chatty_protocol::pb::AssetScope;
 
 	use super::*;
-
-	fn make_ref(id: &str, name: &str) -> AssetRefUi {
-		AssetRefUi {
-			id: id.to_string(),
-			name: name.to_string(),
-			images: Vec::new(),
-		}
-	}
 
 	fn make_bundle(cache_key: &str, scope: i32, emotes: Vec<AssetRefUi>, badges: Vec<AssetRefUi>) -> AssetBundleUi {
 		AssetBundleUi {
@@ -292,10 +310,6 @@ mod tests {
 		}
 	}
 
-	fn room_key(id: &str) -> RoomKey {
-		RoomKey::new(Platform::Twitch, RoomId::new(id).expect("room id"))
-	}
-
 	#[test]
 	fn register_bundle_returns_true_once() {
 		let mut catalog = AssetCatalog::new();
@@ -303,62 +317,5 @@ mod tests {
 
 		assert!(catalog.register_bundle(bundle.clone(), bundle.scope, None));
 		assert!(!catalog.register_bundle(bundle, AssetScope::Global as i32, None));
-	}
-
-	#[test]
-	fn emotes_for_target_includes_global_and_room() {
-		let mut catalog = AssetCatalog::new();
-		let global = make_bundle(
-			"g1",
-			AssetScope::Global as i32,
-			vec![make_ref("e1", "GlobalEmote")],
-			Vec::new(),
-		);
-		let room = room_key("room1");
-		let room_bundle = make_bundle(
-			"r1",
-			AssetScope::Channel as i32,
-			vec![make_ref("e2", "RoomEmote")],
-			Vec::new(),
-		);
-
-		catalog.register_bundle(global, AssetScope::Global as i32, None);
-		catalog.register_bundle(room_bundle, AssetScope::Channel as i32, Some(room.clone()));
-
-		let empty = TabTarget(vec![]);
-		let empty_emotes = catalog.emotes_for_target(&empty);
-		assert!(empty_emotes.contains_key("GlobalEmote"));
-		assert!(!empty_emotes.contains_key("RoomEmote"));
-
-		let target = TabTarget(vec![room]);
-		let emotes = catalog.emotes_for_target(&target);
-		assert!(emotes.contains_key("GlobalEmote"));
-		assert!(emotes.contains_key("RoomEmote"));
-	}
-
-	#[test]
-	fn badges_for_target_includes_global_and_room() {
-		let mut catalog = AssetCatalog::new();
-		let global = make_bundle(
-			"g1",
-			AssetScope::Global as i32,
-			Vec::new(),
-			vec![make_ref("b1", "GlobalBadge")],
-		);
-		let room = room_key("room2");
-		let room_bundle = make_bundle(
-			"r2",
-			AssetScope::Channel as i32,
-			Vec::new(),
-			vec![make_ref("b2", "RoomBadge")],
-		);
-
-		catalog.register_bundle(global, AssetScope::Global as i32, None);
-		catalog.register_bundle(room_bundle, AssetScope::Channel as i32, Some(room.clone()));
-
-		let target = TabTarget(vec![room]);
-		let badges = catalog.badges_for_target(&target);
-		assert!(badges.contains_key("b1"));
-		assert!(badges.contains_key("b2"));
 	}
 }

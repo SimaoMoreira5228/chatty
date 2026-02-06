@@ -3,6 +3,7 @@ use std::time::Instant;
 use chatty_domain::RoomKey;
 use iced::keyboard;
 use iced::widget::{pane_grid, scrollable, text_editor};
+use smol_str::SmolStr;
 
 use crate::app::features::chat::ChatPaneMessage;
 use crate::app::features::settings::SettingsMessage;
@@ -37,7 +38,7 @@ pub enum ChatMessage {
 	TimeoutUser(chatty_domain::RoomKey, String),
 	BanUser(chatty_domain::RoomKey, String),
 	Sent(Result<(), String>),
-	MessageTextEdit(String, text_editor::Action),
+	MessageTextEdit(SmolStr, text_editor::Action),
 }
 
 #[allow(dead_code)]

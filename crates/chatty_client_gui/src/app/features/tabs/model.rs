@@ -4,6 +4,7 @@ use std::collections::{HashMap, VecDeque};
 
 use chatty_domain::RoomKey;
 use iced::widget::pane_grid;
+use smol_str::SmolStr;
 
 use crate::app::features::chat::ChatPane;
 use crate::app::view_models::{ChatMessageUi, SystemNoticeUi};
@@ -54,7 +55,7 @@ pub struct TabModel {
 	pub title: String,
 	pub target: TabTarget,
 	pub log: ChatLog,
-	pub user_counts: HashMap<String, usize>,
+	pub user_counts: HashMap<SmolStr, usize>,
 	pub pinned: bool,
 	pub panes: pane_grid::State<ChatPane>,
 	pub focused_pane: Option<pane_grid::Pane>,

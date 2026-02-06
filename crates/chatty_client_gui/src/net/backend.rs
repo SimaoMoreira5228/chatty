@@ -16,6 +16,7 @@ use super::reconnect::{RECONNECT_RESET_AFTER, schedule_reconnect};
 use super::subscriptions::{reconcile_subscriptions_on_connect, topic_for_room, unsubscribe_topics};
 use super::types::UiEvent;
 use crate::app::view_models::{AssetImageUi, AssetRefUi, AssetScaleUi, ChatReplyUi};
+use smol_str::SmolStr;
 use crate::net::{dev_default_topics, should_dev_auto_connect};
 
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(3);
@@ -679,21 +680,21 @@ fn map_event_envelope_to_ui_event(ev: pb::EventEnvelope) -> Option<UiEvent> {
 				server_message_id: if reply.server_message_id.is_empty() {
 					None
 				} else {
-					Some(reply.server_message_id)
+					Some(SmolStr::new(reply.server_message_id))
 				},
 				platform_message_id: if reply.platform_message_id.is_empty() {
 					None
 				} else {
-					Some(reply.platform_message_id)
+					Some(SmolStr::new(reply.platform_message_id))
 				},
-				user_id: if reply.user_id.is_empty() { None } else { Some(reply.user_id) },
-				user_login: reply.user_login,
+				user_id: if reply.user_id.is_empty() { None } else { Some(SmolStr::new(reply.user_id)) },
+				user_login: SmolStr::new(reply.user_login),
 				user_display: if reply.user_display.is_empty() {
 					None
 				} else {
-					Some(reply.user_display)
+					Some(SmolStr::new(reply.user_display))
 				},
-				message: reply.message,
+				message: SmolStr::new(reply.message),
 			});
 
 			Some(UiEvent::ChatMessage {

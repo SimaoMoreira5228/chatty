@@ -3,9 +3,11 @@
 use std::time::SystemTime;
 
 use chatty_domain::RoomKey;
+use smallvec::SmallVec;
+use smol_str::SmolStr;
 
-pub fn tokenize_message_text(text: &str) -> Vec<String> {
-	text.split_whitespace().map(|t| t.to_string()).collect()
+pub fn tokenize_message_text(text: &str) -> SmallVec<[SmolStr; 8]> {
+	text.split_whitespace().map(SmolStr::new).collect()
 }
 
 pub fn build_message_key(
@@ -33,7 +35,9 @@ mod tests {
 	#[test]
 	fn tokenize_message_text_splits_whitespace() {
 		let tokens = tokenize_message_text("hello   world\nchatty");
-		assert_eq!(tokens, vec!["hello", "world", "chatty"]);
+		let expected: SmallVec<[SmolStr; 8]> =
+			SmallVec::from_iter([SmolStr::new("hello"), SmolStr::new("world"), SmolStr::new("chatty")]);
+		assert_eq!(tokens, expected);
 	}
 
 	#[test]

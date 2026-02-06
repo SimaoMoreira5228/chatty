@@ -58,54 +58,53 @@ impl<'a> ChatMessageView<'a> {
 		let is_word_char = |ch: char| ch.is_alphanumeric() || ch == '_';
 
 		for (i, token) in m.tokens.iter().enumerate() {
+			let token_str = token.as_str();
 			if i > 0 {
 				content_row = content_row.push(text(" ").color(text_color));
 			}
 
-			let exact_emote = inline_emote(token.as_str())
-				.cloned()
-				.or_else(|| self.model.emotes_map.get(token.as_str()).cloned());
+			let exact_emote = inline_emote(token_str).or_else(|| self.model.emotes_map.get(token_str));
 			if let Some(emote) = exact_emote
 				&& let Some(img) = emote.pick_image(AssetScaleUi::Two)
 			{
 				let (width, height) = self.emote_size(img, 32);
-				content_row = content_row.push(self.render_image(&img.url, width, height, Some(&emote.name)));
+				content_row = content_row.push(self.render_image(&img.url, width, height, Some(emote.name.as_str())));
 				continue;
 			}
 
 			let (core, prefix, suffix, has_word) = {
-				let trimmed = token.trim_matches(|ch: char| ch.is_ascii_punctuation());
-				if !trimmed.is_empty() && trimmed != token {
-					if let Some(start) = token.find(trimmed) {
+				let trimmed = token_str.trim_matches(|ch: char| ch.is_ascii_punctuation());
+				if !trimmed.is_empty() && trimmed != token_str {
+					if let Some(start) = token_str.find(trimmed) {
 						let end = start + trimmed.len();
-						let prefix = &token[..start];
-						let suffix = &token[end..];
+						let prefix = &token_str[..start];
+						let suffix = &token_str[end..];
 						(trimmed, prefix, suffix, true)
 					} else {
-						(token.as_str(), "", "", false)
+						(token_str, "", "", false)
 					}
 				} else {
 					let mut start = None;
 					let mut end = None;
-					for (idx, ch) in token.char_indices() {
+					for (idx, ch) in token_str.char_indices() {
 						if is_word_char(ch) {
 							start = Some(idx);
 							break;
 						}
 					}
-					for (idx, ch) in token.char_indices().rev() {
+					for (idx, ch) in token_str.char_indices().rev() {
 						if is_word_char(ch) {
 							end = Some(idx + ch.len_utf8());
 							break;
 						}
 					}
 					if let (Some(start), Some(end)) = (start, end) {
-						let core = &token[start..end];
-						let prefix = &token[..start];
-						let suffix = &token[end..];
+						let core = &token_str[start..end];
+						let prefix = &token_str[..start];
+						let suffix = &token_str[end..];
 						(core, prefix, suffix, true)
 					} else {
-						(token.as_str(), "", "", false)
+						(token_str, "", "", false)
 					}
 				}
 			};
@@ -116,14 +115,12 @@ impl<'a> ChatMessageView<'a> {
 					token_row = token_row.push(text(prefix).color(text_color));
 				}
 
-				let found_emote = inline_emote(core)
-					.cloned()
-					.or_else(|| self.model.emotes_map.get(core).cloned());
+				let found_emote = inline_emote(core).or_else(|| self.model.emotes_map.get(core));
 
 				let core_el: Element<'_, Message> = if let Some(emote) = found_emote {
 					if let Some(img) = emote.pick_image(AssetScaleUi::Two) {
 						let (width, height) = self.emote_size(img, 20);
-						self.render_image(&img.url, width, height, Some(&emote.name))
+						self.render_image(&img.url, width, height, Some(emote.name.as_str()))
 					} else {
 						text(core).color(text_color).into()
 					}
@@ -158,9 +155,9 @@ impl<'a> ChatMessageView<'a> {
 		let message_row: Element<'_, Message> = mouse_area(msg_row)
 			.on_right_press(Message::Chat(crate::app::message::ChatMessage::MessageActionButtonPressed(
 				m.room.clone(),
-				m.server_message_id.clone(),
-				m.platform_message_id.clone(),
-				m.author_id.clone(),
+				m.server_message_id.as_deref().map(|v| v.to_string()),
+				m.platform_message_id.as_deref().map(|v| v.to_string()),
+				m.author_id.as_deref().map(|v| v.to_string()),
 			)))
 			.into();
 
@@ -187,7 +184,7 @@ impl<'a> ChatMessageView<'a> {
 
 		reply_row = reply_row.push(text("replying to ").size(12).color(palette.text_dim));
 
-		let name_text = text(format!("@{}", reply.display_name)).size(12).color(if reply.is_own {
+		let name_text = text(format!("@{}", reply.display_name.as_str())).size(12).color(if reply.is_own {
 			palette.text
 		} else {
 			palette.text_dim
@@ -213,7 +210,7 @@ impl<'a> ChatMessageView<'a> {
 		};
 
 		reply_row = reply_row.push(name_el);
-		reply_row = reply_row.push(text(format!(": {}", reply.message)).size(12).color(palette.text_dim));
+		reply_row = reply_row.push(text(format!(": {}", reply.message.as_str())).size(12).color(palette.text_dim));
 
 		reply_row.into()
 	}

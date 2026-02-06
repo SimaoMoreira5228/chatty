@@ -1,6 +1,7 @@
 use chatty_domain::RoomTopic;
 use iced::{Task, keyboard};
 use rust_i18n::t;
+use smol_str::SmolStr;
 
 use crate::app::message::Message;
 use crate::app::model::{Chatty, first_char_lower};
@@ -251,7 +252,7 @@ impl Chatty {
 		}
 	}
 
-	pub fn update_message_text_edit(&mut self, key: String, action: iced::widget::text_editor::Action) -> Task<Message> {
+	pub fn update_message_text_edit(&mut self, key: SmolStr, action: iced::widget::text_editor::Action) -> Task<Message> {
 		if let Some(content) = self.message_text_editors.get_mut(&key)
 			&& !action.is_edit()
 		{
