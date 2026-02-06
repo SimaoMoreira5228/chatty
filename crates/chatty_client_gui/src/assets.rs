@@ -15,10 +15,10 @@ pub fn svg_handle(path: &str) -> svg::Handle {
 	}
 
 	let normalized = path.trim_start_matches('/');
-	if normalized != path {
-		if let Some(f) = Assets::get(normalized) {
-			return svg::Handle::from_memory(f.data.into_owned());
-		}
+	if normalized != path
+		&& let Some(f) = Assets::get(normalized)
+	{
+		return svg::Handle::from_memory(f.data.into_owned());
 	}
 
 	let prefixed = format!("assets/{normalized}");

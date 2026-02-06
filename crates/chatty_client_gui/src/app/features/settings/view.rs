@@ -35,8 +35,6 @@ pub enum SettingsMessage {
 	IdentityClipboardRead(ClipboardTarget, Option<String>),
 	ExportLayoutPressed,
 	ImportLayoutPressed,
-	#[allow(dead_code)]
-	ImportLayoutClipboard(Option<String>),
 	ImportFromFilePressed,
 	ResetLayoutPressed,
 }
@@ -83,7 +81,6 @@ impl SettingsView {
 			SettingsMessage::IdentityClipboardRead(target, txt) => app.update_clipboard_read(target, txt),
 			SettingsMessage::ExportLayoutPressed => app.update_export_layout_pressed(),
 			SettingsMessage::ImportLayoutPressed => app.update_import_layout_pressed(),
-			SettingsMessage::ImportLayoutClipboard(opt) => app.update_layout_import_clipboard(opt),
 			SettingsMessage::ImportFromFilePressed => app.update_import_from_file_pressed(),
 			SettingsMessage::ResetLayoutPressed => app.update_reset_layout_pressed(),
 		}

@@ -113,22 +113,6 @@ impl Chatty {
 		)
 	}
 
-	pub fn update_layout_import_clipboard(&mut self, opt: Option<String>) -> Task<Message> {
-		if let Some(txt) = opt {
-			match serde_json::from_str::<crate::app::features::layout::UiRootState>(&txt) {
-				Ok(root) => {
-					self.state.ui.active_overlay = Some(crate::app::features::overlays::ActiveOverlay::Layout(
-						LayoutModal::new_import(root),
-					));
-					self.toast(t!("import_parsed_confirm").to_string())
-				}
-				Err(e) => self.toast(format!("{}: {}", t!("import_failed"), e)),
-			}
-		} else {
-			self.toast(t!("clipboard_empty").to_string())
-		}
-	}
-
 	pub fn update_layout_import_file_parsed(
 		&mut self,
 		res: Result<crate::app::features::layout::UiRootState, String>,

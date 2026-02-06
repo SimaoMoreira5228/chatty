@@ -153,7 +153,8 @@ impl Chatty {
 							break;
 						};
 
-						if img_cache.contains_key(&url) || animated_cache.contains_key(&url) || svg_cache.contains_key(&url) {
+						if img_cache.contains_key(&url) || animated_cache.contains_key(&url) || svg_cache.contains_key(&url)
+						{
 							continue;
 						}
 
@@ -170,8 +171,8 @@ impl Chatty {
 										Ok(Ok(bytes)) => {
 											let maybe_animated = bytes.len() >= 12
 												&& (bytes.starts_with(b"GIF87a")
-													|| bytes.starts_with(b"GIF89a")
-													|| (bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP")));
+													|| bytes.starts_with(b"GIF89a") || (bytes.starts_with(b"RIFF")
+													&& bytes.get(8..12) == Some(b"WEBP")));
 
 											let animated = if maybe_animated {
 												let bytes_for_decode = bytes.clone();

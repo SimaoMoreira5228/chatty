@@ -16,8 +16,9 @@ use super::reconnect::{RECONNECT_RESET_AFTER, schedule_reconnect};
 use super::subscriptions::{reconcile_subscriptions_on_connect, topic_for_room, unsubscribe_topics};
 use super::types::UiEvent;
 use crate::app::view_models::{AssetImageUi, AssetRefUi, AssetScaleUi, ChatReplyUi};
-use smol_str::SmolStr;
 use crate::net::{dev_default_topics, should_dev_auto_connect};
+use smallvec::SmallVec;
+use smol_str::SmolStr;
 
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(3);
 const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -655,26 +656,37 @@ fn map_event_envelope_to_ui_event(ev: pb::EventEnvelope) -> Option<UiEvent> {
 
 	match ev.event {
 		Some(pb::event_envelope::Event::ChatMessage(cm)) => {
-			let (author_login, author_display, text, badge_ids, emotes) = cm
-				.message
-				.as_ref()
-				.map(|m| {
+			let (author_login, author_display, text, badge_ids, emotes, author_id) = match cm.message {
+				Some(m) => {
 					let login = if m.author_login.is_empty() {
-						"unknown".to_string()
+						SmolStr::new("unknown")
 					} else {
-						m.author_login.clone()
+						SmolStr::new(m.author_login)
 					};
 					let display = if m.author_display.is_empty() {
 						None
 					} else {
-						Some(m.author_display.clone())
+						Some(SmolStr::new(m.author_display))
 					};
-					let text = m.text.clone();
-					let badges = m.badge_ids.clone();
-					let emotes = m.emotes.iter().cloned().map(map_asset_ref).collect();
-					(login, display, text, badges, emotes)
-				})
-				.unwrap_or_else(|| ("unknown".to_string(), None, "".to_string(), Vec::new(), Vec::new()));
+					let text = SmolStr::new(m.text);
+					let badges: SmallVec<[SmolStr; 4]> = m.badge_ids.into_iter().map(SmolStr::new).collect();
+					let emotes = m.emotes.into_iter().map(map_asset_ref).collect();
+					let author_id = if m.author_id.is_empty() {
+						None
+					} else {
+						Some(SmolStr::new(m.author_id))
+					};
+					(login, display, text, badges, emotes, author_id)
+				}
+				None => (
+					SmolStr::new("unknown"),
+					None,
+					SmolStr::new(""),
+					SmallVec::new(),
+					Vec::new(),
+					None,
+				),
+			};
 
 			let reply = cm.reply.map(|reply| ChatReplyUi {
 				server_message_id: if reply.server_message_id.is_empty() {
@@ -687,7 +699,11 @@ fn map_event_envelope_to_ui_event(ev: pb::EventEnvelope) -> Option<UiEvent> {
 				} else {
 					Some(SmolStr::new(reply.platform_message_id))
 				},
-				user_id: if reply.user_id.is_empty() { None } else { Some(SmolStr::new(reply.user_id)) },
+				user_id: if reply.user_id.is_empty() {
+					None
+				} else {
+					Some(SmolStr::new(reply.user_id))
+				},
 				user_login: SmolStr::new(reply.user_login),
 				user_display: if reply.user_display.is_empty() {
 					None
@@ -701,23 +717,17 @@ fn map_event_envelope_to_ui_event(ev: pb::EventEnvelope) -> Option<UiEvent> {
 				topic,
 				author_login,
 				author_display,
-				author_id: cm.message.as_ref().and_then(|m| {
-					if m.author_id.is_empty() {
-						None
-					} else {
-						Some(m.author_id.clone())
-					}
-				}),
+				author_id,
 				text,
 				server_message_id: if cm.server_message_id.is_empty() {
 					None
 				} else {
-					Some(cm.server_message_id)
+					Some(SmolStr::new(cm.server_message_id))
 				},
 				platform_message_id: if cm.platform_message_id.is_empty() {
 					None
 				} else {
-					Some(cm.platform_message_id)
+					Some(SmolStr::new(cm.platform_message_id))
 				},
 				badge_ids,
 				emotes,

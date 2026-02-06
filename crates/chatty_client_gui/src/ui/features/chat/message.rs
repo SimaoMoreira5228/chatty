@@ -55,10 +55,9 @@ impl<'a> ChatMessageView<'a> {
 		let mut content_row = row![].spacing(4).align_y(Alignment::Start);
 
 		let inline_emote = |token: &str| m.emotes.iter().find(|emote| emote.name == token);
-		let is_word_char = |ch: char| ch.is_alphanumeric() || ch == '_';
 
-		for (i, token) in m.tokens.iter().enumerate() {
-			let token_str = token.as_str();
+		for (i, part) in m.token_parts.iter().enumerate() {
+			let token_str = part.token.as_str();
 			if i > 0 {
 				content_row = content_row.push(text(" ").color(text_color));
 			}
@@ -72,42 +71,10 @@ impl<'a> ChatMessageView<'a> {
 				continue;
 			}
 
-			let (core, prefix, suffix, has_word) = {
-				let trimmed = token_str.trim_matches(|ch: char| ch.is_ascii_punctuation());
-				if !trimmed.is_empty() && trimmed != token_str {
-					if let Some(start) = token_str.find(trimmed) {
-						let end = start + trimmed.len();
-						let prefix = &token_str[..start];
-						let suffix = &token_str[end..];
-						(trimmed, prefix, suffix, true)
-					} else {
-						(token_str, "", "", false)
-					}
-				} else {
-					let mut start = None;
-					let mut end = None;
-					for (idx, ch) in token_str.char_indices() {
-						if is_word_char(ch) {
-							start = Some(idx);
-							break;
-						}
-					}
-					for (idx, ch) in token_str.char_indices().rev() {
-						if is_word_char(ch) {
-							end = Some(idx + ch.len_utf8());
-							break;
-						}
-					}
-					if let (Some(start), Some(end)) = (start, end) {
-						let core = &token_str[start..end];
-						let prefix = &token_str[..start];
-						let suffix = &token_str[end..];
-						(core, prefix, suffix, true)
-					} else {
-						(token_str, "", "", false)
-					}
-				}
-			};
+			let core = part.core.as_str();
+			let prefix = part.prefix.as_str();
+			let suffix = part.suffix.as_str();
+			let has_word = part.has_word;
 
 			let mut token_row = row![].spacing(0).align_y(Alignment::Start);
 			if has_word {
@@ -184,11 +151,9 @@ impl<'a> ChatMessageView<'a> {
 
 		reply_row = reply_row.push(text("replying to ").size(12).color(palette.text_dim));
 
-		let name_text = text(format!("@{}", reply.display_name.as_str())).size(12).color(if reply.is_own {
-			palette.text
-		} else {
-			palette.text_dim
-		});
+		let name_text = text(format!("@{}", reply.display_name.as_str()))
+			.size(12)
+			.color(if reply.is_own { palette.text } else { palette.text_dim });
 
 		let name_el: Element<'_, Message> = if reply.is_own {
 			container(name_text)

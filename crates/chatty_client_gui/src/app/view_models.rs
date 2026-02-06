@@ -29,12 +29,21 @@ pub struct ChatMessageUi {
 	pub user_display: Option<SmolStr>,
 	pub display_name: SmolStr,
 	pub text: SmolStr,
-	pub tokens: SmallVec<[SmolStr; 8]>,
+	pub token_parts: SmallVec<[TokenParts; 8]>,
 	pub badge_ids: SmallVec<[SmolStr; 4]>,
 	pub emotes: Vec<AssetRefUi>,
 	pub platform_message_id: Option<SmolStr>,
 	pub reply: Option<ChatReplyUi>,
 	pub is_deleted: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct TokenParts {
+	pub token: SmolStr,
+	pub prefix: SmolStr,
+	pub core: SmolStr,
+	pub suffix: SmolStr,
+	pub has_word: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -191,8 +200,8 @@ pub fn build_chat_pane_view_model<'a>(
 	let can_compose = connected && !rooms.is_empty() && can_send;
 	let is_subscribed = true;
 
-	let restrictions = room_restrictions(app, &rooms);
-	let placeholder = composer_placeholder(connected, &rooms, can_send, &restrictions);
+	let restrictions = room_restrictions(app, rooms);
+	let placeholder = composer_placeholder(connected, rooms, can_send, &restrictions);
 
 	let mut platforms = HashSet::new();
 	for room in rooms {
@@ -242,7 +251,12 @@ pub fn build_chat_pane_view_model<'a>(
 				.server_message_id
 				.as_deref()
 				.and_then(|id| reply_by_server.get(id).copied())
-				.or_else(|| reply.platform_message_id.as_deref().and_then(|id| reply_by_platform.get(id).copied()));
+				.or_else(|| {
+					reply
+						.platform_message_id
+						.as_deref()
+						.and_then(|id| reply_by_platform.get(id).copied())
+				});
 
 			if let Some(found) = found {
 				if display_name.trim().is_empty() {

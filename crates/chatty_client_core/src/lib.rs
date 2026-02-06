@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use anyhow::Context as _;
 use bytes::BytesMut;
-use chatty_protocol::framing::{DEFAULT_MAX_FRAME_SIZE, FramingError, encode_frame, try_decode_frame_from_buffer};
+use chatty_protocol::framing::{DEFAULT_MAX_FRAME_SIZE, FramingError, encode_frame_into, try_decode_frame_from_buffer};
 use chatty_protocol::pb;
 use chatty_util::endpoint::QuicEndpoint;
 use quinn::{ClientConfig, Endpoint, TransportConfig, VarInt};
@@ -183,6 +183,8 @@ pub struct SessionControl {
 	control_recv: quinn::RecvStream,
 	max_frame_bytes: usize,
 	events_opened: bool,
+	write_buf: BytesMut,
+	read_buf: BytesMut,
 }
 
 /// Events reader half of a session.
@@ -282,19 +284,24 @@ impl SessionControl {
 			supported_codecs: vec![pb::Codec::Protobuf as i32],
 			preferred_codec: pb::Codec::Protobuf as i32,
 		};
+		let mut write_buf = BytesMut::with_capacity(8 * 1024);
 		let env = pb::Envelope {
 			version: PROTOCOL_VERSION,
 			request_id: String::new(),
 			msg: Some(pb::envelope::Msg::Hello(hello)),
 		};
-		write_envelope(&mut control_send, &env, cfg.max_frame_bytes)
+		write_envelope(&mut control_send, &env, cfg.max_frame_bytes, &mut write_buf)
 			.await
 			.map_err(|e| ClientCoreError::Io(format!("send Hello failed: {e}")))?;
 		debug!("sent Hello envelope to server (without sensitive fields)");
 
-		let welcome_env = tokio::time::timeout(connect_timeout, read_one_envelope(&mut control_recv, cfg.max_frame_bytes))
-			.await
-			.map_err(|_| ClientCoreError::Protocol(format!("timeout waiting for Welcome after {connect_timeout:?}")))??;
+		let mut read_buf = BytesMut::with_capacity(8 * 1024);
+		let welcome_env = tokio::time::timeout(
+			connect_timeout,
+			read_one_envelope(&mut control_recv, cfg.max_frame_bytes, &mut read_buf),
+		)
+		.await
+		.map_err(|_| ClientCoreError::Protocol(format!("timeout waiting for Welcome after {connect_timeout:?}")))??;
 
 		let welcome = match welcome_env.msg {
 			Some(pb::envelope::Msg::Welcome(w)) => w,
@@ -323,6 +330,8 @@ impl SessionControl {
 			control_recv,
 			max_frame_bytes: (welcome.max_frame_bytes as usize).min(cfg.max_frame_bytes),
 			events_opened: false,
+			write_buf: BytesMut::with_capacity(8 * 1024),
+			read_buf: BytesMut::with_capacity(8 * 1024),
 		};
 
 		Ok((control, welcome))
@@ -346,9 +355,9 @@ impl SessionControl {
 			msg: Some(pb::envelope::Msg::Subscribe(pb::Subscribe { subs })),
 		};
 
-		write_envelope(&mut self.control_send, &env, self.max_frame_bytes).await?;
+		write_envelope(&mut self.control_send, &env, self.max_frame_bytes, &mut self.write_buf).await?;
 
-		let resp = read_one_envelope(&mut self.control_recv, self.max_frame_bytes).await?;
+		let resp = read_one_envelope(&mut self.control_recv, self.max_frame_bytes, &mut self.read_buf).await?;
 		match resp.msg {
 			Some(pb::envelope::Msg::Subscribed(s)) => {
 				debug!("subscribe acknowledged");
@@ -377,9 +386,9 @@ impl SessionControl {
 			msg: Some(pb::envelope::Msg::Unsubscribe(pb::Unsubscribe { topics: topics_vec })),
 		};
 
-		write_envelope(&mut self.control_send, &env, self.max_frame_bytes).await?;
+		write_envelope(&mut self.control_send, &env, self.max_frame_bytes, &mut self.write_buf).await?;
 
-		let resp = read_one_envelope(&mut self.control_recv, self.max_frame_bytes).await?;
+		let resp = read_one_envelope(&mut self.control_recv, self.max_frame_bytes, &mut self.read_buf).await?;
 		match resp.msg {
 			Some(pb::envelope::Msg::Unsubscribed(u)) => {
 				debug!("unsubscribe acknowledged");
@@ -397,9 +406,9 @@ impl SessionControl {
 			msg: Some(pb::envelope::Msg::Command(command)),
 		};
 
-		write_envelope(&mut self.control_send, &env, self.max_frame_bytes).await?;
+		write_envelope(&mut self.control_send, &env, self.max_frame_bytes, &mut self.write_buf).await?;
 
-		let resp = read_one_envelope(&mut self.control_recv, self.max_frame_bytes).await?;
+		let resp = read_one_envelope(&mut self.control_recv, self.max_frame_bytes, &mut self.read_buf).await?;
 		match resp.msg {
 			Some(pb::envelope::Msg::CommandResult(r)) => Ok(r),
 			other => Err(ClientCoreError::Protocol(format!("expected CommandResult, got {other:?}"))),
@@ -414,9 +423,9 @@ impl SessionControl {
 			msg: Some(pb::envelope::Msg::Ping(pb::Ping { client_time_unix_ms })),
 		};
 
-		write_envelope(&mut self.control_send, &env, self.max_frame_bytes).await?;
+		write_envelope(&mut self.control_send, &env, self.max_frame_bytes, &mut self.write_buf).await?;
 
-		let resp = read_one_envelope(&mut self.control_recv, self.max_frame_bytes).await?;
+		let resp = read_one_envelope(&mut self.control_recv, self.max_frame_bytes, &mut self.read_buf).await?;
 		match resp.msg {
 			Some(pb::envelope::Msg::Pong(p)) => Ok(p),
 			other => Err(ClientCoreError::Protocol(format!("expected Pong, got {other:?}"))),
@@ -512,9 +521,11 @@ async fn write_envelope(
 	send: &mut quinn::SendStream,
 	env: &pb::Envelope,
 	max_frame_bytes: usize,
+	buf: &mut BytesMut,
 ) -> Result<(), ClientCoreError> {
-	let frame = encode_frame(env, max_frame_bytes).map_err(ClientCoreError::Framing)?;
-	send.write_all(&frame).await.map_err(|e| ClientCoreError::Io(e.to_string()))?;
+	buf.clear();
+	encode_frame_into(buf, env, max_frame_bytes).map_err(ClientCoreError::Framing)?;
+	send.write_all(buf).await.map_err(|e| ClientCoreError::Io(e.to_string()))?;
 	send.flush().await.map_err(|e| ClientCoreError::Io(e.to_string()))?;
 	Ok(())
 }
@@ -530,13 +541,17 @@ fn event_kind(ev: &pb::EventEnvelope) -> &'static str {
 	}
 }
 
-async fn read_one_envelope(recv: &mut quinn::RecvStream, max_frame_bytes: usize) -> Result<pb::Envelope, ClientCoreError> {
-	let mut buf = BytesMut::with_capacity(8 * 1024);
+async fn read_one_envelope(
+	recv: &mut quinn::RecvStream,
+	max_frame_bytes: usize,
+	buf: &mut BytesMut,
+) -> Result<pb::Envelope, ClientCoreError> {
+	buf.clear();
 	let mut tmp = [0u8; 8192];
 
 	loop {
 		// Try decoding first in case buffer already has a full frame.
-		match try_decode_frame_from_buffer::<pb::Envelope>(&mut buf, max_frame_bytes) {
+		match try_decode_frame_from_buffer::<pb::Envelope>(buf, max_frame_bytes) {
 			Ok(Some(env)) => return Ok(env),
 			Ok(None) => {}
 			Err(e) => return Err(ClientCoreError::Framing(e)),

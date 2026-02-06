@@ -6,8 +6,76 @@ use chatty_domain::RoomKey;
 use smallvec::SmallVec;
 use smol_str::SmolStr;
 
-pub fn tokenize_message_text(text: &str) -> SmallVec<[SmolStr; 8]> {
-	text.split_whitespace().map(SmolStr::new).collect()
+use crate::app::view_models::TokenParts;
+
+pub fn tokenize_message_parts(text: &str) -> SmallVec<[TokenParts; 8]> {
+	fn to_smol(s: &str) -> SmolStr {
+		SmolStr::new(s)
+	}
+
+	let is_word_char = |ch: char| ch.is_alphanumeric() || ch == '_';
+	text.split_whitespace()
+		.map(|token| {
+			let trimmed = token.trim_matches(|ch: char| ch.is_ascii_punctuation());
+			if !trimmed.is_empty() && trimmed != token {
+				if let Some(start) = token.find(trimmed) {
+					let end = start + trimmed.len();
+					let prefix = &token[..start];
+					let suffix = &token[end..];
+					TokenParts {
+						token: to_smol(token),
+						prefix: to_smol(prefix),
+						core: to_smol(trimmed),
+						suffix: to_smol(suffix),
+						has_word: true,
+					}
+				} else {
+					TokenParts {
+						token: to_smol(token),
+						prefix: SmolStr::new(""),
+						core: to_smol(token),
+						suffix: SmolStr::new(""),
+						has_word: false,
+					}
+				}
+			} else {
+				let mut start = None;
+				let mut end = None;
+				for (idx, ch) in token.char_indices() {
+					if is_word_char(ch) {
+						start = Some(idx);
+						break;
+					}
+				}
+				for (idx, ch) in token.char_indices().rev() {
+					if is_word_char(ch) {
+						end = Some(idx + ch.len_utf8());
+						break;
+					}
+				}
+				if let (Some(start), Some(end)) = (start, end) {
+					let core = &token[start..end];
+					let prefix = &token[..start];
+					let suffix = &token[end..];
+					TokenParts {
+						token: to_smol(token),
+						prefix: to_smol(prefix),
+						core: to_smol(core),
+						suffix: to_smol(suffix),
+						has_word: true,
+					}
+				} else {
+					TokenParts {
+						token: to_smol(token),
+						prefix: SmolStr::new(""),
+						core: to_smol(token),
+						suffix: SmolStr::new(""),
+						has_word: false,
+					}
+				}
+			}
+		})
+		.collect()
 }
 
 pub fn build_message_key(
@@ -33,11 +101,12 @@ mod tests {
 	use super::*;
 
 	#[test]
-	fn tokenize_message_text_splits_whitespace() {
-		let tokens = tokenize_message_text("hello   world\nchatty");
-		let expected: SmallVec<[SmolStr; 8]> =
-			SmallVec::from_iter([SmolStr::new("hello"), SmolStr::new("world"), SmolStr::new("chatty")]);
-		assert_eq!(tokens, expected);
+	fn tokenize_message_parts_splits_whitespace() {
+		let tokens = tokenize_message_parts("hello   world\nchatty");
+		assert_eq!(tokens.len(), 3);
+		assert_eq!(tokens[0].core.as_str(), "hello");
+		assert_eq!(tokens[1].core.as_str(), "world");
+		assert_eq!(tokens[2].core.as_str(), "chatty");
 	}
 
 	#[test]

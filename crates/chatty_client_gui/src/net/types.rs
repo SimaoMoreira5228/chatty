@@ -1,6 +1,8 @@
 use core::fmt;
 
 use crate::app::view_models::{AssetRefUi, ChatReplyUi};
+use smallvec::SmallVec;
+use smol_str::SmolStr;
 
 /// UI-level events emitted by the networking layer.
 #[derive(Clone)]
@@ -23,13 +25,13 @@ pub enum UiEvent {
 	},
 	ChatMessage {
 		topic: String,
-		author_login: String,
-		author_display: Option<String>,
-		author_id: Option<String>,
-		text: String,
-		server_message_id: Option<String>,
-		platform_message_id: Option<String>,
-		badge_ids: Vec<String>,
+		author_login: SmolStr,
+		author_display: Option<SmolStr>,
+		author_id: Option<SmolStr>,
+		text: SmolStr,
+		server_message_id: Option<SmolStr>,
+		platform_message_id: Option<SmolStr>,
+		badge_ids: SmallVec<[SmolStr; 4]>,
 		emotes: Vec<AssetRefUi>,
 		reply: Box<Option<ChatReplyUi>>,
 	},

@@ -7,15 +7,14 @@ use rust_i18n::t;
 use tracing::info;
 
 use crate::app::message::{Message, NetMessage};
-use crate::app::message_format::{build_message_key, tokenize_message_text};
+use crate::app::message_format::{build_message_key, tokenize_message_parts};
 use crate::app::model::Chatty;
 use crate::app::net::recv_next;
 use crate::app::state::ConnectionStatus;
 use crate::app::view_models::{AssetBundleUi, ChatMessageUi};
-use smallvec::SmallVec;
-use smol_str::SmolStr;
 use crate::net::UiEvent;
 use crate::settings;
+use smol_str::SmolStr;
 
 impl Chatty {
 	pub fn update_net_message(&mut self, message: NetMessage) -> Task<Message> {
@@ -290,29 +289,25 @@ impl Chatty {
 				reply,
 			} => {
 				if let Ok(room) = RoomTopic::parse(&topic) {
-					let tokens = tokenize_message_text(&text);
+					let token_parts = tokenize_message_parts(text.as_str());
 					let time = SystemTime::now();
-					let display_name = author_display
-						.as_deref()
-						.unwrap_or(author_login.as_str())
-						.to_string();
+					let display_name = author_display.clone().unwrap_or_else(|| author_login.clone());
 					let key = build_message_key(&room, server_message_id.as_deref(), platform_message_id.as_deref(), time);
-					let badge_ids: SmallVec<[SmolStr; 4]> = badge_ids.into_iter().map(SmolStr::new).collect();
 					let msg = ChatMessageUi {
 						time,
 						platform: room.platform,
 						room: room.clone(),
 						key: SmolStr::new(key),
-						server_message_id: server_message_id.map(SmolStr::new),
-						author_id: author_id.map(SmolStr::new),
-						user_login: SmolStr::new(author_login),
-						user_display: author_display.map(SmolStr::new),
-						display_name: SmolStr::new(display_name),
-						text: SmolStr::new(text),
-						tokens,
+						server_message_id,
+						author_id,
+						user_login: author_login,
+						user_display: author_display,
+						display_name,
+						text,
+						token_parts,
 						badge_ids,
 						emotes,
-						platform_message_id: platform_message_id.map(SmolStr::new),
+						platform_message_id,
 						reply: *reply,
 						is_deleted: false,
 					};
@@ -409,9 +404,9 @@ impl Chatty {
 			if room.is_none() && scope == chatty_protocol::pb::AssetScope::Channel as i32 {
 				tracing::warn!(topic = %topic, cache_key = %ck, provider, scope, "asset bundle topic failed room parse");
 			}
-			let is_new = self.state.asset_catalog.register_bundle(bundle.clone(), scope, room);
+			let update = self.state.asset_catalog.register_bundle(bundle.clone(), scope, room.clone());
 
-			if is_new {
+			if update.is_new {
 				if scope == chatty_protocol::pb::AssetScope::Global as i32 {
 					info!(cache_key = %ck, "registering global AssetBundle cache_key");
 				} else if let Ok(room) = chatty_domain::RoomTopic::parse(&topic) {
@@ -419,7 +414,23 @@ impl Chatty {
 				}
 			}
 
-			self.assets.prefetch_bundle(&bundle, 64);
+			if update.changed {
+				let room_is_active = room
+					.as_ref()
+					.map(|rk| self.state.tabs.values().any(|t| t.target.0.contains(rk)))
+					.unwrap_or(true);
+
+				let has_tabs = !self.state.tabs.is_empty();
+				if has_tabs {
+					let (max_emotes, max_badges) = if room_is_active {
+						(64usize, 24usize)
+					} else {
+						(16usize, 6usize)
+					};
+					let max_total = max_emotes + max_badges;
+					self.assets.prefetch_bundle(&bundle, max_emotes, max_badges, max_total);
+				}
+			}
 		}
 		None
 	}

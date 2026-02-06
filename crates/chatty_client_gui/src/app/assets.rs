@@ -68,6 +68,12 @@ pub struct RoomProviderAssetCounts {
 	pub badges: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AssetCatalogUpdate {
+	pub is_new: bool,
+	pub changed: bool,
+}
+
 impl AssetManager {
 	pub fn new(image_fetch_sender: mpsc::Sender<String>) -> Self {
 		Self {
@@ -108,18 +114,32 @@ impl AssetManager {
 			.get_with(cache_key, || state.asset_catalog.badges_for_room(room))
 	}
 
-	pub fn prefetch_bundle(&self, bundle: &AssetBundleUi, max_emotes: usize) {
+	pub fn prefetch_bundle(&self, bundle: &AssetBundleUi, max_emotes: usize, max_badges: usize, max_total: usize) {
 		let img_cache = self.image_cache.clone();
+		let animated_cache = self.animated_cache.clone();
+		let svg_cache = self.svg_cache.clone();
+		let loading = Arc::clone(&self.image_loading);
+		let failed = Arc::clone(&self.image_failed);
 		let sender = self.image_fetch_sender.clone();
+
+		let should_queue = |url: &str| {
+			!(img_cache.contains_key(url)
+				|| animated_cache.contains_key(url)
+				|| svg_cache.contains_key(url)
+				|| loading.contains(url)
+				|| failed.contains(url))
+		};
 
 		let mut queued = 0usize;
 		for em in bundle.emotes.iter().take(max_emotes) {
+			if queued >= max_total {
+				break;
+			}
 			if let Some(img) = em.pick_image(AssetScaleUi::Two) {
 				let url = img.url.clone();
-				if img_cache.contains_key(&url) {
+				if !should_queue(&url) {
 					continue;
 				}
-
 				if sender.try_send(url).is_err() {
 					break;
 				}
@@ -131,16 +151,19 @@ impl AssetManager {
 			tracing::debug!(cache_key = %bundle.cache_key, queued, "prefetched emote images");
 		}
 
-		for bd in &bundle.badges {
+		for bd in bundle.badges.iter().take(max_badges) {
+			if queued >= max_total {
+				break;
+			}
 			if let Some(img) = bd.pick_image(AssetScaleUi::Two) {
 				let url = img.url.clone();
-				if img_cache.contains_key(&url) {
+				if !should_queue(&url) {
 					continue;
 				}
-
 				if sender.try_send(url).is_err() {
 					break;
 				}
+				queued += 1;
 			}
 		}
 	}
@@ -172,7 +195,12 @@ impl AssetCatalog {
 		self.room_keys.get(&normalized)
 	}
 
-	pub fn register_bundle(&mut self, bundle: AssetBundleUi, scope: i32, room: Option<chatty_domain::RoomKey>) -> bool {
+	pub fn register_bundle(
+		&mut self,
+		bundle: AssetBundleUi,
+		scope: i32,
+		room: Option<chatty_domain::RoomKey>,
+	) -> AssetCatalogUpdate {
 		let ck = bundle.cache_key.clone();
 		let is_new = !self.bundles.contains_key(&ck);
 		let mut changed = false;
@@ -205,12 +233,7 @@ impl AssetCatalog {
 			self.revision = self.revision.wrapping_add(1);
 		}
 
-		is_new
-	}
-
-	#[allow(dead_code)]
-	pub fn bundle(&self, cache_key: &str) -> Option<&AssetBundleUi> {
-		self.bundles.get(cache_key)
+		AssetCatalogUpdate { is_new, changed }
 	}
 
 	pub fn emotes_for_room(&self, room: &chatty_domain::RoomKey) -> Arc<HashMap<String, AssetRefUi>> {
@@ -315,7 +338,10 @@ mod tests {
 		let mut catalog = AssetCatalog::new();
 		let bundle = make_bundle("g1", AssetScope::Global as i32, Vec::new(), Vec::new());
 
-		assert!(catalog.register_bundle(bundle.clone(), bundle.scope, None));
-		assert!(!catalog.register_bundle(bundle, AssetScope::Global as i32, None));
+		let first = catalog.register_bundle(bundle.clone(), bundle.scope, None);
+		assert!(first.is_new);
+		assert!(first.changed);
+		let second = catalog.register_bundle(bundle, AssetScope::Global as i32, None);
+		assert!(!second.is_new);
 	}
 }

@@ -62,7 +62,7 @@ jobs:
           CHATTY_HMAC_ENABLED: false
           CHATTY_TWITCH_LOGIN_URL: ${{ secrets.CHATTY_TWITCH_LOGIN_URL }}
           CHATTY_KICK_LOGIN_URL: ${{ secrets.CHATTY_KICK_LOGIN_URL }}
-        run: cargo build -p chatty_client_gui --release
+        run: cargo build -p chatty_client_gui --release --features mimalloc
       - name: Prepare linux package
         run: |
           set -euo pipefail
@@ -116,7 +116,7 @@ jobs:
           CHATTY_HMAC_ENABLED: false
           CHATTY_TWITCH_LOGIN_URL: ${{ secrets.CHATTY_TWITCH_LOGIN_URL }}
           CHATTY_KICK_LOGIN_URL: ${{ secrets.CHATTY_KICK_LOGIN_URL }}
-        run: cargo build -p chatty_client_gui --release
+        run: cargo build -p chatty_client_gui --release --features mimalloc
       - name: Prepare linux package (arm)
         run: |
           set -euo pipefail
@@ -151,7 +151,7 @@ jobs:
           CHATTY_HMAC_ENABLED: false
           CHATTY_TWITCH_LOGIN_URL: ${{ secrets.CHATTY_TWITCH_LOGIN_URL }}
           CHATTY_KICK_LOGIN_URL: ${{ secrets.CHATTY_KICK_LOGIN_URL }}
-        run: cargo build -p chatty_client_gui --release
+        run: cargo build -p chatty_client_gui --release --features mimalloc
       - name: Package client artifact
         shell: pwsh
         run: |
@@ -185,12 +185,12 @@ jobs:
           ICON_PATH="crates/chatty_client_gui/assets/app-icons/chatty.icns"
           if [ -f "$ICON_PATH" ]; then
             cargo binstall cargo-bundle --no-confirm
-            cargo bundle -p chatty_client_gui --release
+            cargo bundle -p chatty_client_gui --release --features mimalloc
             APP_PATH="target/release/bundle/osx/Chatty.app"
             ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" chatty-macos-intel-app.zip
             echo "artifact=chatty-macos-intel-app.zip" >> "$GITHUB_OUTPUT"
           else
-            cargo build -p chatty_client_gui --release
+            cargo build -p chatty_client_gui --release --features mimalloc
             tar -czf chatty-macos-x86_64-intel.tar.gz -C target/release chatty
             echo "artifact=chatty-macos-x86_64-intel.tar.gz" >> "$GITHUB_OUTPUT"
           fi
@@ -223,12 +223,12 @@ jobs:
           ICON_PATH="crates/chatty_client_gui/assets/app-icons/chatty.icns"
           if [ -f "$ICON_PATH" ]; then
             cargo binstall cargo-bundle --no-confirm
-            cargo bundle -p chatty_client_gui --release
+            cargo bundle -p chatty_client_gui --release --features mimalloc
             APP_PATH="target/release/bundle/osx/Chatty.app"
             ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" chatty-macos-arm-app.zip
             echo "artifact=chatty-macos-arm-app.zip" >> "$GITHUB_OUTPUT"
           else
-            cargo build -p chatty_client_gui --release
+            cargo build -p chatty_client_gui --release --features mimalloc
             tar -czf chatty-macos-arm64.tar.gz -C target/release chatty
             echo "artifact=chatty-macos-arm64.tar.gz" >> "$GITHUB_OUTPUT"
           fi

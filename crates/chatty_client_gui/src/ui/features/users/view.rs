@@ -20,8 +20,7 @@ impl UsersView {
 			&& let Some(tab) = app.state.tabs.get(&tab_id)
 		{
 			title = format!("Users • {}", tab.title);
-			let mut users: Vec<(smol_str::SmolStr, usize)> =
-				tab.user_counts.iter().map(|(k, v)| (k.clone(), *v)).collect();
+			let mut users: Vec<(smol_str::SmolStr, usize)> = tab.user_counts.iter().map(|(k, v)| (k.clone(), *v)).collect();
 			users.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
 			let mut any = false;
