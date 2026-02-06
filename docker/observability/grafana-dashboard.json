@@ -1,0 +1,110 @@
+{
+	"annotations": { "list": [] },
+	"editable": true,
+	"gnetId": null,
+	"graphTooltip": 0,
+	"id": null,
+	"links": [],
+	"panels": [
+		{
+			"datasource": { "type": "prometheus" },
+			"fieldConfig": { "defaults": {}, "overrides": [] },
+			"gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+			"id": 1,
+			"targets": [{ "expr": "rate(chatty_server_connections_total[5m])", "legendFormat": "connections/s" }],
+			"title": "New connections per second",
+			"type": "timeseries"
+		},
+		{
+			"datasource": { "type": "prometheus" },
+			"fieldConfig": { "defaults": {}, "overrides": [] },
+			"gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+			"id": 2,
+			"targets": [{ "expr": "chatty_server_active_connections", "legendFormat": "active" }],
+			"title": "Active connections",
+			"type": "timeseries"
+		},
+		{
+			"datasource": { "type": "prometheus" },
+			"fieldConfig": { "defaults": {}, "overrides": [] },
+			"gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+			"id": 3,
+			"targets": [
+				{ "expr": "rate(chatty_server_control_bytes_in_total[5m])", "legendFormat": "in bytes/s" },
+				{ "expr": "rate(chatty_server_control_bytes_out_total[5m])", "legendFormat": "out bytes/s" }
+			],
+			"title": "Control stream throughput",
+			"type": "timeseries"
+		},
+		{
+			"datasource": { "type": "prometheus" },
+			"fieldConfig": { "defaults": {}, "overrides": [] },
+			"gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+			"id": 4,
+			"targets": [
+				{ "expr": "rate(chatty_server_envelopes_in_total[5m])", "legendFormat": "in envelopes/s" },
+				{ "expr": "rate(chatty_server_envelopes_out_total[5m])", "legendFormat": "out envelopes/s" }
+			],
+			"title": "Envelope rate",
+			"type": "timeseries"
+		},
+		{
+			"datasource": { "type": "prometheus" },
+			"fieldConfig": { "defaults": {}, "overrides": [] },
+			"gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+			"id": 5,
+			"targets": [
+				{ "expr": "rate(chatty_server_commands_total[5m])", "legendFormat": "commands/s" },
+				{ "expr": "rate(chatty_server_commands_ok_total[5m])", "legendFormat": "ok/s" },
+				{ "expr": "rate(chatty_server_commands_not_authorized_total[5m])", "legendFormat": "not_auth/s" },
+				{ "expr": "rate(chatty_server_commands_invalid_command_total[5m])", "legendFormat": "invalid_cmd/s" },
+				{ "expr": "rate(chatty_server_commands_internal_error_total[5m])", "legendFormat": "internal_err/s" }
+			],
+			"title": "Commands",
+			"type": "timeseries"
+		},
+		{
+			"datasource": { "type": "prometheus" },
+			"fieldConfig": { "defaults": {}, "overrides": [] },
+			"gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+			"id": 6,
+			"targets": [
+				{ "expr": "rate(chatty_server_control_decode_errors_total[5m])", "legendFormat": "decode_errors/s" },
+				{ "expr": "rate(chatty_server_command_audit_failures_total[5m])", "legendFormat": "audit_fail/s" }
+			],
+			"title": "Errors",
+			"type": "timeseries"
+		},
+		{
+			"datasource": { "type": "prometheus" },
+			"fieldConfig": { "defaults": {}, "overrides": [] },
+			"gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+			"id": 7,
+			"targets": [{ "expr": "rate(chatty_server_commands_rate_limited_total[5m])", "legendFormat": "rate_limited/s" }],
+			"title": "Command rate limiting",
+			"type": "timeseries"
+		},
+		{
+			"datasource": { "type": "prometheus" },
+			"fieldConfig": { "defaults": {}, "overrides": [] },
+			"gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+			"id": 8,
+			"targets": [
+				{ "expr": "rate(chatty_kick_webhook_requests_total[5m])", "legendFormat": "requests/s" },
+				{ "expr": "rate(chatty_kick_webhook_signature_invalid_total[5m])", "legendFormat": "sig_invalid/s" },
+				{ "expr": "rate(chatty_kick_webhook_parse_errors_total[5m])", "legendFormat": "parse_errors/s" },
+				{ "expr": "rate(chatty_kick_webhook_ingest_errors_total[5m])", "legendFormat": "ingest_errors/s" }
+			],
+			"title": "Kick webhook health",
+			"type": "timeseries"
+		}
+	],
+	"schemaVersion": 38,
+	"style": "dark",
+	"tags": ["chatty"],
+	"templating": { "list": [] },
+	"time": { "from": "now-1h", "to": "now" },
+	"timezone": "browser",
+	"title": "Chatty Server",
+	"version": 1
+}

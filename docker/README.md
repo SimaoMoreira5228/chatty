@@ -42,6 +42,8 @@ The server also reads TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET and KICK_CLIENT_ID
 - `18208` metrics HTTP (internal only)
 - `80/443` Caddy HTTPS ingress
 - `4321` web server (internal only)
+- `9090` Prometheus (optional)
+- `3000` Grafana (optional)
 
 ## OAuth redirect URLs
 
@@ -51,3 +53,14 @@ Configure your OAuth apps with these redirect URLs:
 - `https://$CHATTY_DOMAIN/api/kick/callback`
 
 Kick chat ingestion uses the Pusher websocket connection.
+
+## Optional observability (Prometheus + Grafana)
+
+Observability is optional and lives in a compose override.
+
+Start with:
+
+- `docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d`
+
+This uses the configs in `docker/observability/` and connects Prometheus to the
+server metrics endpoint on `chatty-server:18208`.

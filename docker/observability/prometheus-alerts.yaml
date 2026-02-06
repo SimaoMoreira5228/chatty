@@ -1,0 +1,65 @@
+groups:
+  - name: chatty_server
+    rules:
+      - alert: ChattyServerNoConnections
+        expr: rate(chatty_server_connections_total[10m]) == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No new connections"
+          description: "No new connections observed for 10 minutes."
+
+      - alert: ChattyServerHighCommandErrors
+        expr: rate(chatty_server_commands_internal_error_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Command execution errors"
+          description: "Internal command errors detected."
+
+      - alert: ChattyServerAuditFailures
+        expr: rate(chatty_server_command_audit_failures_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Command audit failures"
+          description: "Command audit writes are failing."
+
+      - alert: ChattyServerControlDecodeErrors
+        expr: rate(chatty_server_control_decode_errors_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Control decode errors"
+          description: "Errors decoding control frames."
+
+      - alert: ChattyServerCommandRateLimited
+        expr: rate(chatty_server_commands_rate_limited_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Command rate limiting triggered"
+          description: "Command rate limiting is rejecting requests."
+
+      - alert: ChattyKickWebhookSignatureFailures
+        expr: rate(chatty_kick_webhook_signature_invalid_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kick webhook signature failures"
+          description: "Webhook signature verification failures detected."
+
+      - alert: ChattyKickWebhookIngestErrors
+        expr: rate(chatty_kick_webhook_ingest_errors_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kick webhook ingest errors"
+          description: "Webhook ingest failures detected."
