@@ -193,12 +193,20 @@ impl Chatty {
 									}
 									let reply_to_server_message_id = p.reply_to_server_message_id.clone();
 									let reply_to_platform_message_id = p.reply_to_platform_message_id.clone();
+									let selected_platform = p.selected_platform;
 									p.composer.clear();
+									p.reply_to_server_message_id.clear();
+									p.reply_to_platform_message_id.clear();
+									p.reply_to_room = None;
 									self.state.ui.vim.exit_insert_mode();
 
 									self.save_ui_layout();
 
-									let room = rooms[0].clone();
+									let room = if let Some(platform) = selected_platform {
+										rooms.iter().find(|r| r.platform == platform).cloned().unwrap_or_else(|| rooms[0].clone())
+									} else {
+										rooms[0].clone()
+									};
 									let topic = RoomTopic::format(&room);
 									let cmd = chatty_protocol::pb::Command {
 										command: Some(chatty_protocol::pb::command::Command::SendChat(

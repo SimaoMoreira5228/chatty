@@ -91,7 +91,7 @@ impl Chatty {
 			return self.toast(t!("no_active_room").to_string());
 		}
 
-		let (text, reply_to_server_message_id, reply_to_platform_message_id, reply_to_room) =
+		let (text, reply_to_server_message_id, reply_to_platform_message_id, reply_to_room, selected_platform) =
 			if let Some(tab) = self.selected_tab() {
 				if let Some(p) = tab.panes.get(pane) {
 					(
@@ -99,6 +99,7 @@ impl Chatty {
 						p.reply_to_server_message_id.clone(),
 						p.reply_to_platform_message_id.clone(),
 						p.reply_to_room.clone(),
+						p.selected_platform,
 					)
 				} else {
 					return Task::none();
@@ -115,7 +116,12 @@ impl Chatty {
 			r
 		} else {
 			let mut r = rooms[0].clone();
-			if text.starts_with('/') {
+			
+			if let Some(platform) = selected_platform {
+				if let Some(target) = rooms.iter().find(|tr| tr.platform == platform) {
+					r = target.clone();
+				}
+			} else if text.starts_with('/') {
 				let parts: Vec<&str> = text.split_whitespace().collect();
 				if parts.len() >= 2 {
 					let platform_hint = parts[1].to_lowercase();

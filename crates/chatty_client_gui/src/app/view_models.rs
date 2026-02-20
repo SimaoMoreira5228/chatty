@@ -167,6 +167,10 @@ pub struct ChatPaneViewModel<'a> {
 	pub composer_text: &'a str,
 	pub warnings: Vec<String>,
 	pub log_items: Vec<ChatPaneLogItem<'a>>,
+	pub _platforms: Vec<Platform>,
+	pub selected_platform: Option<Platform>,
+	pub window_width: Option<f32>,
+	pub show_platform_selector: bool,
 }
 
 pub fn build_chat_pane_view_model<'a>(
@@ -208,8 +212,8 @@ pub fn build_chat_pane_view_model<'a>(
 		platforms.insert(room.platform);
 	}
 	let show_platform_badge = platforms.len() > 1;
-	for platform in platforms {
-		let has_identity = app.state.gui_settings().identities.iter().any(|id| id.platform == platform);
+	for platform in &platforms {
+		let has_identity = app.state.gui_settings().identities.iter().any(|id| id.platform == *platform);
 		if !has_identity {
 			let warning_text = match platform {
 				chatty_domain::Platform::Twitch => t!("main.warning_no_twitch_login"),
@@ -342,6 +346,15 @@ pub fn build_chat_pane_view_model<'a>(
 		&& app.state.ui.vim.insert_mode
 		&& app.state.ui.vim.insert_target == Some(InsertTarget::Composer);
 
+	let mut platforms_vec: Vec<Platform> = platforms.into_iter().collect();
+	platforms_vec.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+	let show_platform_selector = platforms_vec.len() > 1;
+	let selected_platform = state.selected_platform.or_else(|| {
+		platforms_vec.iter().find(|p| **p == Platform::Twitch).copied()
+			.or_else(|| platforms_vec.first().copied())
+	});
+	let window_width = app.state.ui.window_size.map(|(w, _)| w);
+
 	ChatPaneViewModel {
 		pane,
 		title,
@@ -353,6 +366,10 @@ pub fn build_chat_pane_view_model<'a>(
 		composer_text: state.composer.as_str(),
 		warnings,
 		log_items,
+		_platforms: platforms_vec,
+		selected_platform,
+		window_width,
+		show_platform_selector,
 	}
 }
 

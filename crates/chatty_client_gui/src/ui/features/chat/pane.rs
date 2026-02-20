@@ -1,4 +1,4 @@
-use iced::widget::{button, column, container, pane_grid, row, rule, scrollable, text, text_input};
+use iced::widget::{button, column, container, pane_grid, pick_list, row, rule, scrollable, text, text_input};
 use iced::{Alignment, Background, Border, Element, Length, Shadow};
 use rust_i18n::t;
 
@@ -7,6 +7,9 @@ use crate::app::features::chat::{ChatPane, ChatPaneMessage};
 use crate::app::message::Message;
 use crate::app::view_models::{ChatPaneLogItem, ChatPaneViewModel};
 use crate::theme::Palette;
+
+const MIN_WIDTH_FOR_SELECTOR: f32 = 450.0;
+const PLATFORM_OPTIONS: [chatty_domain::Platform; 2] = [chatty_domain::Platform::Twitch, chatty_domain::Platform::Kick];
 
 impl ChatPane {
 	pub fn view<'a>(
@@ -102,6 +105,9 @@ impl ChatPane {
 			button(text(t!("main.send_label")).color(palette.text_muted))
 		};
 
+		let show_selector =
+			vm.show_platform_selector && vm.window_width.map(|w| w >= MIN_WIDTH_FOR_SELECTOR).unwrap_or(true);
+
 		let input_and_caret =
 			container(row![input].spacing(4).align_y(Alignment::Center)).style(move |_theme| container::Style {
 				text_color: Some(palette.text),
@@ -123,7 +129,18 @@ impl ChatPane {
 				snap: false,
 			});
 
-		let composer = row![input_and_caret, send_btn].spacing(8).align_y(Alignment::Center);
+		let composer = if show_selector {
+			let platform_selector = pick_list(&PLATFORM_OPTIONS[..], vm.selected_platform, move |p| {
+				Message::PaneMessage(vm.pane, ChatPaneMessage::PlatformSelected(p))
+			})
+			.width(Length::Shrink);
+
+			row![platform_selector, input_and_caret, send_btn]
+				.spacing(8)
+				.align_y(Alignment::Center)
+		} else {
+			row![input_and_caret, send_btn].spacing(8).align_y(Alignment::Center)
+		};
 
 		column![log, rule::horizontal(1), composer].spacing(8).padding(8).into()
 	}

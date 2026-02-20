@@ -1,4 +1,4 @@
 **/target
 .venv/
-architecture/
 **/.env
+local/

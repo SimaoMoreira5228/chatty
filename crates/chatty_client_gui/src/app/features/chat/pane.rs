@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use chatty_domain::RoomKey;
+use chatty_domain::{Platform, RoomKey};
 use iced::Task;
 use iced::widget::pane_grid;
 
@@ -12,6 +12,7 @@ use crate::app::model::Chatty;
 pub enum ChatPaneMessage {
 	ComposerChanged(String),
 	SendPressed,
+	PlatformSelected(Platform),
 }
 
 #[derive(Debug, Clone)]
@@ -22,6 +23,7 @@ pub struct ChatPane {
 	pub reply_to_server_message_id: String,
 	pub reply_to_platform_message_id: String,
 	pub reply_to_room: Option<RoomKey>,
+	pub selected_platform: Option<Platform>,
 }
 
 impl ChatPane {
@@ -33,6 +35,7 @@ impl ChatPane {
 			reply_to_server_message_id: String::new(),
 			reply_to_platform_message_id: String::new(),
 			reply_to_room: None,
+			selected_platform: None,
 		}
 	}
 
@@ -48,6 +51,11 @@ impl ChatPane {
 				self.composer.clear();
 				app.save_ui_layout();
 				task
+			}
+			ChatPaneMessage::PlatformSelected(platform) => {
+				self.selected_platform = Some(platform);
+				app.save_ui_layout();
+				Task::none()
 			}
 		}
 	}
