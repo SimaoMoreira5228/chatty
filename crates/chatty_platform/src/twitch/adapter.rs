@@ -100,6 +100,21 @@ fn transport_session_id(transport: &Option<serde_json::Value>) -> Option<&str> {
 	transport.as_ref().and_then(|t| t.get("session_id")).and_then(|v| v.as_str())
 }
 
+const TRUSTED_EVENTSUB_HOSTS: &[&str] = &[
+	"eventsub.wss.twitch.tv",
+	"eventsub-secondary.wss.twitch.tv",
+];
+
+fn is_trusted_eventsub_url(url: &str) -> bool {
+	let Ok(parsed) = Url::parse(url) else {
+		return false;
+	};
+	let Some(host) = parsed.host_str() else {
+		return false;
+	};
+	TRUSTED_EVENTSUB_HOSTS.iter().any(|trusted| host == *trusted || host.ends_with(&format!(".{}", trusted)))
+}
+
 struct MigrationState {
 	reconnect_url: Option<String>,
 	ws2: Option<TwitchWs>,
@@ -159,6 +174,7 @@ pub struct TwitchEventSubAdapter {
 	joined_rooms: HashSet<RoomKey>,
 	broadcaster_id_by_room: HashMap<RoomKey, String>,
 	token_user_id: Option<String>,
+	token_username: Option<String>,
 	subscription_id_by_room_and_type: HashMap<(RoomKey, TwitchSubscriptionType), String>,
 	is_token_user_mod_by_room: HashMap<RoomKey, bool>,
 	last_mod_status_refresh_by_room: HashMap<RoomKey, Instant>,
@@ -233,6 +249,7 @@ impl TwitchEventSubAdapter {
 			joined_rooms: HashSet::new(),
 			broadcaster_id_by_room: HashMap::new(),
 			token_user_id: None,
+			token_username: None,
 			subscription_id_by_room_and_type: HashMap::new(),
 			is_token_user_mod_by_room: HashMap::new(),
 			last_mod_status_refresh_by_room: HashMap::new(),
@@ -305,7 +322,7 @@ impl TwitchEventSubAdapter {
 				access_token,
 				refresh_token,
 				user_id,
-				username: _,
+				username,
 				expires_in,
 			} => {
 				self.cfg.client_id = client_id;
@@ -314,6 +331,7 @@ impl TwitchEventSubAdapter {
 					self.cfg.refresh_token = refresh_token;
 				}
 				self.token_user_id = user_id;
+				self.token_username = username;
 				self.auth_expires_at = expires_in
 					.and_then(|d| SystemTime::now().checked_add(d))
 					.or(self.auth_expires_at);
@@ -1006,7 +1024,7 @@ impl TwitchEventSubAdapter {
 						access_token: self.cfg.user_access_token.clone(),
 						refresh_token: self.cfg.refresh_token.clone(),
 						user_id: self.token_user_id.clone(),
-						username: None,
+						username: self.token_username.clone(),
 						expires_in: self.auth_expires_at.and_then(|at| at.duration_since(SystemTime::now()).ok()),
 					};
 					let _ = resp.send(Some(auth));
@@ -1481,6 +1499,10 @@ impl TwitchEventSubAdapter {
 												&& let Ok(reconnect_msg) = eventsub::parse_reconnect(&t)
 											{
 												let url = reconnect_msg.payload.session.reconnect_url;
+												if !is_trusted_eventsub_url(&url) {
+													warn!(%platform, url = %url, "rejecting reconnect to untrusted EventSub URL");
+													continue;
+												}
 												let _ = events_tx.try_send(status(platform, true, "received session_reconnect; starting migration"));
 
 												migrating = Some(MigrationState {

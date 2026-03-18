@@ -321,12 +321,24 @@ impl AdapterManager {
 
 	/// Re-emit joins for the provided rooms to refresh assets.
 	pub async fn refresh_rooms(&self, rooms: &[RoomKey]) {
-		let mut joined = self.joined_rooms.write().await;
-		for room in rooms {
-			if let Some(ctrl) = self.control_by_platform.get(&room.platform) {
-				let _ = ctrl.send(AdapterControl::Join { room: room.clone() }).await;
+		let rooms_to_join: Vec<_> = rooms
+			.iter()
+			.filter_map(|room| {
+				self.control_by_platform
+					.get(&room.platform)
+					.map(|ctrl| (room.clone(), ctrl.clone()))
+			})
+			.collect();
+
+		{
+			let mut joined = self.joined_rooms.write().await;
+			for (room, _) in &rooms_to_join {
 				joined.insert(room.clone());
 			}
+		}
+
+		for (room, ctrl) in rooms_to_join {
+			let _ = ctrl.send(AdapterControl::Join { room }).await;
 		}
 	}
 

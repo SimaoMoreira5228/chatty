@@ -319,15 +319,22 @@ impl CommandRateLimiter {
 			return true;
 		};
 
-		if self.per_topic.len() >= self.max_topics {
-			self.per_topic.clear();
+		while self.per_topic.len() >= self.max_topics {
+			if let Some(oldest_key) = self.per_topic.keys().next().cloned() {
+				self.per_topic.remove(&oldest_key);
+			} else {
+				break;
+			}
 		}
 
-		let entry = self.per_topic.entry(room.clone()).or_insert_with(|| {
-			bucket.tokens = bucket.capacity;
-			bucket
-		});
-		entry.allow()
+		match self.per_topic.get_mut(room) {
+			Some(bucket) => bucket.allow(),
+			None => {
+				bucket.tokens = bucket.capacity - 1.0;
+				self.per_topic.insert(room.clone(), bucket);
+				true
+			}
+		}
 	}
 }
 
@@ -483,102 +490,32 @@ pub async fn handle_connection(
 		let mut refresh_token = hello.twitch_refresh_token.trim().to_string();
 
 		let validated = match validate_user_token(&user_oauth).await {
-			Ok(v) => v,
 			Err(e) => {
-				let mut refresh_client_id = if !hello_client_id.is_empty() {
-					Some(hello_client_id.to_string())
-				} else {
-					settings.twitch_client_id.clone()
-				};
-
-				if refresh_token.is_empty()
-					&& let Some(AdapterAuth::TwitchUser {
-						client_id,
-						refresh_token: Some(token),
-						..
-					}) = adapter_manager.query_auth(Platform::Twitch).await
-				{
-					refresh_token = token.expose().to_string();
-					if refresh_client_id.is_none() && !client_id.trim().is_empty() {
-						refresh_client_id = Some(client_id);
-					}
-				}
-
-				if !refresh_token.is_empty()
-					&& let Some(client_id) = refresh_client_id
-					&& let Some(client_secret) = settings.twitch_client_secret.as_ref()
-				{
-					match refresh_user_token(&client_id, client_secret.expose(), &refresh_token).await {
-						Ok(resp) => {
-							user_oauth = resp.access_token;
-							if let Some(new_refresh) = resp.refresh_token {
-								refresh_token = new_refresh;
-							}
-
-							match validate_user_token(&user_oauth).await {
-								Ok(v) => v,
-								Err(e) => {
-									warn!(conn_id, error = %e, "invalid twitch oauth token after refresh");
-									send_envelope(
-										&mut control_send,
-										pb::Envelope {
-											version: PROTOCOL_VERSION,
-											request_id: String::new(),
-											msg: Some(pb::envelope::Msg::Error(pb::Error {
-												code: "UNAUTHORIZED".to_string(),
-												message: "invalid twitch oauth token".to_string(),
-												topic: String::new(),
-												request_id: String::new(),
-											})),
-										},
-									)
-									.await
-									.ok();
-									return Ok(());
-								}
-							}
-						}
-						Err(e) => {
-							warn!(conn_id, error = %e, "twitch oauth refresh failed");
-							send_envelope(
-								&mut control_send,
-								pb::Envelope {
-									version: PROTOCOL_VERSION,
-									request_id: String::new(),
-									msg: Some(pb::envelope::Msg::Error(pb::Error {
-										code: "UNAUTHORIZED".to_string(),
-										message: "invalid twitch oauth token".to_string(),
-										topic: String::new(),
-										request_id: String::new(),
-									})),
-								},
-							)
-							.await
-							.ok();
-							return Ok(());
-						}
-					}
-				} else {
-					warn!(conn_id, error = %e, "invalid twitch oauth token");
-					send_envelope(
-						&mut control_send,
-						pb::Envelope {
-							version: PROTOCOL_VERSION,
+				warn!(conn_id, error = %e, "invalid twitch oauth token");
+				send_envelope(
+					&mut control_send,
+					pb::Envelope {
+						version: PROTOCOL_VERSION,
+						request_id: String::new(),
+						msg: Some(pb::envelope::Msg::Error(pb::Error {
+							code: "UNAUTHORIZED".to_string(),
+							message: "invalid twitch oauth token".to_string(),
+							topic: String::new(),
 							request_id: String::new(),
-							msg: Some(pb::envelope::Msg::Error(pb::Error {
-								code: "UNAUTHORIZED".to_string(),
-								message: "invalid twitch oauth token".to_string(),
-								topic: String::new(),
-								request_id: String::new(),
-							})),
-						},
-					)
-					.await
-					.ok();
-					return Ok(());
-				}
+						})),
+					},
+				)
+				.await
+				.ok();
+				return Ok(());
 			}
+			Ok(v) => v,
 		};
+
+		let hello_client_id = hello.twitch_client_id.trim();
+		let hello_user_id = hello.twitch_user_id.trim();
+		let hello_username = hello.twitch_username.trim();
+		let mut refresh_token = hello.twitch_refresh_token.trim().to_string();
 
 		let client_id = if !hello_client_id.is_empty() {
 			hello_client_id.to_string()
@@ -1922,11 +1859,11 @@ async fn handle_command(
 				detail: detail.unwrap_or_else(|| "invalid command".to_string()),
 			}
 		}
-		Err(CommandError::Internal(msg)) => {
+		Err(CommandError::Internal(_)) => {
 			metrics::counter!("chatty_server_commands_internal_error_total").increment(1);
 			pb::CommandResult {
 				status: pb::command_result::Status::InternalError as i32,
-				detail: msg,
+				detail: "internal error".to_string(),
 			}
 		}
 	}

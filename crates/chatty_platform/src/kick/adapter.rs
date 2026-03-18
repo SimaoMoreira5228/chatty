@@ -146,8 +146,9 @@ impl KickEventAdapter {
 								.filter(|s| !s.trim().is_empty())
 								.map(|s| s.to_string())
 								.collect();
-							self.user_scopes.write().await.insert(uid, scopes.clone());
-							info!(user_id = uid, scopes = %scope, "kick token introspect scopes");
+							let scope_count = scopes.len();
+							self.user_scopes.write().await.insert(uid, scopes);
+							info!(user_id = uid, scope_count, "kick token introspection successful");
 						}
 					}
 					Err(err) => {
@@ -446,23 +447,12 @@ impl KickEventAdapter {
 		};
 
 		if self.auth_user_ids.read().await.contains(&payload.sender.id) {
-			let has_mod_badge = payload
-				.sender
-				.identity
-				.as_ref()
-				.map(|identity| {
-					identity
-						.badges
-						.iter()
-						.any(|badge| matches!(badge.badge_type.as_str(), "moderator" | "broadcaster"))
-				})
-				.unwrap_or(false);
-			let mut guard = self.moderator_rooms.write().await;
-			let entry = guard.entry(payload.sender.id).or_insert_with(HashSet::new);
-			if has_mod_badge {
-				entry.insert(room.clone());
-			} else {
-				entry.remove(&room);
+			let broadcaster_id = self.broadcaster_id_by_room.get(&room)
+				.map(|(id, _)| *id);
+			let is_broadcaster = broadcaster_id.map(|id| id == payload.sender.id).unwrap_or(false);
+			if is_broadcaster {
+				let mut guard = self.moderator_rooms.write().await;
+				guard.entry(payload.sender.id).or_insert_with(HashSet::new).insert(room.clone());
 			}
 		}
 
