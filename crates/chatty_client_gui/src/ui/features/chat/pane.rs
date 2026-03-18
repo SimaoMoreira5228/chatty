@@ -1,11 +1,12 @@
-use iced::widget::{button, column, container, pane_grid, pick_list, row, rule, scrollable, text, text_input};
-use iced::{Alignment, Background, Border, Element, Length, Shadow};
+use iced::widget::{button, column, container, pane_grid, pick_list, row, rule, scrollable, svg, text, text_input};
+use iced::{Alignment, Background, Border, Color, Element, Length, Shadow};
 use rust_i18n::t;
 
 use super::message::ChatMessageView;
 use crate::app::features::chat::{ChatPane, ChatPaneMessage};
 use crate::app::message::Message;
 use crate::app::view_models::{ChatPaneLogItem, ChatPaneViewModel};
+use crate::assets::svg_handle;
 use crate::theme::Palette;
 
 const MIN_WIDTH_FOR_SELECTOR: f32 = 450.0;
@@ -129,6 +130,81 @@ impl ChatPane {
 				snap: false,
 			});
 
+		let mut status_items: Vec<Element<'a, Message>> = Vec::new();
+
+		if let Some(reply) = vm.replying_to.clone() {
+			let display_name = reply.display_name.clone();
+			let message_preview = reply.message_preview.clone();
+			let reply_row = row![
+				text(t!("main.composer_replying_to")).size(12).color(palette.text_dim),
+				text(display_name).size(12).color(palette.chat_nick),
+				text(format!(": {}", message_preview)).size(12).color(palette.text_dim),
+			]
+			.spacing(4)
+			.align_y(Alignment::Center);
+
+			let cancel_btn = button(
+				svg(svg_handle("close.svg"))
+					.width(12)
+					.height(12)
+					.style(move |_, _| svg::Style {
+						color: Some(palette.text_dim),
+					}),
+			)
+			.on_press(Message::PaneMessage(vm.pane, ChatPaneMessage::CancelReply))
+			.padding(2)
+			.style(|_theme, _status| button::Style {
+				background: Some(Background::Color(Color::TRANSPARENT)),
+				..Default::default()
+			});
+
+			status_items.push(row![reply_row, cancel_btn].spacing(4).into());
+		}
+
+		for rs in &vm.room_states {
+			if rs.emote_only {
+				status_items.push(
+					text(t!("main.room_state_emote_only"))
+						.size(12)
+						.color(palette.warning_text)
+						.into(),
+				);
+			}
+			if rs.subscribers_only {
+				status_items.push(
+					text(t!("main.room_state_subscribers_only"))
+						.size(12)
+						.color(palette.warning_text)
+						.into(),
+				);
+			}
+			if rs.slow_mode {
+				let label = if let Some(wait) = rs.slow_mode_wait {
+					format!("{} ({}s)", t!("main.room_state_slow_mode"), wait)
+				} else {
+					t!("main.room_state_slow_mode").to_string()
+				};
+				status_items.push(text(label).size(12).color(palette.warning_text).into());
+			}
+		}
+
+		let status_bar = if status_items.is_empty() {
+			None
+		} else {
+			let row_elem = row(status_items).spacing(8).align_y(Alignment::Center);
+			Some(container(row_elem).padding([4, 8]).style(move |_theme| container::Style {
+				text_color: Some(palette.text_dim),
+				background: Some(Background::Color(palette.panel_bg_2)),
+				border: Border {
+					color: palette.border,
+					width: 1.0,
+					radius: 4.0.into(),
+				},
+				shadow: Shadow::default(),
+				snap: false,
+			}))
+		};
+
 		let composer = if show_selector {
 			let platform_selector = pick_list(&PLATFORM_OPTIONS[..], vm.selected_platform, move |p| {
 				Message::PaneMessage(vm.pane, ChatPaneMessage::PlatformSelected(p))
@@ -142,7 +218,14 @@ impl ChatPane {
 			row![input_and_caret, send_btn].spacing(8).align_y(Alignment::Center)
 		};
 
-		column![log, rule::horizontal(1), composer].spacing(8).padding(8).into()
+		if let Some(status) = status_bar {
+			column![log, rule::horizontal(1), status, composer]
+				.spacing(8)
+				.padding(8)
+				.into()
+		} else {
+			column![log, rule::horizontal(1), composer].spacing(8).padding(8).into()
+		}
 	}
 
 	fn view_unsubscribed_pane<'a>(&'a self, vm: ChatPaneViewModel<'a>, palette: Palette) -> Element<'a, Message> {

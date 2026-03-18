@@ -156,6 +156,12 @@ pub enum ChatPaneLogItem<'a> {
 }
 
 #[derive(Debug, Clone)]
+pub struct ReplyToInfo {
+	pub display_name: String,
+	pub message_preview: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct ChatPaneViewModel<'a> {
 	pub pane: Pane,
 	pub title: String,
@@ -171,6 +177,16 @@ pub struct ChatPaneViewModel<'a> {
 	pub selected_platform: Option<Platform>,
 	pub window_width: Option<f32>,
 	pub show_platform_selector: bool,
+	pub replying_to: Option<ReplyToInfo>,
+	pub room_states: Vec<RoomStateInfo>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RoomStateInfo {
+	pub emote_only: bool,
+	pub subscribers_only: bool,
+	pub slow_mode: bool,
+	pub slow_mode_wait: Option<u64>,
 }
 
 pub fn build_chat_pane_view_model<'a>(
@@ -350,10 +366,36 @@ pub fn build_chat_pane_view_model<'a>(
 	platforms_vec.sort_by(|a, b| a.as_str().cmp(b.as_str()));
 	let show_platform_selector = platforms_vec.len() > 1;
 	let selected_platform = state.selected_platform.or_else(|| {
-		platforms_vec.iter().find(|p| **p == Platform::Twitch).copied()
+		platforms_vec
+			.iter()
+			.find(|p| **p == Platform::Twitch)
+			.copied()
 			.or_else(|| platforms_vec.first().copied())
 	});
 	let window_width = app.state.ui.window_size.map(|(w, _)| w);
+
+	let replying_to = if !state.reply_to_server_message_id.is_empty() || !state.reply_to_platform_message_id.is_empty() {
+		let display_name = "User".to_string();
+		let message_preview = "Message".to_string();
+		Some(ReplyToInfo {
+			display_name,
+			message_preview,
+		})
+	} else {
+		None
+	};
+
+	let mut room_states = Vec::new();
+	for rk in rooms {
+		if let Some(rs) = app.state.room_states.get(rk) {
+			room_states.push(RoomStateInfo {
+				emote_only: rs.emote_only.unwrap_or(false),
+				subscribers_only: rs.subscribers_only.unwrap_or(false),
+				slow_mode: rs.slow_mode.unwrap_or(false),
+				slow_mode_wait: rs.slow_mode_wait_time_seconds,
+			});
+		}
+	}
 
 	ChatPaneViewModel {
 		pane,
@@ -370,6 +412,8 @@ pub fn build_chat_pane_view_model<'a>(
 		selected_platform,
 		window_width,
 		show_platform_selector,
+		replying_to,
+		room_states,
 	}
 }
 

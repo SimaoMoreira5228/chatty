@@ -203,7 +203,11 @@ impl Chatty {
 									self.save_ui_layout();
 
 									let room = if let Some(platform) = selected_platform {
-										rooms.iter().find(|r| r.platform == platform).cloned().unwrap_or_else(|| rooms[0].clone())
+										rooms
+											.iter()
+											.find(|r| r.platform == platform)
+											.cloned()
+											.unwrap_or_else(|| rooms[0].clone())
 									} else {
 										rooms[0].clone()
 									};

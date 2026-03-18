@@ -116,7 +116,7 @@ impl Chatty {
 			r
 		} else {
 			let mut r = rooms[0].clone();
-			
+
 			if let Some(platform) = selected_platform {
 				if let Some(target) = rooms.iter().find(|tr| tr.platform == platform) {
 					r = target.clone();

@@ -52,7 +52,7 @@ impl<'a> ChatMessageView<'a> {
 		}
 
 		let has_emotes = self.message_has_emotes();
-		
+
 		if !has_emotes {
 			return self.view_text_only(inline_widgets, name_color, text_color, is_deleted);
 		}
@@ -66,13 +66,15 @@ impl<'a> ChatMessageView<'a> {
 
 		for part in m.token_parts.iter() {
 			let token_str = part.token.as_str();
-			if inline_emote(token_str).or_else(|| self.model.emotes_map.get(token_str)).is_some() {
+			if inline_emote(token_str)
+				.or_else(|| self.model.emotes_map.get(token_str))
+				.is_some()
+			{
 				return true;
 			}
 
 			if part.has_word {
-				let core_emote = inline_emote(part.core.as_str())
-					.or_else(|| self.model.emotes_map.get(part.core.as_str()));
+				let core_emote = inline_emote(part.core.as_str()).or_else(|| self.model.emotes_map.get(part.core.as_str()));
 				if core_emote.is_some() {
 					return true;
 				}
@@ -117,11 +119,7 @@ impl<'a> ChatMessageView<'a> {
 			}
 		}
 
-		inline_widgets.push(
-			iced::widget::rich_text(spans)
-				.width(Length::Fill)
-				.into()
-		);
+		inline_widgets.push(iced::widget::rich_text(spans).width(Length::Fill).into());
 
 		if self.model.is_pending {
 			inline_widgets.push(svg(svg_handle("spinner.svg")).width(14).height(14).into());
@@ -141,7 +139,12 @@ impl<'a> ChatMessageView<'a> {
 
 		enum Segment<'b> {
 			Text(&'b str),
-			Emote { url: String, name: String, width: u32, height: u32 },
+			Emote {
+				url: String,
+				name: String,
+				width: u32,
+				height: u32,
+			},
 		}
 
 		let mut segments: Vec<Segment<'a>> = Vec::new();
@@ -228,7 +231,12 @@ impl<'a> ChatMessageView<'a> {
 					Segment::Text(t) => {
 						text_buffer.push_str(t);
 					}
-					Segment::Emote { url, name, width, height } => {
+					Segment::Emote {
+						url,
+						name,
+						width,
+						height,
+					} => {
 						text_buffer.push(' ');
 						pending_emotes.push((url, name, width, height));
 					}
@@ -239,21 +247,13 @@ impl<'a> ChatMessageView<'a> {
 				spans.push(iced::widget::text::Span::new(text_buffer).color(text_color));
 			}
 
-			inline_widgets.push(
-				iced::widget::rich_text(spans)
-					.width(Length::Fill)
-					.into()
-			);
+			inline_widgets.push(iced::widget::rich_text(spans).width(Length::Fill).into());
 
 			for (url, name, width, height) in pending_emotes {
 				inline_widgets.push(self.render_image(&url, width, height, Some(&name)));
 			}
 		} else {
-			inline_widgets.push(
-				text(format!("{}:", m.display_name.as_str()))
-					.color(name_color)
-					.into()
-			);
+			inline_widgets.push(text(format!("{}:", m.display_name.as_str())).color(name_color).into());
 
 			let mut text_buffer = String::new();
 
@@ -262,7 +262,12 @@ impl<'a> ChatMessageView<'a> {
 					Segment::Text(t) => {
 						text_buffer.push_str(t);
 					}
-					Segment::Emote { url, name, width, height } => {
+					Segment::Emote {
+						url,
+						name,
+						width,
+						height,
+					} => {
 						if !text_buffer.is_empty() {
 							let text_content = std::mem::take(&mut text_buffer);
 							inline_widgets.push(text(text_content).color(text_color).width(Length::Shrink).into());
@@ -334,14 +339,15 @@ impl<'a> ChatMessageView<'a> {
 
 		let spans: Vec<iced::widget::text::Span<'a, (), iced::Font>> = vec![
 			iced::widget::text::Span::new("replying to ").color(palette.text_dim),
-			iced::widget::text::Span::new(format!("@{}", reply.display_name.as_str()))
-				.color(if reply.is_own { palette.text } else { palette.text_dim }),
+			iced::widget::text::Span::new(format!("@{}", reply.display_name.as_str())).color(if reply.is_own {
+				palette.text
+			} else {
+				palette.text_dim
+			}),
 			iced::widget::text::Span::new(format!(": {}", reply.message.as_str())).color(palette.text_dim),
 		];
 
-		let reply_text = iced::widget::rich_text(spans)
-			.size(12)
-			.width(Length::Fill);
+		let reply_text = iced::widget::rich_text(spans).size(12).width(Length::Fill);
 
 		if reply.is_own {
 			container(reply_text)

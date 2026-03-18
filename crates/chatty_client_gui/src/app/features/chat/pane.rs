@@ -13,6 +13,7 @@ pub enum ChatPaneMessage {
 	ComposerChanged(String),
 	SendPressed,
 	PlatformSelected(Platform),
+	CancelReply,
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +55,13 @@ impl ChatPane {
 			}
 			ChatPaneMessage::PlatformSelected(platform) => {
 				self.selected_platform = Some(platform);
+				app.save_ui_layout();
+				Task::none()
+			}
+			ChatPaneMessage::CancelReply => {
+				self.reply_to_server_message_id.clear();
+				self.reply_to_platform_message_id.clear();
+				self.reply_to_room = None;
 				app.save_ui_layout();
 				Task::none()
 			}
