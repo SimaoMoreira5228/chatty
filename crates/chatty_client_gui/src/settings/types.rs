@@ -52,7 +52,7 @@ pub enum SplitLayoutKind {
 	Linear,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Identity {
 	pub id: String,
@@ -64,6 +64,18 @@ pub struct Identity {
 	pub refresh_token: String,
 	pub client_id: String,
 	pub enabled: bool,
+}
+
+impl std::fmt::Debug for Identity {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("Identity")
+			.field("id", &self.id)
+			.field("display_name", &self.display_name)
+			.field("platform", &self.platform)
+			.field("username", &self.username)
+			.field("user_id", &self.user_id)
+			.finish_non_exhaustive()
+	}
 }
 
 impl Default for Identity {

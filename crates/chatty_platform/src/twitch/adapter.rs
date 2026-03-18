@@ -100,10 +100,9 @@ fn transport_session_id(transport: &Option<serde_json::Value>) -> Option<&str> {
 	transport.as_ref().and_then(|t| t.get("session_id")).and_then(|v| v.as_str())
 }
 
-const TRUSTED_EVENTSUB_HOSTS: &[&str] = &[
-	"eventsub.wss.twitch.tv",
-	"eventsub-secondary.wss.twitch.tv",
-];
+const TRUSTED_EVENTSUB_HOSTS: &[&str] = &["eventsub.wss.twitch.tv", "eventsub-secondary.wss.twitch.tv"];
+
+const MIN_KEEPALIVE_SECS: u64 = 10;
 
 fn is_trusted_eventsub_url(url: &str) -> bool {
 	let Ok(parsed) = Url::parse(url) else {
@@ -112,7 +111,9 @@ fn is_trusted_eventsub_url(url: &str) -> bool {
 	let Some(host) = parsed.host_str() else {
 		return false;
 	};
-	TRUSTED_EVENTSUB_HOSTS.iter().any(|trusted| host == *trusted || host.ends_with(&format!(".{}", trusted)))
+	TRUSTED_EVENTSUB_HOSTS
+		.iter()
+		.any(|trusted| host == *trusted || host.ends_with(&format!(".{}", trusted)))
 }
 
 struct MigrationState {
@@ -853,7 +854,9 @@ impl TwitchEventSubAdapter {
 							to_delete.extend(matching.into_iter());
 
 							for sub in to_delete {
-								let _ = helix.delete_subscription(&sub.id).await;
+								if let Err(e) = helix.delete_subscription(&sub.id).await {
+									warn!(subscription_id = %sub.id, error = %e, "failed to delete EventSub subscription");
+								}
 							}
 
 							continue;
@@ -1423,7 +1426,7 @@ impl TwitchEventSubAdapter {
 			reconnect_attempt = 0;
 
 			let mut session_id = welcome.id.clone();
-			let mut keepalive_secs = welcome.keepalive_timeout_seconds.unwrap_or(10);
+			let mut keepalive_secs = welcome.keepalive_timeout_seconds.unwrap_or(10).max(MIN_KEEPALIVE_SECS);
 			let mut keepalive_timeout = Duration::from_secs(keepalive_secs);
 
 			let _ = events_tx.try_send(status(
@@ -1647,7 +1650,7 @@ impl TwitchEventSubAdapter {
 										};
 
 										session_id = welcome2.payload.session.id;
-										keepalive_secs = welcome2.payload.session.keepalive_timeout_seconds.unwrap_or(10);
+										keepalive_secs = welcome2.payload.session.keepalive_timeout_seconds.unwrap_or(10).max(MIN_KEEPALIVE_SECS);
 										let new_keepalive_timeout = Duration::from_secs(keepalive_secs);
 										keepalive_timeout = new_keepalive_timeout;
 
@@ -1682,6 +1685,7 @@ impl TwitchEventSubAdapter {
 
 									} else if ty == "notification" {
 										if buffered_secondary.len() >= self.cfg.migration_buffer_capacity {
+											debug!(%platform, "migration buffer full; dropping oldest event");
 											let _ = buffered_secondary.pop_front();
 										}
 										buffered_secondary.push_back(t.to_string());

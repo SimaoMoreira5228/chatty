@@ -50,7 +50,7 @@ impl KickConfig {
 			base_url: "https://api.kick.com".to_string(),
 			broadcaster_id_overrides: HashMap::new(),
 			resolve_cache_ttl: Duration::from_secs(300),
-			pusher_ws_url: "wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679".to_string(),
+			pusher_ws_url: format!("wss://ws-us2.pusher.com/app/{}", DEFAULT_KICK_PUSHER_APP_KEY),
 			reconnect_min_delay: Duration::from_millis(500),
 			reconnect_max_delay: Duration::from_secs(30),
 		}
@@ -60,6 +60,8 @@ impl KickConfig {
 const KICK_PUSHER_PROTOCOL: &str = "7";
 const KICK_PUSHER_CLIENT: &str = "js";
 const KICK_PUSHER_VERSION: &str = "8.4.0";
+
+const DEFAULT_KICK_PUSHER_APP_KEY: &str = "32cbd69e4b950bf97679";
 
 pub struct KickEventAdapter {
 	cfg: KickConfig,
@@ -447,12 +449,14 @@ impl KickEventAdapter {
 		};
 
 		if self.auth_user_ids.read().await.contains(&payload.sender.id) {
-			let broadcaster_id = self.broadcaster_id_by_room.get(&room)
-				.map(|(id, _)| *id);
+			let broadcaster_id = self.broadcaster_id_by_room.get(&room).map(|(id, _)| *id);
 			let is_broadcaster = broadcaster_id.map(|id| id == payload.sender.id).unwrap_or(false);
 			if is_broadcaster {
 				let mut guard = self.moderator_rooms.write().await;
-				guard.entry(payload.sender.id).or_insert_with(HashSet::new).insert(room.clone());
+				guard
+					.entry(payload.sender.id)
+					.or_insert_with(HashSet::new)
+					.insert(room.clone());
 			}
 		}
 

@@ -1,6 +1,6 @@
 use serde_json::Value as JsonValue;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TwitchOAuthInfo {
 	pub username: String,
 	pub user_id: String,
@@ -9,12 +9,31 @@ pub struct TwitchOAuthInfo {
 	pub refresh_token: String,
 }
 
-#[derive(Debug, Clone)]
+impl std::fmt::Debug for TwitchOAuthInfo {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("TwitchOAuthInfo")
+			.field("username", &self.username)
+			.field("user_id", &self.user_id)
+			.field("client_id", &self.client_id)
+			.finish_non_exhaustive()
+	}
+}
+
+#[derive(Clone)]
 pub struct KickOAuthInfo {
 	pub username: String,
 	pub user_id: String,
 	pub oauth_token: String,
 	pub refresh_token: String,
+}
+
+impl std::fmt::Debug for KickOAuthInfo {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("KickOAuthInfo")
+			.field("username", &self.username)
+			.field("user_id", &self.user_id)
+			.finish_non_exhaustive()
+	}
 }
 
 pub fn parse_twitch_oauth_blob(blob: &str) -> Option<TwitchOAuthInfo> {

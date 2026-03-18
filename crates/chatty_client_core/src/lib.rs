@@ -33,7 +33,7 @@ pub const KICK_LOGIN_URL: &str = server_endpoint::KICK_LOGIN_URL;
 pub const PROTOCOL_VERSION: u32 = 1;
 
 /// Client session configuration (v1).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ClientConfigV1 {
 	/// Remote server host (DNS name or IP literal).
 	pub server_host: String,
@@ -85,6 +85,30 @@ pub struct ClientConfigV1 {
 
 	/// Timeout for connect + handshake.
 	pub connect_timeout: Duration,
+}
+
+impl std::fmt::Debug for ClientConfigV1 {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("ClientConfigV1")
+			.field("server_host", &self.server_host)
+			.field("server_port", &self.server_port)
+			.field("server_addr", &self.server_addr)
+			.field("client_name", &self.client_name)
+			.field("client_instance_id", &self.client_instance_id)
+			.field("auth_token", &"<redacted>")
+			.field("user_oauth_token", &"<redacted>")
+			.field("twitch_client_id", &self.twitch_client_id)
+			.field("twitch_user_id", &self.twitch_user_id)
+			.field("twitch_username", &self.twitch_username)
+			.field("twitch_refresh_token", &"<redacted>")
+			.field("kick_user_oauth_token", &"<redacted>")
+			.field("kick_user_id", &self.kick_user_id)
+			.field("kick_username", &self.kick_username)
+			.field("kick_refresh_token", &"<redacted>")
+			.field("max_frame_bytes", &self.max_frame_bytes)
+			.field("connect_timeout", &self.connect_timeout)
+			.finish()
+	}
 }
 
 impl ClientConfigV1 {
@@ -578,6 +602,7 @@ fn make_client_endpoint() -> anyhow::Result<Endpoint> {
 }
 
 /// Dev-only TLS config that skips server cert validation.
+#[cfg(debug_assertions)]
 fn make_insecure_client_config() -> anyhow::Result<ClientConfig> {
 	let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
@@ -649,6 +674,11 @@ fn make_insecure_client_config() -> anyhow::Result<ClientConfig> {
 	cfg.transport_config(Arc::new(transport));
 
 	Ok(cfg)
+}
+
+#[cfg(not(debug_assertions))]
+fn make_insecure_client_config() -> anyhow::Result<ClientConfig> {
+	Err(anyhow::anyhow!("insecure TLS config is only available in debug builds"))
 }
 
 #[cfg(test)]
